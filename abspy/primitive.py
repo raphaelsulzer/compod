@@ -28,7 +28,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, process=True, quiet=False):
+    def __init__(self, filepath, process=True, quiet=False, vg_oneline=True):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -55,6 +55,7 @@ class VertexGroup:
         self.bounds = None
         self.points_grouped = None
         self.points_ungrouped = None
+        self.vg_oneline = vg_oneline
 
         self.vgroup_ascii = self.load_file()
         self.vgroup_binary = None
@@ -134,9 +135,19 @@ class VertexGroup:
         Start processing vertex group.
         """
         logger.info('processing {}'.format(self.filepath))
-        self.points = self.get_points()
+        if(self.vg_oneline):
+            self.points = self.get_points()
+        else:
+            self.points = self.my_get_points()
         self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self.get_primitives()
         self.processed = True
+
+    def my_get_points(self):
+
+        data=self.vgroup_ascii
+        npoints = int(data[0].split(':')[1])
+        return np.genfromtxt(data[1:npoints+1])
+
 
     def get_points(self, row=1):
         """
@@ -146,9 +157,9 @@ class VertexGroup:
         ----------
         row: int
             Row number where points are specified, defaults to 1 for filename.vg
-        
+
         Returns
-        ----------        
+        ----------
         as_float: (n, 3) float
             Point cloud
         """

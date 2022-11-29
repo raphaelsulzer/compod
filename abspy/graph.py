@@ -265,6 +265,8 @@ class AdjacencyGraph:
                 sorted_.append(connected[1])
         return sorted_
 
+
+
     def save_surface_obj(self, filepath, cells=None, engine='rendering'):
         """
         Save the outer surface to an OBJ file, from interfaces between cells being cut.
@@ -278,6 +280,8 @@ class AdjacencyGraph:
         engine: str
             Engine to extract surface, can be 'rendering', 'sorting' or 'projection'
         """
+        print("here")
+
         if not self.reachable:
             logger.error('no reachable cells. aborting')
             return
@@ -328,6 +332,114 @@ class AdjacencyGraph:
             elif engine == 'sorting':
                 for v in interface.vertices():
                     surface_str += 'v {} {} {}\n'.format(float(v[0]), float(v[1]), float(v[2]))
+                vertex_indices = [i + num_vertices + 1 for i in
+                                  self._sorted_vertex_indices(interface.adjacency_matrix())]
+                surface_str += 'f ' + ' '.join([str(f) for f in vertex_indices]) + '\n'
+                num_vertices += len(vertex_indices)
+
+            elif engine == 'projection':
+                projection = interface.projection()
+                polygon = projection.polygons[0]
+                for v in projection.coords:
+                    surface_str += 'v {} {} {}\n'.format(float(v[0]), float(v[1]), float(v[2]))
+                surface_str += 'f ' + ' '.join([str(f + num_vertices + 1) for f in polygon]) + '\n'
+                num_vertices += len(polygon)
+
+        if engine == 'rendering':
+            surface_obj = surface.obj_repr(surface.default_render_params())
+
+            for o in range(len(surface_obj)):
+                surface_str += surface_obj[o][0] + '\n'
+                surface_str += '\n'.join(surface_obj[o][2]) + '\n'
+                surface_str += '\n'.join(surface_obj[o][3]) + '\n'  # contents[o][4] are the interior facets
+
+        logger.info('surface extracted: {:.2f} s'.format(time.time() - tik))
+
+        # create the dir if not exists
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'w') as f:
+            f.writelines(surface_str)
+
+
+    def save_surface_obj_colored(self, filepath, cells=None, engine='rendering'):
+        """
+        Save the outer surface to an OBJ file, from interfaces between cells being cut.
+
+        Parameters
+        ----------
+        filepath: str or Path
+            Filepath to save obj file
+        cells: None or list of Polyhedra objects
+            Polyhedra cells
+        engine: str
+            Engine to extract surface, can be 'rendering', 'sorting' or 'projection'
+        """
+        print("here")
+
+        if not self.reachable:
+            logger.error('no reachable cells. aborting')
+            return
+        elif not self.non_reachable:
+            logger.error('no unreachable cells. aborting')
+            return
+
+        if not self._cached_interfaces and not cells:
+            logger.error('neither cached interfaces nor cells are available. aborting')
+            return
+
+        if engine not in {'rendering', 'sorting', 'projection'}:
+            logger.error('engine can be "rendering", "sorting" or "projection"')
+            return
+
+        surface = None
+        surface_str = ''
+        num_vertices = 0
+        tik = time.time()
+
+        interfaces=[]
+        interfaces_Hrep=[]
+        for edge in self.graph.edges:
+            # facet is where one cell being outside and the other one being inside
+            if edge[0] in self.reachable and edge[1] in self.non_reachable:
+                # retrieve interface and orient as on edge[0]
+                if self._cached_interfaces:
+                    interface = self._cached_interfaces[edge[0], edge[1]] if (edge[0],
+                                                                              edge[1]) in self._cached_interfaces else \
+                        self._cached_interfaces[edge[1], edge[0]]
+                else:
+                    interface = cells[self._uid_to_index(edge[0])].intersection(cells[self._uid_to_index(edge[1])])
+
+            elif edge[1] in self.reachable and edge[0] in self.non_reachable:
+                # retrieve interface and orient as on edge[1]
+                if self._cached_interfaces:
+                    interface = self._cached_interfaces[edge[1], edge[0]] if (edge[1],
+                                                                              edge[0]) in self._cached_interfaces else \
+                        self._cached_interfaces[edge[0], edge[1]]
+                else:
+                    interface = cells[self._uid_to_index(edge[1])].intersection(cells[self._uid_to_index(edge[0])])
+
+            else:
+                # where no cut is made
+                continue
+
+
+            interfaces_Hrep.append(np.array(interface.Hrepresentation()[0]))
+            interfaces.append(interface)
+
+        interfaces_Hrep = np.array(interfaces_Hrep,dtype=np.float64)
+        interfaces_Hrep_set = np.unique(interfaces_Hrep,axis=0)
+        colors = np.random.random(size=(interfaces_Hrep_set.shape[0],3))
+
+        for i,interface in enumerate(interfaces):
+            # get the color
+            c=colors[np.argwhere(np.isin(interfaces_Hrep_set, interfaces_Hrep[i]))].flatten().flatten()
+            if engine == 'rendering':
+                surface += interface.render_solid()
+
+            elif engine == 'sorting':
+                for v in interface.vertices():
+                    surface_str += 'v {} {} {} {} {} {}\n'.format(float(v[0]), float(v[1]), float(v[2]), float(c[0]), float(c[1]), float(c[2]))
                 vertex_indices = [i + num_vertices + 1 for i in
                                   self._sorted_vertex_indices(interface.adjacency_matrix())]
                 surface_str += 'f ' + ' '.join([str(f) for f in vertex_indices]) + '\n'
