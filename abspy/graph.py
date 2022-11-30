@@ -280,7 +280,6 @@ class AdjacencyGraph:
         engine: str
             Engine to extract surface, can be 'rendering', 'sorting' or 'projection'
         """
-        print("here")
 
         if not self.reachable:
             logger.error('no reachable cells. aborting')
@@ -362,6 +361,135 @@ class AdjacencyGraph:
             f.writelines(surface_str)
 
 
+    def write_ply(self,filename):
+
+        f = open(filename[:-3]+"ply", 'w')
+        f.write("ply\nformat ascii 1.0\n")
+        f.write("element vertex {}\n".format(self.pset.shape[0]))
+        f.write("property float x\nproperty float y\nproperty float z\n")
+        f.write("element face {}\n".format(len(self.facets)))
+        f.write("property list uchar int vertex_index\n")
+        f.write("end_header\n")
+        for p in self.pset:
+            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
+        for face in self.facets:
+            f.write("{}".format(len(face)))
+            for v in face:
+                f.write(" {}".format(v))
+            f.write('\n')
+        f.close()
+        # f.write("primitives\n")
+
+    def write_obj(self,filename):
+
+        f = open(filename[:-3]+"obj",'w')
+        # f.write("OFF\n")
+        # f.write("{} {} 0\n".format(pset.shape[0],len(facets)))
+        for p in self.pset:
+            f.write("v {} {} {}\n".format(p[0],p[1],p[2]))
+        for face in self.facets:
+            f.write("f")
+            for v in face:
+                f.write(" {}".format(v+1))
+            f.write('\n')
+        f.close()
+
+    def write_off(self,filename):
+
+        f = open(filename[:-3]+"off",'w')
+        f.write("OFF\n")
+        f.write("{} {} 0\n".format(self.pset.shape[0],len(self.facets)))
+        for p in self.pset:
+            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
+        for face in self.facets:
+            f.write("{}".format(len(face)))
+            for v in face:
+                f.write(" {}".format(v))
+            f.write('\n')
+        f.close()
+
+    def extract_surface(self, filename):
+        """
+        Save the outer surface to an OBJ file, from interfaces between cells being cut.
+
+        Parameters
+        ----------
+        filepath: str or Path
+            Filepath to save obj file
+        cells: None or list of Polyhedra objects
+            Polyhedra cells
+        engine: str
+            Engine to extract surface, can be 'rendering', 'sorting' or 'projection'
+        """
+
+        if not self.reachable:
+            logger.error('no reachable cells. aborting')
+            return
+        elif not self.non_reachable:
+            logger.error('no unreachable cells. aborting')
+            return
+
+        surface = None
+        surface_str = ''
+        num_vertices = 0
+
+        interfaces=[]
+        tris=[]
+        interfaces_Hrep=[]
+        for edge in self.graph.edges:
+            # facet is where one cell being outside and the other one being inside
+            if edge[0] in self.reachable and edge[1] in self.non_reachable:
+                # retrieve interface and orient as on edge[0]
+                if self._cached_interfaces:
+                    interface = self._cached_interfaces[edge[0], edge[1]] if (edge[0],
+                                                                              edge[1]) in self._cached_interfaces else \
+                        self._cached_interfaces[edge[1], edge[0]]
+                else:
+                    interface = cells[self._uid_to_index(edge[0])].intersection(cells[self._uid_to_index(edge[1])])
+
+            elif edge[1] in self.reachable and edge[0] in self.non_reachable:
+                # retrieve interface and orient as on edge[1]
+                if self._cached_interfaces:
+                    interface = self._cached_interfaces[edge[1], edge[0]] if (edge[1],
+                                                                              edge[0]) in self._cached_interfaces else \
+                        self._cached_interfaces[edge[0], edge[1]]
+                else:
+                    interface = cells[self._uid_to_index(edge[1])].intersection(cells[self._uid_to_index(edge[0])])
+
+            else:
+                # where no cut is made
+                continue
+
+
+            interfaces_Hrep.append(np.array(interface.Hrepresentation()[0]))
+            interfaces.append(interface)
+            verts=np.array(interface.vertices())
+            correct_order=self._sorted_vertex_indices(interface.adjacency_matrix())
+            tris.append(verts[correct_order])
+
+        points = np.concatenate(tris, axis=0)
+        pset = np.unique(points, axis=0)
+        facets=[]
+        for tri in tris:
+            face = []
+            for p in tri:
+                face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
+            facets.append(face)
+
+        self.pset = pset
+        self.facets = facets
+
+        self.write_obj(filename)
+        self.write_off(filename)
+        self.write_ply(filename)
+
+
+        # if facets have same plane equation and if they have common vertices, then they are from the same primitive
+
+
+
+
+
     def save_surface_obj_colored(self, filepath, cells=None, engine='rendering'):
         """
         Save the outer surface to an OBJ file, from interfaces between cells being cut.
@@ -375,7 +503,6 @@ class AdjacencyGraph:
         engine: str
             Engine to extract surface, can be 'rendering', 'sorting' or 'projection'
         """
-        print("here")
 
         if not self.reachable:
             logger.error('no reachable cells. aborting')
@@ -427,6 +554,9 @@ class AdjacencyGraph:
             interfaces_Hrep.append(np.array(interface.Hrepresentation()[0]))
             interfaces.append(interface)
 
+        # if facets have same plane equation and if they have common vertices, then they are from the same primitive
+
+
         interfaces_Hrep = np.array(interfaces_Hrep,dtype=np.float64)
         interfaces_Hrep_set = np.unique(interfaces_Hrep,axis=0)
         colors = np.random.random(size=(interfaces_Hrep_set.shape[0],3))
@@ -440,7 +570,7 @@ class AdjacencyGraph:
             elif engine == 'sorting':
                 for v in interface.vertices():
                     surface_str += 'v {} {} {} {} {} {}\n'.format(float(v[0]), float(v[1]), float(v[2]), float(c[0]), float(c[1]), float(c[2]))
-                vertex_indices = [i + num_vertices + 1 for i in
+                vertex_indices = [j + num_vertices + 1 for j in
                                   self._sorted_vertex_indices(interface.adjacency_matrix())]
                 surface_str += 'f ' + ' '.join([str(f) for f in vertex_indices]) + '\n'
                 num_vertices += len(vertex_indices)
@@ -461,7 +591,7 @@ class AdjacencyGraph:
                 surface_str += '\n'.join(surface_obj[o][2]) + '\n'
                 surface_str += '\n'.join(surface_obj[o][3]) + '\n'  # contents[o][4] are the interior facets
 
-        logger.info('surface extracted: {:.2f} s'.format(time.time() - tik))
+        logger.info('colored surface extracted: {:.2f} s'.format(time.time() - tik))
 
         # create the dir if not exists
         filepath = Path(filepath)

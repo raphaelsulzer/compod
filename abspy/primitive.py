@@ -57,8 +57,6 @@ class VertexGroup:
         self.points_ungrouped = None
         self.vg_oneline = vg_oneline
 
-        self.vgroup_ascii = self.load_file()
-        self.vgroup_binary = None
 
         if process:
             self.process()
@@ -69,7 +67,8 @@ class VertexGroup:
         """
         if self.filepath.suffix == '.vg':
             with open(self.filepath, 'r') as fin:
-                return fin.readlines()
+                self.lines=np.array(fin.readlines())
+
 
         elif self.filepath.suffix == '.bvg':
             # define size constants
@@ -135,18 +134,22 @@ class VertexGroup:
         Start processing vertex group.
         """
         logger.info('processing {}'.format(self.filepath))
+        self.load_file()
         if(self.vg_oneline):
-            self.points = self.get_points()
+            # self.points = self.get_points()
+            print('DEPRECATED')
+            return 1
         else:
             self.points = self.my_get_points()
         self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self.get_primitives()
         self.processed = True
 
+
+
     def my_get_points(self):
 
-        data=self.vgroup_ascii
-        npoints = int(data[0].split(':')[1])
-        return np.genfromtxt(data[1:npoints+1])
+        npoints = int(self.lines[0].split(':')[1])
+        return np.genfromtxt(self.lines[1:npoints+1])
 
 
     def get_points(self, row=1):
@@ -166,6 +169,7 @@ class VertexGroup:
         pc = np.fromstring(self.vgroup_ascii[row], sep=' ')
         return np.reshape(pc, (-1, 3))
 
+
     def get_primitives(self):
         """
         Get primitives from vertex group.
@@ -181,9 +185,16 @@ class VertexGroup:
         ungrouped_points: (u, 3) float
             Points that belong to no group
         """
-        is_primitive = [line.startswith('group_num_point') for line in self.vgroup_ascii]
-        primitives = [self.vgroup_ascii[line] for line in np.where(is_primitive)[0] + 1]  # lines of groups in the file
-        params = []
+        # is_primitive = [line.startswith('group_num_point') for line in self.vgroup_ascii]
+        is_primitive = [line.startswith('group_type') for line in self.lines]
+
+        primitives = self.lines[np.roll(is_primitive,6)]
+        # primitives = [self.lines[line] for line in np.where(is_primitive)[0] + 6]
+        params = self.lines[np.roll(is_primitive,2)]
+
+
+        # lines of groups in the file
+        params_list = []
         bounds = []
         groups = []
         grouped_indices = set()  # indices of points being grouped
@@ -191,15 +202,17 @@ class VertexGroup:
             point_indices = np.fromstring(p, sep=' ').astype(np.int64)
             grouped_indices.update(point_indices)
             points = self.points[point_indices]
-            param = self.fit_plane(points, mode='PCA')
-            if param is None:
-                continue
-            params.append(param)
+            #### this is for fitting planes, which was in original code, but now I just use the plane equations
+            # param = self.fit_plane(points, mode='PCA')
+            # if param is None:
+            #     continue
+            # params.append(param)
+            params_list.append(np.fromstring(params[i].split(':')[1],sep=' '))
             bounds.append(self._points_bound(points))
             groups.append(points)
         ungrouped_indices = set(range(len(self.points))).difference(grouped_indices)
         ungrouped_points = self.points[list(ungrouped_indices)]  # points that belong to no groups
-        return np.array(params), np.array(bounds), np.array(groups, dtype=object), np.array(ungrouped_points)
+        return np.array(params_list), np.array(bounds), np.array(groups, dtype=object), np.array(ungrouped_points)
 
     @staticmethod
     def _points_bound(points):
