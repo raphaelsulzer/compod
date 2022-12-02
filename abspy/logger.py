@@ -31,8 +31,8 @@ def attach_to_log(level=logging.INFO,
 
     # create a basic formatter
     formatter = logging.Formatter(
-        "[%(asctime)s] %(levelname)-7s (%(filename)s:%(lineno)3s) %(message)s",
-        "%Y-%m-%d %H:%M:%S")
+        "[%(asctime)s] [(%(filename)s:%(lineno)3s)] [%(levelname)s] %(message)s",
+        "%H:%M:%S")
     if colors and not filepath:
         try:
             from colorlog import ColoredFormatter

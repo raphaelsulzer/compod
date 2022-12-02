@@ -11,7 +11,7 @@ There are two kinds of edges in the graph: n-links and st-links.
 An n-link exists in between of two adjacent cells.
 An st-link connects every cell to S and to T.
 """
-
+import os
 import time
 from pathlib import Path
 
@@ -21,6 +21,8 @@ from sage.all import RR
 from scipy.spatial import ConvexHull
 
 from .logger import attach_to_log
+
+import trimesh
 
 logger = attach_to_log()
 
@@ -408,7 +410,27 @@ class AdjacencyGraph:
             f.write('\n')
         f.close()
 
-    def extract_surface(self, filename):
+    def toTrimesh(self, filename):
+
+        # need first to PyMesh than to Trimesh
+        # because trimesh can only do triangle facets
+        mesh = pymesh.form_mesh(vertices, faces)
+        mesh=trimesh.Trimesh(vertices=self.pset,faces=self.facets)
+        mesh.repair.fix_normals
+        mesh.export(filename)
+
+
+    def orientFacet(self,verts,outside):
+
+        a=verts[1]-verts[0]
+        b=verts[2]-verts[0]
+        c=outside-verts[0]
+        if np.linalg.det(np.array([a,b,c])<0):
+            return verts
+        else:
+            return np.flip(verts,axis=0)
+
+    def extract_surface(self, filename, cells=None):
         """
         Save the outer surface to an OBJ file, from interfaces between cells being cut.
 
@@ -441,20 +463,26 @@ class AdjacencyGraph:
             if edge[0] in self.reachable and edge[1] in self.non_reachable:
                 # retrieve interface and orient as on edge[0]
                 if self._cached_interfaces:
-                    interface = self._cached_interfaces[edge[0], edge[1]] if (edge[0],
-                                                                              edge[1]) in self._cached_interfaces else \
+                    interface = self._cached_interfaces[edge[0], edge[1]] \
+                        if (edge[0],edge[1]) in self._cached_interfaces \
+                        else \
                         self._cached_interfaces[edge[1], edge[0]]
                 else:
                     interface = cells[self._uid_to_index(edge[0])].intersection(cells[self._uid_to_index(edge[1])])
+                
+                outside = np.array(cells[self._uid_to_index(edge[0])].center())
 
             elif edge[1] in self.reachable and edge[0] in self.non_reachable:
                 # retrieve interface and orient as on edge[1]
                 if self._cached_interfaces:
-                    interface = self._cached_interfaces[edge[1], edge[0]] if (edge[1],
-                                                                              edge[0]) in self._cached_interfaces else \
+                    interface = self._cached_interfaces[edge[1], edge[0]] \
+                        if (edge[1],edge[0]) in self._cached_interfaces \
+                        else \
                         self._cached_interfaces[edge[0], edge[1]]
                 else:
                     interface = cells[self._uid_to_index(edge[1])].intersection(cells[self._uid_to_index(edge[0])])
+                
+                outside = np.array(cells[self._uid_to_index(edge[1])].center())
 
             else:
                 # where no cut is made
@@ -465,6 +493,8 @@ class AdjacencyGraph:
             interfaces.append(interface)
             verts=np.array(interface.vertices())
             correct_order=self._sorted_vertex_indices(interface.adjacency_matrix())
+            # verts=self.orientFacet(verts[correct_order],outside)
+            # tris.append(verts)
             tris.append(verts[correct_order])
 
         points = np.concatenate(tris, axis=0)
@@ -479,11 +509,13 @@ class AdjacencyGraph:
         self.pset = pset
         self.facets = facets
 
-        self.write_obj(filename)
-        self.write_off(filename)
+        os.makedirs(os.path.dirname(filename),exist_ok=True)
+        # self.toTrimesh(filename)
+        # self.write_obj(filename)
+        # self.write_off(filename)
         self.write_ply(filename)
 
-
+        # TODO: color facets by primitive, by plane-equation (in fact Hrepresentation from sage) is already done, but not exactly what I want.
         # if facets have same plane equation and if they have common vertices, then they are from the same primitive
 
 

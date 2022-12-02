@@ -436,7 +436,11 @@ class CellComplex:
         num_workers: int
             Number of workers for multi-processing, disabled if set 0
         """
-        logger.info('constructing cell complexxxx')
+        if exhaustive:
+            logger.info('construct exhaustive cell complex'.format())
+        else:
+            logger.info('construct cell complex'.format())
+
         tik = time.time()
 
         pool = None
@@ -530,7 +534,7 @@ class CellComplex:
                     self.graph.remove_node(list(self.graph.nodes)[index_parent])
 
         self.constructed = True
-        logger.info('cell complex constructed: {:.2f} s'.format(time.time() - tik))
+        logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
 
     def visualise(self, indices_cells=None, temp_dir='./'):
         """

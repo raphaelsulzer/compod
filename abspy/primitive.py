@@ -133,7 +133,7 @@ class VertexGroup:
         """
         Start processing vertex group.
         """
-        logger.info('processing {}'.format(self.filepath))
+        logger.debug('processing {}'.format(self.filepath))
         self.load_file()
         if(self.vg_oneline):
             # self.points = self.get_points()
