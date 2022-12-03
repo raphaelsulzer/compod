@@ -412,7 +412,7 @@ class AdjacencyGraph:
 
     def toTrimesh(self, filename):
 
-        # need first to PyMesh than to Trimesh
+        # need first to PyMesh then to Trimesh
         # because trimesh can only do triangle facets
         mesh = pymesh.form_mesh(vertices, faces)
         mesh=trimesh.Trimesh(vertices=self.pset,faces=self.facets)
@@ -451,13 +451,7 @@ class AdjacencyGraph:
             logger.error('no unreachable cells. aborting')
             return
 
-        surface = None
-        surface_str = ''
-        num_vertices = 0
-
-        interfaces=[]
         tris=[]
-        interfaces_Hrep=[]
         for edge in self.graph.edges:
             # facet is where one cell being outside and the other one being inside
             if edge[0] in self.reachable and edge[1] in self.non_reachable:
@@ -488,9 +482,6 @@ class AdjacencyGraph:
                 # where no cut is made
                 continue
 
-
-            interfaces_Hrep.append(np.array(interface.Hrepresentation()[0]))
-            interfaces.append(interface)
             verts=np.array(interface.vertices())
             correct_order=self._sorted_vertex_indices(interface.adjacency_matrix())
             # verts=self.orientFacet(verts[correct_order],outside)
