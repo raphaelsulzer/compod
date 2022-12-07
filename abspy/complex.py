@@ -61,9 +61,14 @@ class CellComplex:
         quiet: bool
             Disable logging and progress bar if set True
         """
+
+
+
         self.quiet = quiet
         if self.quiet:
             logger.disabled = True
+
+        logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
         self.bounds = bounds  # numpy.array over RDF
         self.planes = planes  # numpy.array over RDF
@@ -72,9 +77,16 @@ class CellComplex:
         # missing planes due to occlusion or incapacity of RANSAC
         self.additional_planes = additional_planes
 
+
+
         self.initial_bound = initial_bound if initial_bound else self._pad_bound(
             [np.amin(bounds[:, 0, :], axis=0), np.amax(bounds[:, 1, :], axis=0)],
             padding=initial_padding)
+
+        # self.initial_bound = initial_bound if initial_bound else self._my_pad_bound(
+        #     bounds,
+        #     padding=initial_padding)
+
         self.cells = [self._construct_initial_cell()]  # list of QQ
         self.cells_bounds = [self.cells[0].bounding_box()]  # list of QQ
 
@@ -211,6 +223,7 @@ class CellComplex:
             Prioritise vertical planes if set True
         """
         logger.info('prioritising planar primitives')
+
         # compute the priority
         indices_sorted_planes = self._sort_planes()
 
@@ -227,7 +240,7 @@ class CellComplex:
         self.bounds = self.bounds[indices_priority]
 
         # append additional planes with highest priority
-        if self.additional_planes:
+        if self.additional_planes is not None:
             self.planes = np.concatenate([self.additional_planes, self.planes], axis=0)
             additional_bounds = [[[-np.inf, -np.inf, -np.inf], [np.inf, np.inf, np.inf]]] * len(self.additional_planes)
             self.bounds = np.concatenate([additional_bounds, self.bounds], axis=0)  # never miss an intersection
@@ -298,8 +311,22 @@ class CellComplex:
         as_float: (2, 3) float
             Padded bound
         """
+
         extent = bound[1] - bound[0]
         return [bound[0] - extent * padding, bound[1] + extent * padding]
+
+    # def _my_pad_bound(self,bounds, padding=0.00):
+    #
+    #     """
+    #     pad each dimension separately as in Kinetic_Propagation::pre_init_main_bounding_box()
+    #     as opposed to the _pad_bounds function above that pads with the max of all dimensions
+    #     :param bounds:
+    #     :param padding:
+    #     :return:
+    #     """
+    #
+    #     a=5
+
 
     def _intersect_bound_plane(self, bound, plane, exhaustive=False, epsilon=10e-5):
         """
@@ -823,6 +850,7 @@ class CellComplex:
             scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
 
             with open(filepath, 'w') as f:
+                f.writelines("# cells: {}\n".format(len(self.cells)))
                 f.writelines(scene_str)
             if use_mtl:
                 with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:

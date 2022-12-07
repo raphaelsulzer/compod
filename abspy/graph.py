@@ -11,7 +11,7 @@ There are two kinds of edges in the graph: n-links and st-links.
 An n-link exists in between of two adjacent cells.
 An st-link connects every cell to S and to T.
 """
-import os
+import os,sys
 import time
 from pathlib import Path
 
@@ -26,6 +26,8 @@ import trimesh
 
 logger = attach_to_log()
 
+sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/Soup2Mesh")
+import libSoup2Mesh as s2m
 
 class AdjacencyGraph:
     """
@@ -216,6 +218,48 @@ class AdjacencyGraph:
             self.graph.add_edge(i, 's', capacity=weights[i])
             self.graph.add_edge(i, 't', capacity=1 - weights[i])  # make sure
 
+    def extract_gt(self,cells,occ,filename):
+
+        assert(len(cells)==occ.shape[0])
+
+        points = []
+        polygons_len = []
+        polygons_index = []
+        vcount = 0
+        for e0,e1 in self.graph.edges:
+
+            occ1 = occ[self._uid_to_index(e0)]
+            occ2 = occ[self._uid_to_index(e1)]
+
+            if occ1 != occ2:
+                interface = cells[self._uid_to_index(e0)].intersection(cells[self._uid_to_index(e1)])
+
+                poly = []
+                for p in np.array(interface.vertices()):
+                    points.append(p)
+                    poly.append(vcount)
+                    vcount += 1
+                poly = np.array(poly)
+                poly = poly[self._sorted_vertex_indices(interface.adjacency_matrix())]
+                polygons_index.append(poly)
+                polygons_len.append(len(interface.vertices()))
+
+        points = np.array(points)
+        polygons_len = np.array(polygons_len)
+        polygons_index = np.concatenate(polygons_index, axis=0)
+        logger.info('Save polygon mesh to {}'.format(filename))
+
+        sm = s2m.Soup2Mesh()
+        sm.loadSoup(points, polygons_len, polygons_index)
+        triangulate = False
+        sm.makeMesh(triangulate)
+        sm.saveMesh(filename)
+
+        a=4
+
+
+        
+
     def cut(self):
         """
         Perform cutting operation.
@@ -235,9 +279,9 @@ class AdjacencyGraph:
         self.reachable = reachable
         self.non_reachable = non_reachable
 
-        logger.info('cut performed: {:.2f} s'.format(time.time() - tik))
-        logger.info('cut_value: {:.2f}'.format(cut_value))
-        logger.info('number of extracted cells: {}'.format(len(reachable)))
+        logger.debug('cut performed: {:.2f} s'.format(time.time() - tik))
+        logger.debug('cut_value: {:.2f}'.format(cut_value))
+        logger.debug('number of extracted cells: {}'.format(len(reachable)))
         return cut_value, reachable
 
     @staticmethod
@@ -430,6 +474,93 @@ class AdjacencyGraph:
         else:
             return np.flip(verts,axis=0)
 
+    def unique_rows(self, A, atol=10e-5):
+        """Get unique (within atol) rows of a 2D np.array A."""
+
+        remove = np.zeros(A.shape[0], dtype=bool)  # Row indexes to be removed.
+        for i in range(A.shape[0]):  # Not very optimized, but simple.
+            equals = np.all(np.isclose(A[i, :], A[(i + 1):, :], atol=atol), axis=1)
+            remove[(i + 1):] = np.logical_or(remove[(i + 1):], equals)
+        return A[np.logical_not(remove)]
+
+    def extract_surface_cgal(self, filename, cells=None):
+        """
+        Save the outer surface to an OBJ file, from interfaces between cells being cut.
+
+        Parameters
+        ----------
+        filepath: str or Path
+            Filepath to save obj file
+        cells: None or list of Polyhedra objects
+            Polyhedra cells
+        engine: str
+            Engine to extract surface, can be 'rendering', 'sorting' or 'projection'
+        """
+
+        if not self.reachable:
+            logger.error('no reachable cells. aborting')
+            return
+        elif not self.non_reachable:
+            logger.error('no unreachable cells. aborting')
+            return
+
+        points = []
+        polygons_len = []
+        polygons_index = []
+        vcount = 0
+        for edge in self.graph.edges:
+            # facet is where one cell being outside and the other one being inside
+            if edge[0] in self.reachable and edge[1] in self.non_reachable:
+                # retrieve interface and orient as on edge[0]
+                if self._cached_interfaces:
+                    interface = self._cached_interfaces[edge[0], edge[1]] \
+                        if (edge[0], edge[1]) in self._cached_interfaces \
+                        else \
+                        self._cached_interfaces[edge[1], edge[0]]
+                else:
+                    interface = cells[self._uid_to_index(edge[0])].intersection(cells[self._uid_to_index(edge[1])])
+
+                outside = np.array(cells[self._uid_to_index(edge[0])].center())
+
+            elif edge[1] in self.reachable and edge[0] in self.non_reachable:
+                # retrieve interface and orient as on edge[1]
+                if self._cached_interfaces:
+                    interface = self._cached_interfaces[edge[1], edge[0]] \
+                        if (edge[1], edge[0]) in self._cached_interfaces \
+                        else \
+                        self._cached_interfaces[edge[0], edge[1]]
+                else:
+                    interface = cells[self._uid_to_index(edge[1])].intersection(cells[self._uid_to_index(edge[0])])
+
+                outside = np.array(cells[self._uid_to_index(edge[1])].center())
+
+            else:
+                # where no cut is made
+                continue
+
+            poly = []
+            for p in np.array(interface.vertices()):
+                points.append(p)
+                poly.append(vcount)
+                vcount+=1
+            poly = np.array(poly)
+            poly = poly[self._sorted_vertex_indices(interface.adjacency_matrix())]
+            polygons_index.append(poly)
+            polygons_len.append(len(interface.vertices()))
+
+        points = np.array(points)
+        polygons_len = np.array(polygons_len)
+        polygons_index = np.concatenate(polygons_index,axis=0)
+        logger.info('Save polygon mesh to {}'.format(filename))
+
+        sm = s2m.Soup2Mesh()
+        sm.loadSoup(points,polygons_len, polygons_index)
+        triangulate=False
+        sm.makeMesh(triangulate)
+        sm.saveMesh(filename)
+
+
+
     def extract_surface(self, filename, cells=None):
         """
         Save the outer surface to an OBJ file, from interfaces between cells being cut.
@@ -451,13 +582,8 @@ class AdjacencyGraph:
             logger.error('no unreachable cells. aborting')
             return
 
-        surface = None
-        surface_str = ''
-        num_vertices = 0
-
         interfaces=[]
         tris=[]
-        interfaces_Hrep=[]
         for edge in self.graph.edges:
             # facet is where one cell being outside and the other one being inside
             if edge[0] in self.reachable and edge[1] in self.non_reachable:
@@ -489,7 +615,6 @@ class AdjacencyGraph:
                 continue
 
 
-            interfaces_Hrep.append(np.array(interface.Hrepresentation()[0]))
             interfaces.append(interface)
             verts=np.array(interface.vertices())
             correct_order=self._sorted_vertex_indices(interface.adjacency_matrix())
@@ -497,18 +622,23 @@ class AdjacencyGraph:
             # tris.append(verts)
             tris.append(verts[correct_order])
 
+
+        tol=0.05
         points = np.concatenate(tris, axis=0)
         pset = np.unique(points, axis=0)
+        # pset = self.unique_rows(points, atol=tol)
         facets=[]
         for tri in tris:
             face = []
             for p in tri:
                 face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
+                # face.append(np.argwhere(np.isclose(pset, p,atol=tol*1.01).all(-1))[0][0])
             facets.append(face)
 
         self.pset = pset
         self.facets = facets
 
+        logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename),exist_ok=True)
         # self.toTrimesh(filename)
         # self.write_obj(filename)
