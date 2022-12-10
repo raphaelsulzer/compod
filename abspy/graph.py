@@ -218,7 +218,59 @@ class AdjacencyGraph:
             self.graph.add_edge(i, 's', capacity=weights[i])
             self.graph.add_edge(i, 't', capacity=1 - weights[i])  # make sure
 
-    def extract_gt(self,cells,occ,filename):
+
+    def extract_gt(self, cells, occ, filename):
+
+        assert (len(cells) == occ.shape[0])
+
+        tris = []
+        points = []
+        for e0, e1 in self.graph.edges:
+
+            if e0 > e1:
+                continue
+
+            occ1 = occ[self._uid_to_index(e0)]
+            occ2 = occ[self._uid_to_index(e1)]
+
+            if occ1 != occ2:
+                interface = cells[self._uid_to_index(e0)].intersection(cells[self._uid_to_index(e1)])
+
+                verts = np.array(interface.vertices(),dtype=object)
+                # verts = tuple(interface.vertices_list())
+                correct_order = self._sorted_vertex_indices(interface.adjacency_matrix())
+                # verts=self.orientFacet(verts[correct_order],outside)
+                # tris.append(verts)
+                verts = verts[correct_order]
+                for i in range(verts.shape[0]):
+                    points.append(tuple(verts[i,:]))
+                tris.append(verts)
+
+
+
+        pset = set(points)
+        pset = np.array(list(pset),dtype=object)
+        facets = []
+        for tri in tris:
+            face = []
+            for p in tri:
+                face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
+                # face.append(np.argwhere(np.isclose(pset, p,atol=tol*1.01).all(-1))[0][0])
+            facets.append(face)
+
+        self.pset = np.array(pset,dtype=float)
+        self.facets = facets
+
+        logger.debug('Save polygon mesh to {}'.format(filename))
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        # self.toTrimesh(filename)
+        # self.write_obj(filename)
+        self.write_off(filename)
+        # self.write_ply(filename)
+
+        a = 4
+
+    def extract_gt_cgal(self,cells,occ,filename):
 
         assert(len(cells)==occ.shape[0])
 
@@ -226,6 +278,7 @@ class AdjacencyGraph:
         polygons_len = []
         polygons_index = []
         vcount = 0
+        tris = []
         for e0,e1 in self.graph.edges:
 
             occ1 = occ[self._uid_to_index(e0)]
@@ -255,10 +308,6 @@ class AdjacencyGraph:
         sm.makeMesh(triangulate)
         sm.saveMesh(filename)
 
-        a=4
-
-
-        
 
     def cut(self):
         """

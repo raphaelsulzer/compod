@@ -487,8 +487,6 @@ class CellComplex:
             hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
                                                 self._inequalities(self.planes[i])]
 
-            a=hspace_positive
-            b=hspace_negative
 
             # partition the intersected cells and their bounds while doing mesh slice plane
             indices_parents = []

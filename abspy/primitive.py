@@ -61,13 +61,17 @@ class VertexGroup:
         if process:
             self.process()
 
+        del self.lines # for closing the .vg file
+
     def load_file(self):
         """
         Load (ascii / binary) vertex group file.
         """
         if self.filepath.suffix == '.vg':
             with open(self.filepath, 'r') as fin:
-                self.lines=np.array(fin.readlines())
+                # self.lines=np.array(fin.readlines())
+                # self.lines=np.array(fin.readlines())
+                self.lines=np.array(list(fin))
 
 
         elif self.filepath.suffix == '.bvg':
