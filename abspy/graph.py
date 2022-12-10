@@ -505,7 +505,7 @@ class AdjacencyGraph:
 
     def toTrimesh(self, filename):
 
-        # need first to PyMesh than to Trimesh
+        # need first to PyMesh then to Trimesh
         # because trimesh can only do triangle facets
         mesh = pymesh.form_mesh(vertices, faces)
         mesh=trimesh.Trimesh(vertices=self.pset,faces=self.facets)
@@ -662,7 +662,6 @@ class AdjacencyGraph:
             else:
                 # where no cut is made
                 continue
-
 
             interfaces.append(interface)
             verts=np.array(interface.vertices())
