@@ -254,7 +254,9 @@ class AdjacencyGraph:
         for tri in tris:
             face = []
             for p in tri:
-                face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
+                # face.append(np.argwhere((pset == p).all(-1))[0][0])
+                face.append(np.argwhere((np.equal(pset,p,dtype=object)).all(-1))[0][0])
+                # face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
                 # face.append(np.argwhere(np.isclose(pset, p,atol=tol*1.01).all(-1))[0][0])
             facets.append(face)
 
