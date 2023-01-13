@@ -14,8 +14,9 @@ attached to the README document.
 from random import random
 from pathlib import Path
 import struct
-
 import numpy as np
+import copy
+
 from sklearn.decomposition import PCA
 
 from .logger import attach_to_log
@@ -28,7 +29,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, process=True, quiet=False, vg_oneline=True):
+    def __init__(self, filepath, quiet=False, vg_oneline=True):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -57,11 +58,10 @@ class VertexGroup:
         self.points_ungrouped = None
         self.vg_oneline = vg_oneline
 
+        self.process_npz()
 
-        if process:
-            self.process()
-
-        del self.lines # for closing the .vg file
+        # self.process()
+        # del self.lines # for closing the .vg file
 
     def load_file(self):
         """
@@ -71,7 +71,7 @@ class VertexGroup:
             with open(self.filepath, 'r') as fin:
                 # self.lines=np.array(fin.readlines())
                 # self.lines=np.array(fin.readlines())
-                self.lines=np.array(list(fin))
+                self.lines = np.array(list(fin))
 
 
         elif self.filepath.suffix == '.bvg':
@@ -150,28 +150,54 @@ class VertexGroup:
 
 
 
+
+
+    def process_npz(self):
+        """
+        Start processing vertex group.
+        """
+        
+        other = copy.deepcopy(self)
+
+        fn = self.filepath.with_suffix(".npz")
+
+        data = np.load(fn)
+
+
+        self.bounds = []
+        self.planes = data["group_parameters"]
+
+        points = data["points"]
+        npoints = data["group_num_points"].flatten()
+        verts = data["group_points"].flatten()
+
+        self.points_grouped = []
+        last = 0
+        for npp in npoints:
+            vert_group = verts[last:(npp+last)]
+            point_group = points[vert_group]
+            self.points_grouped.append(point_group)
+            self.bounds.append(self._points_bound(point_group))
+            last += npp
+        
+        self.points_grouped = np.array(self.points_grouped, dtype=object)
+        
+        self.bounds = np.array(self.bounds)
+
+        self.points_ungrouped = np.zeros(points.shape[0])
+        self.points_ungrouped[verts] = 1
+        self.points_ungrouped = np.invert(self.points_ungrouped.astype(bool))
+        self.points_ungrouped = points[self.points_ungrouped.astype(int)]
+
+        self.processed = True
+        a = 4
+
+
     def my_get_points(self):
+
 
         npoints = int(self.lines[0].split(':')[1])
         return np.genfromtxt(self.lines[1:npoints+1])
-
-
-    def get_points(self, row=1):
-        """
-        Get points from vertex group.
-
-        Parameters
-        ----------
-        row: int
-            Row number where points are specified, defaults to 1 for filename.vg
-
-        Returns
-        ----------
-        as_float: (n, 3) float
-            Point cloud
-        """
-        pc = np.fromstring(self.vgroup_ascii[row], sep=' ')
-        return np.reshape(pc, (-1, 3))
 
 
     def get_primitives(self):
@@ -555,192 +581,3 @@ class VertexGroup:
         """
         logger.info('writing plane bounds into {}'.format(filepath))
         np.save(filepath, self.bounds)
-
-
-class VertexGroupReference:
-    """
-    Class of reference vertex group sampled from meshes.
-    """
-
-    def __init__(self, filepath, num_samples=10000, process=True, quiet=False):
-        """
-        Init VertexGroupReference.
-        Class of reference vertex group sampled from meshes.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to a mesh
-        num_samples: int
-            Number of sampled points
-        process: bool
-            Immediate processing if set True
-        quiet: bool
-            Disable logging if set True
-        """
-        if quiet:
-            logger.disabled = True
-        import trimesh
-
-        self.filepath = filepath
-        self.num_samples = num_samples
-        self.processed = False
-        self.points = None
-        self.planes = []
-        self.bounds = []
-        self.points_grouped = []
-
-        self.mesh = trimesh.load_mesh(self.filepath)
-
-        if process:
-            self.process()
-
-    @staticmethod
-    def _points_bound(points):
-        """
-        Get bounds (AABB) of the points.
-
-        Parameters
-        ----------
-        points: (n, 3) float
-            Points
-        Returns
-        ----------
-        as_float: (2, 3) float
-            Bounds (AABB) of the points
-        """
-        return np.array([np.amin(points, axis=0), np.amax(points, axis=0)])
-
-    def process(self):
-        """
-        Start processing mesh data.
-        """
-        from functools import reduce
-        logger.info('processing {}'.format(self.filepath))
-
-        # sample on all faces
-        samples, face_indices = self.mesh.sample(count=self.num_samples, return_index=True)  # face_indices match facets
-
-        for facet in self.mesh.facets:  # a list of face indices for coplanar adjacent faces
-            # group corresponding samples by facet
-            points = []
-            for face_index in facet:
-                sample_indices = np.where(face_indices == face_index)[0]
-                if len(sample_indices) > 0:
-                    points.append(samples[sample_indices])
-
-            # vertices
-            vertices = reduce(np.union1d, self.mesh.faces[facet])  # indices of vertices
-            vertices = self.mesh.vertices[vertices]  # coordinates of vertices
-
-            # append vertices in case there is no sampled points in this group
-            points.append(vertices)
-            points = np.concatenate(points)
-
-            # calculate parameters
-            plane = VertexGroup.fit_plane(vertices)
-            self.planes.append(plane)
-            self.bounds.append(self._points_bound(vertices))
-            self.points_grouped.append(points)
-        self.points = np.concatenate(self.points_grouped)
-
-    def save_vg(self, filepath):
-        """
-        Save primitives into a vg file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save vg file
-        """
-        if isinstance(filepath, str):
-            assert filepath.endswith('.vg')
-        elif isinstance(filepath, Path):
-            assert filepath.suffix == '.vg'
-        assert self.planes is not None and self.points_grouped is not None
-
-        # points
-        out = ''
-        out += 'num_points: {}\n'.format(len(self.points))
-        for i in self.points.flatten():
-            # https://stackoverflow.com/questions/54367816/numpy-np-fromstring-not-working-as-hoped
-            out += ' ' + str(i)
-
-        # colors (no color needed)
-        out += '\nnum_colors: {}'.format(0)
-
-        # normals
-        out += '\nnum_normals: {}\n'.format(len(self.points))
-        for i, group in enumerate(self.points_grouped):
-            for _ in group:
-                out += '{} {} {} '.format(*self.planes[i][:3])
-
-        # groups
-        out += '\nnum_groups: {}\n'.format(len(self.points_grouped))
-        j_base = 0
-        for i, group in enumerate(self.points_grouped):
-            out += 'group_type: {}\n'.format(0)
-            out += 'num_group_parameters: {}\n'.format(4)
-            out += 'group_parameters: {} {} {} {}\n'.format(*self.planes[i])
-            out += 'group_label: group_{}\n'.format(i)
-            out += 'group_color: {} {} {}\n'.format(random(), random(), random())
-            out += 'group_num_point: {}\n'.format(len(self.points_grouped[i]))
-            for j in range(j_base, j_base + len(self.points_grouped[i])):
-                out += '{} '.format(j)
-            j_base += len(self.points_grouped[i])
-            out += '\nnum_children: {}\n'.format(0)
-
-        with open(filepath, 'w') as fout:
-            fout.writelines(out)
-
-    def save_bvg(self, filepath):
-        """
-        Save primitives into a bvg file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save bvg file
-        """
-
-        if isinstance(filepath, str):
-            assert filepath.endswith('.bvg')
-        elif isinstance(filepath, Path):
-            assert filepath.suffix == '.bvg'
-        assert self.planes is not None and self.points_grouped is not None
-
-        # points
-        out = [struct.pack('i', len(self.points))]
-        for i in self.points.flatten():
-            # https://stackoverflow.com/questions/54367816/numpy-np-fromstring-not-working-as-hoped
-            out.append(struct.pack('f', i))
-
-        # colors (no color needed)
-        out.append(struct.pack('i', 0))
-
-        # normals
-        out.append(struct.pack('i', len(self.points)))
-        for i, group in enumerate(self.points_grouped):
-            for _ in group:
-                out.append(struct.pack('fff', *self.planes[i][:3]))
-
-        # groups
-        out.append(struct.pack('i', len(self.points_grouped)))
-        j_base = 0
-        for i, group in enumerate(self.points_grouped):
-            out.append(struct.pack('i', 0))
-            out.append(struct.pack('i', 4))
-            out.append(struct.pack('ffff', *self.planes[i]))
-            out.append(struct.pack('i', 6 + len(str(i))))
-            out.append(struct.pack(f'{(6 + len(str(i)))}s', bytes('group_{}'.format(i), encoding='ascii')))
-            out.append(struct.pack('fff', random(), random(), random()))
-            out.append(struct.pack('i', len(self.points_grouped[i])))
-
-            for j in range(j_base, j_base + len(self.points_grouped[i])):
-                out.append(struct.pack('i', j))
-
-            j_base += len(self.points_grouped[i])
-            out.append(struct.pack('i', 0))
-
-        with open(filepath, 'wb') as fout:
-            fout.writelines(out)

@@ -207,6 +207,53 @@ class CellComplex:
         self.bounds = np.array(bounds)
         self.points = np.array(points, dtype=object)
 
+
+    def my_prioritise_planes(self,occs):
+
+        logger.info('my prioritising planar primitives')
+
+        points_tgt = occs['points']
+        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
+
+        # check on which side of the plane the query points lie
+        which_side = self.planes[:, 0, np.newaxis] * points_tgt[:, 0] \
+                    + self.planes[:, 1, np.newaxis] * points_tgt[:, 1] \
+                    + self.planes[:, 2, np.newaxis] * points_tgt[:, 2] \
+                     + self.planes[:, 3, np.newaxis]
+
+        which_side = (np.sign(which_side)+1).astype(bool)
+
+        # check how many query points would get correctly split by the plane
+        # we don't know the correct orientation of the plane, so we check for both possible orientations
+        sortinga = (which_side == occ_tgt).sum(axis=1)
+        sortingb = (np.invert(which_side) == occ_tgt).sum(axis=1)
+
+        # high split value in either of the two orientations is good
+        sorting = np.vstack((sortinga,sortingb))
+        sorting = np.max(sorting,axis=0)
+
+        # sort by values, high split values first
+        sorting = np.flip(np.argsort(sorting))
+
+        # reorder both the planes and their bounds
+        self.planes = self.planes[sorting]
+        self.bounds = self.bounds[sorting]
+
+
+        a=5
+
+
+
+
+
+
+
+
+
+
+
+
+
     def prioritise_planes(self, prioritise_verticals=True):
         """
         Prioritise certain planes to favour building reconstruction.
@@ -226,6 +273,8 @@ class CellComplex:
 
         # compute the priority
         indices_sorted_planes = self._sort_planes()
+
+        # np.random.shuffle(indices_sorted_planes)
 
         if prioritise_verticals:
             indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
