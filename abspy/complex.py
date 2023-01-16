@@ -197,28 +197,38 @@ class CellComplex:
 
     def write_planes(self,m):
 
-        path = os.path.join(os.path.dirname(m['abspy']['partition']), "planes")
-        os.makedirs(path, exist_ok=True)
+        path = os.path.join(os.path.dirname(m['abspy']['partition']))
+        path = os.path.join(os.path.dirname(m['abspy']['partition']))
+        os.makedirs(os.path.join(path,"planes"), exist_ok=True)
+        os.makedirs(os.path.join(path,"point_groups"), exist_ok=True)
 
         for i, plane in enumerate(self.planes):
+            c = np.random.random(size=3)
+
+            filename = os.path.join(path, "point_groups", str(i) + '.obj')
+            f = open(filename, 'w')
+            fstring='f'
+            for j,v in enumerate(self.points[i]):
+                f.write('v {} {} {} {} {} {}\n'.format(v[0],v[1],v[2],c[0],c[1],c[2]))
+            f.close()
+
+
             ch = ConvexHull(self.points[i][:, :2])
             verts = ch.points[ch.vertices]
             verts = np.hstack((verts, self.points[i][ch.vertices,2,np.newaxis]))
 
             # project verts to plane
             # https://www.baeldung.com/cs/3d-point-2d-plane
-            k = (plane[-1] - plane[0] * verts[:, 0] - plane[1] * verts[:, 1] - plane[2] * verts[:, 2]) / (
+            k = (-plane[-1] - plane[0] * verts[:, 0] - plane[1] * verts[:, 1] - plane[2] * verts[:, 2]) / (
                         plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
             pverts = np.asarray([verts[:, 0] + k * plane[0], verts[:, 1] + k * plane[1], verts[:, 2] + k * plane[2]]).transpose()
 
-            c = np.random.random(size=3)
-            filename = os.path.join(path, str(i) + '.obj')
 
+            filename = os.path.join(path, "planes", str(i) + '.obj')
             f = open(filename, 'w')
-
             fstring='f'
             for j,v in enumerate(pverts):
-                f.write('v {} {} {}\n'.format(v[0],v[1],v[2]))
+                f.write('v {} {} {} {} {} {}\n'.format(v[0],v[1],v[2],c[0],c[1],c[2]))
                 fstring+=' {}'.format(j+1)
             f.write(fstring)
 
@@ -233,8 +243,10 @@ class CellComplex:
 
 
         ineqs = np.array(polyhedron.inequalities())
-        inside = points[:, 0] * ineqs[:, 0, np.newaxis] + points[:, 1] * ineqs[:, 1, np.newaxis] + \
-                  points[:, 2] * ineqs[:, 2, np.newaxis] + ineqs[:, 3, np.newaxis]
+        # careful here, the ineqs from SageMath have a strange order
+        inside = points[:, 0] * ineqs[:, 1, np.newaxis] + points[:, 1] * ineqs[:, 2, np.newaxis] + \
+                  points[:, 2] * ineqs[:, 3, np.newaxis] + ineqs[:, 0, np.newaxis]
+
 
         inside = (np.sign(inside)+1).astype(bool)
 
@@ -256,7 +268,7 @@ class CellComplex:
         self.face_count = 0
 
         self.get_bounding_box(m)
-        plot = True
+        plot_interface = True
         self.write_cells(m,self.bounding_poly)
 
         tree = Tree()
@@ -277,16 +289,16 @@ class CellComplex:
                 hspace_positive = current_node.intersection(hspace_positive)
                 hspace_negative = current_node.intersection(hspace_negative)
 
-                # if hspace_positive.dim() != 3 or hspace_negative.dim() != 3:
-                #     # if cell_positive.is_empty() or cell_negative.is_empty():
-                #     """
-                #     cannot use is_empty() predicate for degenerate cases:
-                #         sage: Polyhedron(vertices=[[0, 1, 2]])
-                #         A 0-dimensional polyhedron in ZZ^3 defined as the convex hull of 1 vertex
-                #         sage: Polyhedron(vertices=[[0, 1, 2]]).is_empty()
-                #         False
-                #     """
-                #     continue
+                if hspace_positive.dim() != 3 or hspace_negative.dim() != 3:
+                    # if cell_positive.is_empty() or cell_negative.is_empty():
+                    """
+                    cannot use is_empty() predicate for degenerate cases:
+                        sage: Polyhedron(vertices=[[0, 1, 2]])
+                        A 0-dimensional polyhedron in ZZ^3 defined as the convex hull of 1 vertex
+                        sage: Polyhedron(vertices=[[0, 1, 2]]).is_empty()
+                        False
+                    """
+                    continue
 
 
                 if(not hspace_positive.is_empty()): # should maybe adopt the dim != 3 method of the original code instead
@@ -299,11 +311,11 @@ class CellComplex:
                     tree.create_node(tag=self.split_count,identifier=self.split_count,data=hspace_negative,parent=tree[child].identifier)
                     self.write_cells(m,hspace_negative,self.points[i])
 
-                if plot:
+                if plot_interface:
                     if (not hspace_negative.is_empty()) and (not hspace_positive.is_empty()):
                         facet = hspace_positive.intersection(hspace_negative)
-                        self.face_count+=1
                         self.write_faces(m,facet)
+                        self.face_count+=1
 
 
 
