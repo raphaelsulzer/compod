@@ -21,7 +21,7 @@ import pickle
 import time
 import multiprocessing
 from fractions import Fraction
-
+from copy import deepcopy
 import numpy as np
 from tqdm import trange
 import networkx as nx
@@ -33,7 +33,7 @@ from .primitive import VertexGroup
 import csv
 
 from skspatial.objects import Plane
-from scipy.spatial import ConvexHull
+
 
 
 logger = attach_to_log()
@@ -45,7 +45,7 @@ class CellComplex:
     Class of cell complex from planar primitive arrangement.
     """
     def __init__(self, planes, bounds, points=None, initial_bound=None, initial_padding=0.1, additional_planes=None,
-                 build_graph=False, quiet=False):
+                 build_graph=False, quiet=False,exporter=None):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -69,6 +69,7 @@ class CellComplex:
             Disable logging and progress bar if set True
         """
 
+        self.exporter = exporter
 
 
         self.quiet = quiet
@@ -155,7 +156,6 @@ class CellComplex:
 
         c = np.random.random(size=3)
 
-
         path = os.path.join(os.path.dirname(m['abspy']['partition']),"partitions")
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(self.split_count)+'.obj')
@@ -177,15 +177,11 @@ class CellComplex:
 
         c = np.random.random(size=3)
 
-
         path = os.path.join(os.path.dirname(m['abspy']['partition']),"facets")
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(self.face_count)+'.obj')
 
         ss = facet.render_solid().obj_repr(facet.render_solid().default_render_params())
-
-        if len(ss[3]) == 0:
-            a=5
 
         f = open(filename,'w')
         for out in ss[2:4]:
@@ -195,58 +191,13 @@ class CellComplex:
         f.close()
 
 
-    def write_planes(self,m):
-
-        path = os.path.join(os.path.dirname(m['abspy']['partition']))
-        path = os.path.join(os.path.dirname(m['abspy']['partition']))
-        os.makedirs(os.path.join(path,"planes"), exist_ok=True)
-        os.makedirs(os.path.join(path,"point_groups"), exist_ok=True)
-
-        for i, plane in enumerate(self.planes):
-            c = np.random.random(size=3)
-
-            filename = os.path.join(path, "point_groups", str(i) + '.obj')
-            f = open(filename, 'w')
-            fstring='f'
-            for j,v in enumerate(self.points[i]):
-                f.write('v {} {} {} {} {} {}\n'.format(v[0],v[1],v[2],c[0],c[1],c[2]))
-            f.close()
-
-
-            ch = ConvexHull(self.points[i][:, :2])
-            verts = ch.points[ch.vertices]
-            verts = np.hstack((verts, self.points[i][ch.vertices,2,np.newaxis]))
-
-            # project verts to plane
-            # https://www.baeldung.com/cs/3d-point-2d-plane
-            k = (-plane[-1] - plane[0] * verts[:, 0] - plane[1] * verts[:, 1] - plane[2] * verts[:, 2]) / (
-                        plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
-            pverts = np.asarray([verts[:, 0] + k * plane[0], verts[:, 1] + k * plane[1], verts[:, 2] + k * plane[2]]).transpose()
-
-
-            filename = os.path.join(path, "planes", str(i) + '.obj')
-            f = open(filename, 'w')
-            fstring='f'
-            for j,v in enumerate(pverts):
-                f.write('v {} {} {} {} {} {}\n'.format(v[0],v[1],v[2],c[0],c[1],c[2]))
-                fstring+=' {}'.format(j+1)
-            f.write(fstring)
-
-            f.close()
-
-        a = 5
-
-
     def contains(self,polyhedron,points):
-
-        # check if any of the points are contained in the polyhedron
-
+        """check if any of the points are contained in the polyhedron"""
 
         ineqs = np.array(polyhedron.inequalities())
         # careful here, the ineqs from SageMath have a strange order
         inside = points[:, 0] * ineqs[:, 1, np.newaxis] + points[:, 1] * ineqs[:, 2, np.newaxis] + \
                   points[:, 2] * ineqs[:, 3, np.newaxis] + ineqs[:, 0, np.newaxis]
-
 
         inside = (np.sign(inside)+1).astype(bool)
 
@@ -255,15 +206,10 @@ class CellComplex:
 
         return at_least_one_point_inside_all_planes
 
-
-
-
     def my_construct(self,m):
 
-        self.write_planes(m)
 
         # iteratively slice convexes with planes
-
         self.split_count = 0
         self.face_count = 0
 
@@ -289,17 +235,8 @@ class CellComplex:
                 hspace_positive = current_node.intersection(hspace_positive)
                 hspace_negative = current_node.intersection(hspace_negative)
 
-                if hspace_positive.dim() != 3 or hspace_negative.dim() != 3:
-                    # if cell_positive.is_empty() or cell_negative.is_empty():
-                    """
-                    cannot use is_empty() predicate for degenerate cases:
-                        sage: Polyhedron(vertices=[[0, 1, 2]])
-                        A 0-dimensional polyhedron in ZZ^3 defined as the convex hull of 1 vertex
-                        sage: Polyhedron(vertices=[[0, 1, 2]]).is_empty()
-                        False
-                    """
-                    continue
-
+                # if hspace_positive.dim() != 3 or hspace_negative.dim() != 3:
+                #     continue
 
                 if(not hspace_positive.is_empty()): # should maybe adopt the dim != 3 method of the original code instead
                     self.split_count+=1
@@ -317,121 +254,15 @@ class CellComplex:
                         self.write_faces(m,facet)
                         self.face_count+=1
 
-
-
-
         a=4
 
-    def my_construct2(self,m):
-
-
-        occs = np.load(m["occ"])
-        points_tgt = occs['points']
-        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
-
-        # iteratively slice convexes with planes
-
-        self.split_count = 0
-
-        self.get_bounding_box(m)
-        self.write_partition(m,self.bounding_poly)
-
-        tree = Tree()
-        tree.create_node(tag=self.split_count, identifier=self.split_count,data=self.bounding_poly) # root node
-
-        planes = self.planes
-        points = self.points
-
-        while len(planes) > 0:
-
-            plane = planes[self.sort_planes(planes,points_tgt,occs_tgt)]
-
-
-
-            children = list(tree.expand_tree(0,filter= lambda x: self.contains(x.data,self.points[i])))
-
-            for child in children:
-                if not tree[child].is_leaf():   # only modify leaf_nodes
-                    continue
-                current_node=tree[child].data
-
-                hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-                                                    self._inequalities(plane)]
-
-                hspace_positive = current_node.intersection(hspace_positive)
-                if(not hspace_positive.is_empty()): # should maybe adopt the dim != 3 method of the original code instead
-                    self.split_count+=1
-                    tree.create_node(tag=self.split_count,identifier=self.split_count,data=hspace_positive,parent=tree[child].identifier)
-                    # self.write_partition(m,hspace_positive)
-
-                hspace_negative = current_node.intersection(hspace_negative)
-                if(not hspace_negative.is_empty()):
-                    self.split_count+=1
-                    tree.create_node(tag=self.split_count,identifier=self.split_count,data=hspace_negative,parent=tree[child].identifier)
-                    # self.write_partition(m,hspace_negative,self.points[i])
-
-
-
-
-
-    def sort_planes(self, planes, points_tgt, occs_tgt):
-
-        #aka my_prioritise_planes3
+    def sort_planes_by_absolute_occ(self,planes,points_tgt,occ_tgt):
 
         # check on which side of the plane the query points lie
         which_side = planes[:, 0, np.newaxis] * points_tgt[:, 0] \
-                     + planes[:, 1, np.newaxis] * points_tgt[:, 1] \
-                     + planes[:, 2, np.newaxis] * points_tgt[:, 2] \
+                    + planes[:, 1, np.newaxis] * points_tgt[:, 1] \
+                    + planes[:, 2, np.newaxis] * points_tgt[:, 2] \
                      + planes[:, 3, np.newaxis]
-
-        which_side = (np.sign(which_side) + 1).astype(bool)
-
-        # check how many query points would get correctly split by the plane
-        # we don't know the correct orientation of the plane, so we check for both possible orientations
-        left = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        left = left.all(axis=0)
-        left = left.sum(axis=1)
-        left = left / which_side.sum(axis=1)
-
-        right = np.stack(
-            (np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        right = right.all(axis=0)
-        right = right.sum(axis=1) / np.invert(which_side).sum(axis=1)
-
-        orientationa = np.vstack((left, right)).max(axis=0)
-
-        which_side = np.invert(which_side)
-
-        left = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        left = left.all(axis=0)
-        left = left.sum(axis=1) / which_side.sum(axis=1)
-
-        right = np.stack(
-            (np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        right = right.all(axis=0)
-        right = right.sum(axis=1) / np.invert(which_side).sum(axis=1)
-
-        orientationb = np.vstack((left, right)).max(axis=0)
-
-        # high split value in either of the two orientations is good
-        sorting = np.vstack((orientationa, orientationb))
-        sorting = np.max(sorting, axis=0)
-
-        return np.argmax(sorting)
-
-    def my_prioritise_planes(self,m):
-
-        logger.info('my prioritising planar primitives')
-
-        occs = np.load(m["occ"])
-        points_tgt = occs['points']
-        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
-
-        # check on which side of the plane the query points lie
-        which_side = self.planes[:, 0, np.newaxis] * points_tgt[:, 0] \
-                    + self.planes[:, 1, np.newaxis] * points_tgt[:, 1] \
-                    + self.planes[:, 2, np.newaxis] * points_tgt[:, 2] \
-                     + self.planes[:, 3, np.newaxis]
 
         which_side = (np.sign(which_side)+1).astype(bool)
 
@@ -447,120 +278,120 @@ class CellComplex:
         # sort by values, high split values first
         sorting = np.flip(np.argsort(sorting))
 
-        # reorder both the planes and their bounds
-        self.planes = self.planes[sorting]
-        self.bounds = self.bounds[sorting]
-        self.points = self.points[sorting]
-
-
-        a=5
+        return sorting
 
 
 
-    def my_prioritise_planes2(self,m):
-
-        self.split_count = 0
-
-        logger.info('my prioritising planar primitives')
-
-        occs = np.load(m["occ"])
-        points_tgt = occs['points']
-        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
-
-        planes = self.planes
-
-        self.get_bounding_box(m)
-
-        while len(planes) > 0:
-            # check on which side of the plane the query points lie
-            which_side = planes[:, 0, np.newaxis] * points_tgt[:, 0] \
-                         + planes[:, 1, np.newaxis] * points_tgt[:, 1] \
-                         + planes[:, 2, np.newaxis] * points_tgt[:, 2] \
-                         + planes[:, 3, np.newaxis]
-
-            # left or right (left = false, right = true)
-            which_side = (np.sign(which_side) + 1).astype(bool)
-
-            which_side=np.stack((which_side, np.invert(which_side)))
-
-            # check how many query points would get correctly split by the plane
-            # we don't know the correct orientation of the plane, so we check for both possible orientations
-            sortinga = (which_side[0,:,:] == occ_tgt).sum(axis=1)
-            sortingb = (which_side[1,:,:] == occ_tgt).sum(axis=1)
-
-            # high split value in either of the two orientations is good
-            sorting = np.vstack((sortinga, sortingb))
-            best_side, best_plane = np.unravel_index(np.argmax(sorting),shape=sorting.shape)
-
-            best_side = np.invert(best_side.astype(bool)).astype(int)
-
-            on_side = np.where(which_side[best_side,best_plane,:])[0]
-            points_tgt=np.delete(points_tgt, on_side, axis=0)
-            occ_tgt=np.delete(occ_tgt, on_side, axis=0)
-            planes = np.delete(planes,best_plane,axis=0)
-
-
-        # reorder both the planes and their bounds
-        self.planes = self.planes[sorting]
-        self.bounds = self.bounds[sorting]
-        self.points = self.points[sorting]
-
-
-        a=5
-
-
-    def my_prioritise_planes3(self,m):
-
-        logger.info('my prioritising planar primitives')
-
-        occs = np.load(m["occ"])
-        points_tgt = occs['points']
-        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
+    def sort_planes_by_occ_ratio(self, m, planes, points_tgt, occ_tgt, count):
 
         # check on which side of the plane the query points lie
-        which_side = self.planes[:, 0, np.newaxis] * points_tgt[:, 0] \
-                    + self.planes[:, 1, np.newaxis] * points_tgt[:, 1] \
-                    + self.planes[:, 2, np.newaxis] * points_tgt[:, 2] \
-                     + self.planes[:, 3, np.newaxis]
+        which_side = planes[:, 0, np.newaxis] * points_tgt[:, 0] \
+                    + planes[:, 1, np.newaxis] * points_tgt[:, 1] \
+                    + planes[:, 2, np.newaxis] * points_tgt[:, 2] \
+                     + planes[:, 3, np.newaxis]
 
         which_side = (np.sign(which_side)+1).astype(bool)
 
         # check how many query points would get correctly split by the plane
         # we don't know the correct orientation of the plane, so we check for both possible orientations
-        left = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        left = left.all(axis=0)
-        left = left.sum(axis=1)
-        left = left/which_side.sum(axis=1)
+        lefta = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
+        lefta = lefta.all(axis=0)
+        lefta = lefta.sum(axis=1)
+        leftaf = lefta/which_side.sum(axis=1)
 
-        right = np.stack((np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        right = right.all(axis=0)
-        right = right.sum(axis=1)/np.invert(which_side).sum(axis=1)
+        righta = np.stack((np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
+        righta = righta.all(axis=0)
+        rightaf = righta.sum(axis=1)/np.invert(which_side).sum(axis=1)
 
-        orientationa = np.vstack((left,right)).max(axis=0)
+        orientationa = np.vstack((leftaf, rightaf))
+        best_sidea, best_planea = np.unravel_index(np.nanargmax(orientationa), shape=orientationa.shape)
+        orientationa = orientationa[best_sidea,best_planea]
+
+        epath = os.path.join(os.path.dirname(m["abspy"]["partition"]))
+        if orientationa > 0.99:
+
+            if best_sidea == 0:
+                self.exporter.export_deleted_points(epath,points_tgt[which_side[best_planea,:],:],count)
+                points_tgt = np.delete(points_tgt,which_side[best_planea,:],axis=0)
+                occ_tgt = np.delete(occ_tgt,which_side[best_planea,:],axis=0)
+            else:
+                self.exporter.export_deleted_points(epath,points_tgt[np.invert(which_side)[best_planea,:],:],count)
+                points_tgt = np.delete(points_tgt,np.invert(which_side)[best_planea,:],axis=0)
+                occ_tgt = np.delete(occ_tgt,np.invert(which_side)[best_planea,:],axis=0)
+
+            return best_planea, points_tgt, occ_tgt
+
+
 
         which_side = np.invert(which_side)
 
-        left = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        left = left.all(axis=0)
-        left = left.sum(axis=1)/which_side.sum(axis=1)
+        leftb = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
+        leftb = leftb.all(axis=0)
+        leftbf = leftb.sum(axis=1)/which_side.sum(axis=1)
 
-        right = np.stack((np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        right = right.all(axis=0)
-        right = right.sum(axis=1)/np.invert(which_side).sum(axis=1)
+        rightb = np.stack((np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
+        rightb = rightb.all(axis=0)
+        rightbf = rightb.sum(axis=1)/np.invert(which_side).sum(axis=1)
 
-        orientationb = np.vstack((left,right)).max(axis=0)
+        orientationb = np.vstack((leftbf,rightbf))
+        best_sideb, best_planeb = np.unravel_index(np.nanargmax(orientationb), shape=orientationb.shape)
+        orientationb = orientationb[best_sideb,best_planeb]
 
-        # high split value in either of the two orientations is good
-        sorting = np.vstack((orientationa,orientationb))
-        sorting = np.max(sorting,axis=0)
+        if orientationb > 0.99:
 
-        # sort by values, high split values first
-        sorting = np.flip(np.argsort(sorting))
+            if best_sideb == 0:
+                self.exporter.export_deleted_points(epath,points_tgt[which_side[best_planeb, :], :],count)
+                points_tgt = np.delete(points_tgt, which_side[best_planeb, :], axis=0)
+                occ_tgt = np.delete(occ_tgt, which_side[best_planeb, :], axis=0)
+            else:
+                self.exporter.export_deleted_points(epath,points_tgt[np.invert(which_side)[best_planeb, :], :],count)
+                points_tgt = np.delete(points_tgt, np.invert(which_side)[best_planeb, :], axis=0)
+                occ_tgt = np.delete(occ_tgt, np.invert(which_side)[best_planeb, :], axis=0)
+
+            return best_planeb, points_tgt, occ_tgt
+
+        if orientationa >= orientationb:
+
+            return best_planea, points_tgt, occ_tgt
+
+        else:
+
+            return best_planeb, points_tgt, occ_tgt
+
+
+
+    def my_prioritise_planes(self,m):
+
+        logger.info('my prioritising planar primitives')
+
+        occs = np.load(m["occ"])
+        points_tgt = occs['points']
+        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
+
+
+        # sorting = self.sort_planes_by_absolute_occ(planes=self.planes,points_tgt=points_tgt,occ_tgt=occ_tgt)
+        # sorting = self.sort_planes_by_occ_ratio(m,planes=self.planes, points_tgt=points_tgt, occ_tgt=occ_tgt)
+
+        planes = deepcopy(self.planes)
+        sorting = []
+
+        count=0
+        for _ in planes:
+            best_plane_idx,points_tgt,occ_tgt = self.sort_planes_by_occ_ratio(m, planes=planes, points_tgt=points_tgt, occ_tgt=occ_tgt,count=count)
+            planes[best_plane_idx,:] = None
+
+            sorting.append(best_plane_idx)
+            count+=1
+
+
+
 
         # reorder both the planes and their bounds
         self.planes = self.planes[sorting]
         self.bounds = self.bounds[sorting]
         self.points = self.points[sorting]
+
+        self.exporter.export_planes(os.path.join(os.path.dirname(m["planes"])),self.planes,self.points)
 
 
         a=5
