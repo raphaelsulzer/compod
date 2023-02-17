@@ -27,7 +27,7 @@ from tqdm import trange
 import networkx as nx
 import trimesh
 from sage.all import polytopes, QQ, RR, Polyhedron
-
+from export import Exporter
 from .logger import attach_to_log
 from .primitive import VertexGroup
 import csv
@@ -225,6 +225,8 @@ class CellComplex:
             children = list(tree.expand_tree(0,filter= lambda x: self.contains(x.data,self.points[i])))
 
             for child in children:
+
+
                 if not tree[child].is_leaf():
                     continue
                 current_node=tree[child].data
@@ -249,6 +251,8 @@ class CellComplex:
                     self.write_cells(m,hspace_negative,self.points[i])
 
                 if plot_interface:
+                    c = np.random.random(size=3)
+
                     if (not hspace_negative.is_empty()) and (not hspace_positive.is_empty()):
                         facet = hspace_positive.intersection(hspace_negative)
                         self.write_faces(m,facet)
@@ -279,6 +283,109 @@ class CellComplex:
         sorting = np.flip(np.argsort(sorting))
 
         return sorting
+
+
+    def sort_planes_by_surface_split(self, m, vertex_group, mode=Tree.DEPTH):
+
+        ex = Exporter()
+
+
+
+        self.get_bounding_box(m)
+        cell_count = 0
+        tree = Tree()
+        dd = {"cell": self.bounding_poly, "plane_ids": np.arange(vertex_group.planes.shape[0])}
+        tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
+
+        children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
+
+        point_groups = []
+        for pg in vertex_group.points_grouped:
+            point_groups.append(pg.shape[0])
+
+        mpg = max(point_groups)
+        for i,pg in enumerate(vertex_group.points_grouped):
+            pg = vertex_group.points_grouped[i]
+            point_groups[i] = np.concatenate((pg,np.zeros(shape=(mpg-pg.shape[0],3))*np.nan),axis=0)
+
+        point_groups = np.array(point_groups)
+
+        plane_order = []
+
+        for child in children:
+
+            current_ids = tree[child].data["plane_ids"]
+
+            ### the whole thing vectorized. doesn't really work for some reason
+            #
+            # planes = np.repeat(vertex_group.planes[np.newaxis,current_ids,:],current_ids.shape[0],axis=0)
+            # pgs = np.repeat(point_groups[np.newaxis,current_ids,:,:],current_ids.shape[0],axis=0)
+            #
+            # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
+            #
+
+
+            current_point_groups = point_groups[current_ids,:,:]
+            left_right = []
+            for id in current_ids:
+
+                plane = vertex_group.planes[id,:]
+
+                which_side = plane[0] * current_point_groups[:,:,0] + plane[1] * current_point_groups[:,:,1] + plane[2] * current_point_groups[:,:,2] + plane[3]
+
+                which_side[np.isnan(which_side)] = 0
+
+
+                left_right.append([(which_side<=0).all(axis=-1).sum(),(which_side>=0).all(axis=-1).sum()])
+
+
+            left_right = np.array(left_right)
+            left_right = left_right.sum(axis=1)
+            best_plane = np.argmax(left_right)
+            plane_order.append(current_ids[best_plane])
+            plane = vertex_group.planes[current_ids[best_plane]]
+            which_side = plane[0] * current_point_groups[:, :, 0] + plane[1] * current_point_groups[:, :, 1] + plane[2] * current_point_groups[:, :, 2] + plane[3]
+            which_side[np.isnan(which_side)] = 0
+            which_side[best_plane,:] = np.nan
+
+
+            left_ids = current_ids[(which_side<=0).all(axis=-1)]
+            dd = {"cell": self.bounding_poly, "plane_ids": left_ids}
+            cell_count = cell_count+1
+            tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+
+            right_ids = current_ids[(which_side>=0).all(axis=-1)]
+            dd = {"cell": self.bounding_poly, "plane_ids": right_ids}
+            cell_count = cell_count+1
+            tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+
+            a=5
+
+
+        self.planes = self.planes[plane_order]
+        self.bounds = self.bounds[plane_order]
+        self.points = self.points[plane_order]
+
+        return 0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -396,7 +503,7 @@ class CellComplex:
 
         a=5
 
-    def prioritise_planes(self, prioritise_verticals=True):
+    def prioritise_planes(self, mode = ["vertical", "random"]):
         """
         Prioritise certain planes to favour building reconstruction.
 
@@ -416,15 +523,15 @@ class CellComplex:
         # compute the priority
         indices_sorted_planes = self._sort_planes()
 
-        # np.random.shuffle(indices_sorted_planes)
+        if mode == "random":
+            np.random.shuffle(indices_sorted_planes)
+            indices_priority = indices_sorted_planes
 
-        if prioritise_verticals:
+        if mode == "vertical":
             indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
             bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
             indices_priority = np.append(indices_sorted_planes[bool_vertical_planes],
                                          indices_sorted_planes[np.invert(bool_vertical_planes)])
-        else:
-            indices_priority = indices_sorted_planes
 
         # reorder both the planes and their bounds
         self.planes = self.planes[indices_priority]
