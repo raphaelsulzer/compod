@@ -294,7 +294,7 @@ class CellComplex:
         self.get_bounding_box(m)
         cell_count = 0
         tree = Tree()
-        dd = {"cell": self.bounding_poly, "plane_ids": np.arange(vertex_group.planes.shape[0])}
+        dd = {"plane_ids": np.arange(vertex_group.planes.shape[0])}
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
 
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
@@ -335,8 +335,12 @@ class CellComplex:
 
                 which_side[np.isnan(which_side)] = 0
 
+                # nans = np.isnan(which_side).sum(axis=-1)
 
-                left_right.append([(which_side<=0).all(axis=-1).sum(),(which_side>=0).all(axis=-1).sum()])
+                left = (which_side<=0).all(axis=-1).sum()
+                right= (which_side>=0).all(axis=-1).sum()
+
+                left_right.append([left,right])
 
 
             left_right = np.array(left_right)
@@ -348,14 +352,20 @@ class CellComplex:
             which_side[np.isnan(which_side)] = 0
             which_side[best_plane,:] = np.nan
 
+            ### problem is that here I miss the planes that are split by the best_plane, ie that are not fully left or right
+            ### what I need TODO is to split these point groups of these planes and also put them to left and right accordingly
+            ### it will just get a bit complex with the indexing and I have to recalculate self.bounds, but should be doable
+            ### what should probably be done is to set a certain threshold for a plane to be part of a side; ie if only eg 5
+            ### points are part of a side then just drop them as inliers to the plane to save time
+            ### so instead of (which_side<=0).all(axis=-1) do something like (which_side<=0).sum(axis=-1)/n_inliers > th
 
             left_ids = current_ids[(which_side<=0).all(axis=-1)]
-            dd = {"cell": self.bounding_poly, "plane_ids": left_ids}
+            dd = {"plane_ids": left_ids}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
 
             right_ids = current_ids[(which_side>=0).all(axis=-1)]
-            dd = {"cell": self.bounding_poly, "plane_ids": right_ids}
+            dd = {"plane_ids": right_ids}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
 
