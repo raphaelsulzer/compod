@@ -32,6 +32,7 @@ from .logger import attach_to_log
 from .primitive import VertexGroup
 import csv
 
+from copy import  deepcopy
 from skspatial.objects import Plane
 
 
@@ -285,7 +286,11 @@ class CellComplex:
         return sorting
 
 
-    def sort_planes_by_surface_split(self, m, vertex_group, mode=Tree.DEPTH):
+    def sort_planes_by_surface_split(self, m, mode=Tree.DEPTH):
+
+
+        # TODO: i need a secomd ordering for when two planes have the same surface split score, take the one with the bigger area.
+        # because randommly shuffling the planes before this function has a big influence on the result
 
         ex = Exporter()
 
@@ -294,27 +299,29 @@ class CellComplex:
         self.get_bounding_box(m)
         cell_count = 0
         tree = Tree()
-        dd = {"plane_ids": np.arange(vertex_group.planes.shape[0])}
+        dd = {"plane_ids": np.arange(self.planes.shape[0])}
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
 
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
 
         point_groups = []
-        for pg in vertex_group.points_grouped:
+        for pg in self.points:
             point_groups.append(pg.shape[0])
-
+        n_points_per_plane = np.array(point_groups)
         mpg = max(point_groups)
-        for i,pg in enumerate(vertex_group.points_grouped):
-            pg = vertex_group.points_grouped[i]
+        for i,pg in enumerate(self.points):
+            pg = self.points[i]
             point_groups[i] = np.concatenate((pg,np.zeros(shape=(mpg-pg.shape[0],3))*np.nan),axis=0)
-
         point_groups = np.array(point_groups)
+
+        planes = deepcopy(self.planes)
 
         plane_order = []
 
         for child in children:
 
             current_ids = tree[child].data["plane_ids"]
+
 
             ### the whole thing vectorized. doesn't really work for some reason
             #
@@ -329,7 +336,10 @@ class CellComplex:
             left_right = []
             for id in current_ids:
 
-                plane = vertex_group.planes[id,:]
+                plane = planes[id,:]
+                if np.isnan(plane).all():
+                    left_right.append([0,0])
+                    continue
 
                 which_side = plane[0] * current_point_groups[:,:,0] + plane[1] * current_point_groups[:,:,1] + plane[2] * current_point_groups[:,:,2] + plane[3]
 
@@ -345,12 +355,15 @@ class CellComplex:
 
             left_right = np.array(left_right)
             left_right = left_right.sum(axis=1)
-            best_plane = np.argmax(left_right)
-            plane_order.append(current_ids[best_plane])
-            plane = vertex_group.planes[current_ids[best_plane]]
-            which_side = plane[0] * current_point_groups[:, :, 0] + plane[1] * current_point_groups[:, :, 1] + plane[2] * current_point_groups[:, :, 2] + plane[3]
-            which_side[np.isnan(which_side)] = 0
-            which_side[best_plane,:] = np.nan
+            best_plane_id = np.argmax(left_right)
+            plane_order.append(current_ids[best_plane_id])
+            best_plane = planes[current_ids[best_plane_id]]
+
+            # ex.export_plane(os.path.dirname(m["ransac"]), best_plane, points[, :][ins, :],
+            #                 count=str(plane_count) + abc[i], color=color)
+
+            print("best plane ",best_plane_id)
+
 
             ### problem is that here I miss the planes that are split by the best_plane, ie that are not fully left or right
             ### what I need TODO is to split these point groups of these planes and also put them to left and right accordingly
@@ -359,22 +372,84 @@ class CellComplex:
             ### points are part of a side then just drop them as inliers to the plane to save time
             ### so instead of (which_side<=0).all(axis=-1) do something like (which_side<=0).sum(axis=-1)/n_inliers > th
 
-            left_ids = current_ids[(which_side<=0).all(axis=-1)]
-            dd = {"plane_ids": left_ids}
+            # if plane has bigger than th, append it to self.planes
+
+            left_planes=[]
+            right_planes=[]
+            th=5
+            for id in current_ids:
+
+                if id == current_ids[best_plane_id]:
+                    continue
+
+                which_side = best_plane[0] * point_groups[id, :, 0] + best_plane[1] * point_groups[id, :, 1] + best_plane[2] * point_groups[id, :, 2] + best_plane[3]
+
+                left_points = point_groups[id,which_side<0,:]
+                right_points = point_groups[id,which_side>0,:]
+
+                if(n_points_per_plane[id] - left_points.shape[0]) < th:
+                    left_planes.append(id)
+                elif(n_points_per_plane[id] - right_points.shape[0]) < th:
+                    right_planes.append(id)
+                else:
+                    print("id:{}: total-left/right: {}-{}/{}".format(best_plane_id,n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
+
+                    left_planes.append(planes.shape[0])
+                    n_points_per_plane = np.append(n_points_per_plane,left_points.shape[0])
+                    left_points = np.concatenate((left_points,np.zeros(shape=(mpg-left_points.shape[0],3))*np.nan),axis=0)
+                    point_groups=np.vstack((point_groups, left_points[np.newaxis, :, :]))
+                    planes=np.vstack((planes,best_plane))
+
+                    right_planes.append(planes.shape[0])
+                    n_points_per_plane = np.append(n_points_per_plane,right_points.shape[0])
+                    right_points = np.concatenate((right_points, np.zeros(shape=(mpg - right_points.shape[0], 3)) * np.nan), axis=0)
+                    point_groups=np.vstack((point_groups, right_points[np.newaxis, :, :]))
+                    planes=np.vstack((planes,best_plane))
+
+                    planes[id,:] = np.nan
+                    point_groups[id,:] = np.nan
+
+
+
+
+                    a=5
+
+
+
+            # left_planes = current_ids[(which_side<0).all(axis=-1)]
+            dd = {"plane_ids": np.array(left_planes)}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
 
-            right_ids = current_ids[(which_side>=0).all(axis=-1)]
-            dd = {"plane_ids": right_ids}
+
+            # right_planes = current_ids[(which_side>0).all(axis=-1)]
+            dd = {"plane_ids": np.array(right_planes)}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+
+
+
+            ## now treat the ones that are not in left nor right
+
 
             a=5
 
 
-        self.planes = self.planes[plane_order]
-        self.bounds = self.bounds[plane_order]
-        self.points = self.points[plane_order]
+        # self.planes = self.planes[plane_order]
+        # self.bounds = self.bounds[plane_order]
+        # self.points = self.points[plane_order]
+
+        self.planes = planes[plane_order]
+        # self.bounds = self.bounds[plane_order]
+        self.points = []
+        self.bounds = []
+        for i,group in enumerate(point_groups[plane_order]):
+            group = group[~np.isnan(group).all(axis=-1)]
+            self.points.append(group)
+            self.bounds.append(np.array([np.amin(group, axis=0), np.amax(group, axis=0)]))
+        self.points = np.array(self.points)
+        self.bounds = np.array(self.bounds)
+
 
         return 0
 
