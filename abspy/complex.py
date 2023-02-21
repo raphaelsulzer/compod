@@ -294,16 +294,7 @@ class CellComplex:
 
         ex = Exporter()
 
-
-
-        self.get_bounding_box(m)
-        cell_count = 0
-        tree = Tree()
-        dd = {"plane_ids": np.arange(self.planes.shape[0])}
-        tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
-
-        children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
-
+        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         point_groups = []
         for pg in self.points:
             point_groups.append(pg.shape[0])
@@ -313,15 +304,20 @@ class CellComplex:
             pg = self.points[i]
             point_groups[i] = np.concatenate((pg,np.zeros(shape=(mpg-pg.shape[0],3))*np.nan),axis=0)
         point_groups = np.array(point_groups)
-
+        ### make a new planes array, to which planes that are split can be appanded
         planes = deepcopy(self.planes)
-
         plane_order = []
 
+        ## expand the tree as long as there is at least one plane in any of the subspaces
+        self.get_bounding_box(m)
+        cell_count = 0
+        tree = Tree()
+        dd = {"plane_ids": np.arange(self.planes.shape[0])}
+        tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
+        children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         for child in children:
 
             current_ids = tree[child].data["plane_ids"]
-
 
             ### the whole thing vectorized. doesn't really work for some reason
             # UPDATE: should work, first tries where with wrong condition
@@ -330,27 +326,15 @@ class CellComplex:
             #
             # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
 
-
-            current_point_groups = point_groups[current_ids,:,:]
+            ### find the plane which seperates all other planes without splitting them
             left_right = []
             for id in current_ids:
-
-                plane = planes[id,:]
-                if np.isnan(plane).all():
-                    left_right.append([0,0])
-                    continue
-
-                which_side = plane[0] * current_point_groups[:,:,0] + plane[1] * current_point_groups[:,:,1] + plane[2] * current_point_groups[:,:,2] + plane[3]
-
+                which_side = planes[id,0] * point_groups[current_ids,:,0] + planes[id,1] * point_groups[current_ids,:,1] + planes[id,2] * point_groups[current_ids,:,2] + planes[id,3]
                 which_side[np.isnan(which_side)] = 0
 
-                # nans = np.isnan(which_side).sum(axis=-1)
-
-                left = (which_side<=0).all(axis=-1).sum()
-                right= (which_side>=0).all(axis=-1).sum()
-
+                left = (which_side<=0).all(axis=-1).sum()   ### check for how many planes all points of these planes fall on the left of the current plane
+                right= (which_side>=0).all(axis=-1).sum()   ### check for how many planes all points of these planes fall on the right of the current plane
                 left_right.append([left,right])
-
 
             left_right = np.array(left_right)
             left_right = left_right.sum(axis=1)
@@ -358,6 +342,7 @@ class CellComplex:
             plane_order.append(current_ids[best_plane_id])
             best_plane = planes[current_ids[best_plane_id]]
 
+            ### export best plane
             color = [1,0,0] if current_ids[best_plane_id] > len(self.planes) else [0,1,0]
             epoints = point_groups[current_ids[best_plane_id]]
             epoints = epoints[~np.isnan(epoints).all(axis=-1)]
@@ -366,10 +351,11 @@ class CellComplex:
 
             # print("best plane ",current_ids[best_plane_id])
 
-
+            ### now put the planes into the left and right subspace of the best_plane split
+            ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
             left_planes=[]
             right_planes=[]
-            th=24
+            th=1
             for id in current_ids:
 
                 if id == current_ids[best_plane_id]:
@@ -410,32 +396,19 @@ class CellComplex:
                     point_groups[id,:] = np.nan
 
 
-
-            # left_planes = current_ids[(which_side<0).all(axis=-1)]
+            ### create the new subspaces with the planes that fall into it
             dd = {"plane_ids": np.array(left_planes)}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
 
-
-            # right_planes = current_ids[(which_side>0).all(axis=-1)]
+            ### create the new subspaces with the planes that fall into it
             dd = {"plane_ids": np.array(right_planes)}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
 
 
-
-            ## now treat the ones that are not in left nor right
-
-
-            a=5
-
-
-        # self.planes = self.planes[plane_order]
-        # self.bounds = self.bounds[plane_order]
-        # self.points = self.points[plane_order]
-
+        ### reorder the planes and recalculate the bounds from the new point groups (ie the planes that were split)
         self.planes = planes[plane_order]
-        # self.bounds = self.bounds[plane_order]
         self.points = []
         self.bounds = []
         point_groups = point_groups[plane_order]
@@ -604,9 +577,12 @@ class CellComplex:
         # compute the priority
         indices_sorted_planes = self._sort_planes()
 
+
         if mode == "random":
             np.random.shuffle(indices_sorted_planes)
             indices_priority = indices_sorted_planes
+
+
 
         if mode == "vertical":
             indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
