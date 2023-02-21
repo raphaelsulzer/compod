@@ -332,9 +332,7 @@ class CellComplex:
         ### find the plane which seperates all other planes without splitting them
         left_right = []
         for id in current_ids:
-            which_side = planes[id, 0] * point_groups[current_ids, :, 0] + planes[id, 1] * point_groups[current_ids, :,
-                                                                                           1] + planes[
-                             id, 2] * point_groups[current_ids, :, 2] + planes[id, 3]
+            which_side = planes[id, 0] * point_groups[current_ids, :, 0] + planes[id, 1] * point_groups[current_ids, :,1] + planes[id, 2] * point_groups[current_ids, :, 2] + planes[id, 3]
             which_side[np.isnan(which_side)] = 0
 
             left = (which_side <= 0).all(axis=-1).sum()  ### check for how many planes all points of these planes fall on the left of the current plane
@@ -371,8 +369,7 @@ class CellComplex:
             if id == current_ids[best_plane_id]:
                 continue
 
-            which_side = best_plane[0] * point_groups[id, :, 0] + best_plane[1] * point_groups[id, :, 1] + best_plane[
-                2] * point_groups[id, :, 2] + best_plane[3]
+            which_side = best_plane[0] * point_groups[id, :, 0] + best_plane[1] * point_groups[id, :, 1] + best_plane[2] * point_groups[id, :, 2] + best_plane[3]
 
             left_points = point_groups[id, which_side < 0, :]
             right_points = point_groups[id, which_side > 0, :]
@@ -406,6 +403,8 @@ class CellComplex:
                     point_groups = np.vstack((point_groups, right_points[np.newaxis, :, :]))
                     planes = np.vstack((planes, planes[id]))
 
+                self.split_count+=1
+
                 planes[id, :] = np.nan
                 point_groups[id, :] = np.nan
 
@@ -414,6 +413,8 @@ class CellComplex:
 
 
     def my_construct(self, m, mode=Tree.DEPTH, th=1, export=False):
+
+        self.split_count = 0
 
         ## Tree.DEPTH seems slightly faster then Tree.WIDTH
 
@@ -453,7 +454,9 @@ class CellComplex:
 
             ### get the best plane
             best_plane_id = self._get_best_plane(current_ids,planes,point_groups)
+            # best_plane_id = 0
             best_plane = planes[current_ids[best_plane_id]]
+
 
             # plane_order.append(current_ids[best_plane_id])
 
@@ -495,7 +498,7 @@ class CellComplex:
             if(cell_positive.dim() > 0 and cell_negative.dim() > 0):
                 graph.add_edge(cell_count-1, cell_count, intersection=None)
 
-            ## add edges to other cells
+            ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors = list(graph[child])
             for n in neighbors:
                 nconvex = graph.nodes[n]["convex"]
@@ -518,18 +521,20 @@ class CellComplex:
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
         self.constructed = True
 
-        ### reorder the planes and recalculate the bounds from the new point groups (ie the planes that were split)
-        self.planes = planes[plane_order]
-        self.points = []
-        self.bounds = []
-        point_groups = point_groups[plane_order]
-        for i,group in enumerate(point_groups):
-            group = group[~np.isnan(group).all(axis=-1)]
-            self.points.append(group)
-            self.bounds.append(np.array([np.amin(group, axis=0), np.amax(group, axis=0)]))
-        self.points = np.array(self.points, dtype=object)
-        self.bounds = np.array(self.bounds)
+        # ### reorder the planes and recalculate the bounds from the new point groups (ie the planes that were split)
+        # self.planes = planes[plane_order]
+        # self.points = []
+        # self.bounds = []
+        # point_groups = point_groups[plane_order]
+        # for i,group in enumerate(point_groups):
+        #     group = group[~np.isnan(group).all(axis=-1)]
+        #     self.points.append(group)
+        #     self.bounds.append(np.array([np.amin(group, axis=0), np.amax(group, axis=0)]))
+        # self.points = np.array(self.points, dtype=object)
+        # self.bounds = np.array(self.bounds)
 
+
+        logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(planes)))
 
         return 0
 
