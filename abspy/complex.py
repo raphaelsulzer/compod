@@ -31,11 +31,14 @@ from export import Exporter
 from .logger import attach_to_log
 from .primitive import VertexGroup
 import csv
+import matplotlib.pyplot as plt
 
 from copy import  deepcopy
 from skspatial.objects import Plane
 
-
+import sys
+sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/PyLabeler")
+import libPyLabeler as PL
 
 logger = attach_to_log()
 
@@ -261,29 +264,118 @@ class CellComplex:
 
         a=4
 
-    def sort_planes_by_absolute_occ(self,planes,points_tgt,occ_tgt):
+    def write_off(self,filename):
 
-        # check on which side of the plane the query points lie
-        which_side = planes[:, 0, np.newaxis] * points_tgt[:, 0] \
-                    + planes[:, 1, np.newaxis] * points_tgt[:, 1] \
-                    + planes[:, 2, np.newaxis] * points_tgt[:, 2] \
-                     + planes[:, 3, np.newaxis]
+        f = open(filename[:-3]+"off",'w')
+        f.write("OFF\n")
+        f.write("{} {} 0\n".format(self.pset.shape[0],len(self.facets)))
+        for p in self.pset:
+            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
+        for face in self.facets:
+            f.write("{}".format(len(face)))
+            for v in face:
+                f.write(" {}".format(v))
+            f.write('\n')
+        f.close()
 
-        which_side = (np.sign(which_side)+1).astype(bool)
 
-        # check how many query points would get correctly split by the plane
-        # we don't know the correct orientation of the plane, so we check for both possible orientations
-        sortinga = (which_side == occ_tgt).sum(axis=1)
-        sortingb = (np.invert(which_side) == occ_tgt).sum(axis=1)
+    def _sorted_vertex_indices(self,adjacency_matrix):
+        """
+        Return sorted vertex indices.
 
-        # high split value in either of the two orientations is good
-        sorting = np.vstack((sortinga,sortingb))
-        sorting = np.max(sorting,axis=0)
+        Parameters
+        ----------
+        adjacency_matrix: matrix
+            Adjacency matrix
 
-        # sort by values, high split values first
-        sorting = np.flip(np.argsort(sorting))
+        Returns
+        -------
+        sorted_: list of int
+            Sorted vertex indices
+        """
+        pointer = 0
+        sorted_ = [pointer]
+        for _ in range(len(adjacency_matrix[0]) - 1):
+            connected = np.where(adjacency_matrix[pointer])[0]  # two elements
+            if connected[0] not in sorted_:
+                pointer = connected[0]
+                sorted_.append(connected[0])
+            else:
+                pointer = connected[1]
+                sorted_.append(connected[1])
+        return sorted_
 
-        return sorting
+    def extract_gt(self, filename):
+
+        tris = []
+        points = []
+        for e0, e1 in self.graph.edges:
+
+            if e0 > e1:
+                continue
+
+            c0 = self.graph.nodes[e0]
+            c1 = self.graph.nodes[e1]
+
+            if c0["occupancy"] != c1["occupancy"]:
+
+                interface = c0["convex"].intersection(c1["convex"])
+
+                verts = np.array(interface.vertices(),dtype=object)
+                # verts = tuple(interface.vertices_list())
+                correct_order = self._sorted_vertex_indices(interface.adjacency_matrix())
+                # verts=self.orientFacet(verts[correct_order],outside)
+                # tris.append(verts)
+                verts = verts[correct_order]
+                for i in range(verts.shape[0]):
+                    points.append(tuple(verts[i,:]))
+                tris.append(verts)
+
+        pset = set(points)
+        pset = np.array(list(pset),dtype=object)
+        facets = []
+        for tri in tris:
+            face = []
+            for p in tri:
+                # face.append(np.argwhere((pset == p).all(-1))[0][0])
+                face.append(np.argwhere((np.equal(pset,p,dtype=object)).all(-1))[0][0])
+                # face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
+                # face.append(np.argwhere(np.isclose(pset, p,atol=tol*1.01).all(-1))[0][0])
+            facets.append(face)
+
+        self.pset = np.array(pset,dtype=float)
+        self.facets = facets
+
+        logger.debug('Save polygon mesh to {}'.format(filename))
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        # self.toTrimesh(filename)
+        # self.write_obj(filename)
+        self.write_off(filename)
+        # self.write_ply(filename)
+
+        a = 4
+
+    def label_graph_nodes(self, m, n_test_points=50):
+
+
+        pl=PL.PyLabeler(n_test_points)
+        pl.loadMesh(m["mesh"])
+        points = []
+        points_len = []
+        for node in self.graph.nodes(data=True):
+            cell = node[1]['convex']
+            pts = np.array(cell.vertices())
+            points.append(pts)
+            points_len.append(pts.shape[0])
+        occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
+
+        for i,node in enumerate(self.graph.nodes(data=True)):
+            node[1]["occupancy"] = np.rint(occs[i]).astype(int)
+
+        del pl
+
+
+
 
 
     def sort_planes_by_surface_split(self, m, mode=Tree.DEPTH):
@@ -293,6 +385,7 @@ class CellComplex:
         # because randommly shuffling the planes before this function has a big influence on the result
 
         ex = Exporter()
+
 
         ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         point_groups = []
@@ -308,11 +401,16 @@ class CellComplex:
         planes = deepcopy(self.planes)
         plane_order = []
 
+        cell_count = 0
+
+        ## init the graph
+        graph = nx.Graph()
+        graph.add_node(cell_count)
+
         ## expand the tree as long as there is at least one plane in any of the subspaces
         self.get_bounding_box(m)
-        cell_count = 0
         tree = Tree()
-        dd = {"plane_ids": np.arange(self.planes.shape[0])}
+        dd = {"convex": self.bounding_poly, "plane_ids": np.arange(self.planes.shape[0])}
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         for child in children:
@@ -395,16 +493,47 @@ class CellComplex:
                     planes[id,:] = np.nan
                     point_groups[id,:] = np.nan
 
+            ## create the new convexes
+            current_cell = tree[child].data["convex"]
+            hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
+                                                self._inequalities(best_plane)]
+
+            hspace_negative = current_cell.intersection(hspace_negative)
+            hspace_positive = current_cell.intersection(hspace_positive)
 
             ### create the new subspaces with the planes that fall into it
-            dd = {"plane_ids": np.array(left_planes)}
+            dd = {"convex": hspace_negative,"plane_ids": np.array(left_planes)}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+            graph.add_node(cell_count,convex=hspace_negative)
 
             ### create the new subspaces with the planes that fall into it
-            dd = {"plane_ids": np.array(right_planes)}
+            dd = {"convex": hspace_positive,"plane_ids": np.array(right_planes)}
             cell_count = cell_count+1
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+            graph.add_node(cell_count,convex=hspace_positive)
+
+            graph.add_edge(cell_count-1, cell_count)
+
+            neighbors = list(graph[child])
+
+            for n in neighbors:
+                nconvex = graph.nodes[n]["convex"]
+                if nconvex.intersection(hspace_negative).dim() == 2:
+                    graph.add_edge(n,cell_count-1)
+                if nconvex.intersection(hspace_positive).dim() == 2:
+                    graph.add_edge(n, cell_count)
+
+            ## add edges to other cells
+            nx.draw(graph,with_labels=True)  # networkx draw()
+            plt.draw()
+            plt.show()
+
+            ## remove the parent node
+            graph.remove_node(child)
+
+
+        self.graph = graph
 
 
         ### reorder the planes and recalculate the bounds from the new point groups (ie the planes that were split)
@@ -423,139 +552,6 @@ class CellComplex:
         return 0
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def sort_planes_by_occ_ratio(self, m, planes, points_tgt, occ_tgt, count):
-
-        # check on which side of the plane the query points lie
-        which_side = planes[:, 0, np.newaxis] * points_tgt[:, 0] \
-                    + planes[:, 1, np.newaxis] * points_tgt[:, 1] \
-                    + planes[:, 2, np.newaxis] * points_tgt[:, 2] \
-                     + planes[:, 3, np.newaxis]
-
-        which_side = (np.sign(which_side)+1).astype(bool)
-
-        # check how many query points would get correctly split by the plane
-        # we don't know the correct orientation of the plane, so we check for both possible orientations
-        lefta = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        lefta = lefta.all(axis=0)
-        lefta = lefta.sum(axis=1)
-        leftaf = lefta/which_side.sum(axis=1)
-
-        righta = np.stack((np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        righta = righta.all(axis=0)
-        rightaf = righta.sum(axis=1)/np.invert(which_side).sum(axis=1)
-
-        orientationa = np.vstack((leftaf, rightaf))
-        best_sidea, best_planea = np.unravel_index(np.nanargmax(orientationa), shape=orientationa.shape)
-        orientationa = orientationa[best_sidea,best_planea]
-
-        epath = os.path.join(os.path.dirname(m["abspy"]["partition"]))
-        if orientationa > 0.99:
-
-            if best_sidea == 0:
-                self.exporter.export_deleted_points(epath,points_tgt[which_side[best_planea,:],:],count)
-                points_tgt = np.delete(points_tgt,which_side[best_planea,:],axis=0)
-                occ_tgt = np.delete(occ_tgt,which_side[best_planea,:],axis=0)
-            else:
-                self.exporter.export_deleted_points(epath,points_tgt[np.invert(which_side)[best_planea,:],:],count)
-                points_tgt = np.delete(points_tgt,np.invert(which_side)[best_planea,:],axis=0)
-                occ_tgt = np.delete(occ_tgt,np.invert(which_side)[best_planea,:],axis=0)
-
-            return best_planea, points_tgt, occ_tgt
-
-
-
-        which_side = np.invert(which_side)
-
-        leftb = np.stack((which_side, (np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        leftb = leftb.all(axis=0)
-        leftbf = leftb.sum(axis=1)/which_side.sum(axis=1)
-
-        rightb = np.stack((np.invert(which_side), np.invert(np.repeat(occ_tgt[np.newaxis, :], which_side.shape[0], axis=0))))
-        rightb = rightb.all(axis=0)
-        rightbf = rightb.sum(axis=1)/np.invert(which_side).sum(axis=1)
-
-        orientationb = np.vstack((leftbf,rightbf))
-        best_sideb, best_planeb = np.unravel_index(np.nanargmax(orientationb), shape=orientationb.shape)
-        orientationb = orientationb[best_sideb,best_planeb]
-
-        if orientationb > 0.99:
-
-            if best_sideb == 0:
-                self.exporter.export_deleted_points(epath,points_tgt[which_side[best_planeb, :], :],count)
-                points_tgt = np.delete(points_tgt, which_side[best_planeb, :], axis=0)
-                occ_tgt = np.delete(occ_tgt, which_side[best_planeb, :], axis=0)
-            else:
-                self.exporter.export_deleted_points(epath,points_tgt[np.invert(which_side)[best_planeb, :], :],count)
-                points_tgt = np.delete(points_tgt, np.invert(which_side)[best_planeb, :], axis=0)
-                occ_tgt = np.delete(occ_tgt, np.invert(which_side)[best_planeb, :], axis=0)
-
-            return best_planeb, points_tgt, occ_tgt
-
-        if orientationa >= orientationb:
-
-            return best_planea, points_tgt, occ_tgt
-
-        else:
-
-            return best_planeb, points_tgt, occ_tgt
-
-
-
-    def my_prioritise_planes(self,m):
-
-        logger.info('my prioritising planar primitives')
-
-        occs = np.load(m["occ"])
-        points_tgt = occs['points']
-        occ_tgt = np.unpackbits(occs['occupancies']).astype(bool)
-
-
-        # sorting = self.sort_planes_by_absolute_occ(planes=self.planes,points_tgt=points_tgt,occ_tgt=occ_tgt)
-        # sorting = self.sort_planes_by_occ_ratio(m,planes=self.planes, points_tgt=points_tgt, occ_tgt=occ_tgt)
-
-        planes = deepcopy(self.planes)
-        sorting = []
-
-        count=0
-        for _ in planes:
-            best_plane_idx,points_tgt,occ_tgt = self.sort_planes_by_occ_ratio(m, planes=planes, points_tgt=points_tgt, occ_tgt=occ_tgt,count=count)
-            planes[best_plane_idx,:] = None
-
-            sorting.append(best_plane_idx)
-            count+=1
-
-
-
-
-        # reorder both the planes and their bounds
-        self.planes = self.planes[sorting]
-        self.bounds = self.bounds[sorting]
-        self.points = self.points[sorting]
-
-        self.exporter.export_planes(os.path.join(os.path.dirname(m["planes"])),self.planes,self.points)
-
-
-        a=5
 
     def prioritise_planes(self, mode = ["vertical", "random"]):
         """
