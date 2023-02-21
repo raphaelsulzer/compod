@@ -324,12 +324,11 @@ class CellComplex:
 
 
             ### the whole thing vectorized. doesn't really work for some reason
-            #
+            # UPDATE: should work, first tries where with wrong condition
             # planes = np.repeat(vertex_group.planes[np.newaxis,current_ids,:],current_ids.shape[0],axis=0)
             # pgs = np.repeat(point_groups[np.newaxis,current_ids,:,:],current_ids.shape[0],axis=0)
             #
             # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
-            #
 
 
             current_point_groups = point_groups[current_ids,:,:]
@@ -370,7 +369,7 @@ class CellComplex:
 
             left_planes=[]
             right_planes=[]
-            th=15
+            th=24
             for id in current_ids:
 
                 if id == current_ids[best_plane_id]:
@@ -381,7 +380,7 @@ class CellComplex:
                 left_points = point_groups[id,which_side<0,:]
                 right_points = point_groups[id,which_side>0,:]
 
-                assert(n_points_per_plane[id]>th)
+                assert(n_points_per_plane[id]>th) # threshold cannot be bigger than the detection threshold
 
                 if(n_points_per_plane[id] - left_points.shape[0]) < th:
                     left_planes.append(id)
