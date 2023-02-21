@@ -319,13 +319,11 @@ class CellComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                interface = c0["convex"].intersection(c1["convex"])
+                interface = self.graph[e0][e1]["intersection"]
+                interface = interface if interface is not None else c0["convex"].intersection(c1["convex"])
 
                 verts = np.array(interface.vertices(),dtype=object)
-                # verts = tuple(interface.vertices_list())
                 correct_order = self._sorted_vertex_indices(interface.adjacency_matrix())
-                # verts=self.orientFacet(verts[correct_order],outside)
-                # tris.append(verts)
                 verts = verts[correct_order]
                 for i in range(verts.shape[0]):
                     points.append(tuple(verts[i,:]))
@@ -513,21 +511,22 @@ class CellComplex:
             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
             graph.add_node(cell_count,convex=hspace_positive)
 
-            graph.add_edge(cell_count-1, cell_count)
-
-            neighbors = list(graph[child])
-
-            for n in neighbors:
-                nconvex = graph.nodes[n]["convex"]
-                if nconvex.intersection(hspace_negative).dim() == 2:
-                    graph.add_edge(n,cell_count-1)
-                if nconvex.intersection(hspace_positive).dim() == 2:
-                    graph.add_edge(n, cell_count)
+            graph.add_edge(cell_count-1, cell_count, intersection=None)
 
             ## add edges to other cells
-            nx.draw(graph,with_labels=True)  # networkx draw()
-            plt.draw()
-            plt.show()
+            neighbors = list(graph[child])
+            for n in neighbors:
+                nconvex = graph.nodes[n]["convex"]
+                negative_intersection = nconvex.intersection(hspace_negative)
+                if negative_intersection.dim() == 2:
+                    graph.add_edge(n,cell_count-1,intersection=negative_intersection)
+                positive_intersection = nconvex.intersection(hspace_positive)
+                if positive_intersection.dim() == 2:
+                    graph.add_edge(n, cell_count, intersection=positive_intersection)
+
+            # nx.draw(graph,with_labels=True)  # networkx draw()
+            # plt.draw()
+            # plt.show()
 
             ## remove the parent node
             graph.remove_node(child)
