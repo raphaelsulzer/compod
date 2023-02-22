@@ -27,14 +27,11 @@ from tqdm import trange
 import networkx as nx
 import trimesh
 from sage.all import polytopes, QQ, RR, Polyhedron
-from export import Exporter
 from .logger import attach_to_log
-from .primitive import VertexGroup
-import csv
 import matplotlib.pyplot as plt
 
 from copy import  deepcopy
-from skspatial.objects import Plane
+
 
 import sys
 sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/PyLabeler")
@@ -48,7 +45,7 @@ class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, planes, bounds, points=None, initial_bound=None, initial_padding=0.1, additional_planes=None,
+    def __init__(self, planes, halfspaces, bounds, points=None, initial_bound=None, initial_padding=0.1, additional_planes=None,
                  build_graph=False, quiet=False,exporter=None):
         """
         Init CellComplex.
@@ -84,6 +81,7 @@ class CellComplex:
 
         self.bounds = bounds  # numpy.array over RDF
         self.planes = planes  # numpy.array over RDF
+        self.halfspaces = halfspaces
         self.points = points
 
         # missing planes due to occlusion or incapacity of RANSAC
@@ -91,16 +89,16 @@ class CellComplex:
 
 
 
-        self.initial_bound = initial_bound if initial_bound else self._pad_bound(
-            [np.amin(bounds[:, 0, :], axis=0), np.amax(bounds[:, 1, :], axis=0)],
-            padding=initial_padding)
+        # self.initial_bound = initial_bound if initial_bound else self._pad_bound(
+        #     [np.amin(bounds[:, 0, :], axis=0), np.amax(bounds[:, 1, :], axis=0)],
+        #     padding=initial_padding)
 
         # self.initial_bound = initial_bound if initial_bound else self._my_pad_bound(
         #     bounds,
         #     padding=initial_padding)
 
-        self.cells = [self._construct_initial_cell()]  # list of QQ
-        self.cells_bounds = [self.cells[0].bounding_box()]  # list of QQ
+        # self.cells = [self._construct_initial_cell()]  # list of QQ
+        # self.cells_bounds = [self.cells[0].bounding_box()]  # list of QQ
 
         if build_graph:
             self.graph = nx.Graph()
@@ -156,13 +154,13 @@ class CellComplex:
         self.bounding_poly = Polyhedron(vertices=self.bounding_verts)
 
 
-    def write_cells(self, m, polyhedron, points=None):
+    def write_cells(self, m, polyhedron, points=None, count=0):
 
         c = np.random.random(size=3)
 
-        path = os.path.join(os.path.dirname(m['abspy']['partition']),"partitions")
+        path = os.path.join(os.path.dirname(m['planes']),"partitions")
         os.makedirs(path,exist_ok=True)
-        filename = os.path.join(path,str(self.split_count)+'.obj')
+        filename = os.path.join(path,str(count)+'.obj')
 
         ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
 
@@ -177,13 +175,13 @@ class CellComplex:
 
         f.close()
 
-    def write_faces(self,m,facet):
+    def write_faces(self,m,facet,count=0):
 
         c = np.random.random(size=3)
 
-        path = os.path.join(os.path.dirname(m['abspy']['partition']),"facets")
+        path = os.path.join(os.path.dirname(m['planes']),"facets")
         os.makedirs(path,exist_ok=True)
-        filename = os.path.join(path,str(self.face_count)+'.obj')
+        filename = os.path.join(path,str(count)+'.obj')
 
         ss = facet.render_solid().obj_repr(facet.render_solid().default_render_params())
 
@@ -331,13 +329,19 @@ class CellComplex:
 
         ### find the plane which seperates all other planes without splitting them
         left_right = []
-        for id in current_ids:
-            which_side = planes[id, 0] * point_groups[current_ids, :, 0] + planes[id, 1] * point_groups[current_ids, :,1] + planes[id, 2] * point_groups[current_ids, :, 2] + planes[id, 3]
-            which_side[np.isnan(which_side)] = 0
+        for i,id in enumerate(current_ids):
+            left = 0; right = 0
+            for id2 in current_ids:
+                if id == id2: continue
+                which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2] + planes[id, 3]
+                left+= (which_side < 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the left of the current plane
+                right+= (which_side > 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the right of the current plane
+            if left == current_ids.shape[0]-1 or right == current_ids.shape[0]-1:
+                return i
 
-            left = (which_side <= 0).all(axis=-1).sum()  ### check for how many planes all points of these planes fall on the left of the current plane
-            right = (which_side >= 0).all(axis=-1).sum()  ### check for how many planes all points of these planes fall on the right of the current plane
             left_right.append([left, right])
+
+        assert(len(left_right)==len(current_ids))
 
         left_right = np.array(left_right)
         left_right = left_right.sum(axis=1)
@@ -346,7 +350,7 @@ class CellComplex:
 
         return best_plane_id
 
-    def _split_planes(self,best_plane_id,current_ids,planes,point_groups, n_points_per_plane, th=1):
+    def _split_planes(self,best_plane_id,current_ids,planes,halfspaces,point_groups, th=1):
 
         '''
         :param best_plane_id:
@@ -358,7 +362,6 @@ class CellComplex:
         '''
 
         best_plane = planes[current_ids[best_plane_id]]
-        mpg = max(n_points_per_plane)
 
         ### now put the planes into the left and right subspace of the best_plane split
         ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
@@ -369,50 +372,43 @@ class CellComplex:
             if id == current_ids[best_plane_id]:
                 continue
 
-            which_side = best_plane[0] * point_groups[id, :, 0] + best_plane[1] * point_groups[id, :, 1] + best_plane[2] * point_groups[id, :, 2] + best_plane[3]
+            which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2] + best_plane[3]
 
-            left_points = point_groups[id, which_side < 0, :]
-            right_points = point_groups[id, which_side > 0, :]
+            left_points = point_groups[id][which_side < 0, :]
+            right_points = point_groups[id][which_side > 0, :]
 
-            assert (n_points_per_plane[id] > th)  # threshold cannot be bigger than the detection threshold
+            assert (point_groups[id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
 
-            if (n_points_per_plane[id] - left_points.shape[0]) < th:
+            if (point_groups[id].shape[0] - left_points.shape[0]) < th:
                 left_planes.append(id)
-                left_points = np.concatenate((left_points, np.zeros(shape=(mpg - left_points.shape[0], 3)) * np.nan),
-                                             axis=0)
-                point_groups[id, :] = left_points
-            elif (n_points_per_plane[id] - right_points.shape[0]) < th:
+                point_groups[id] = left_points  # update the point group, in case some points got dropped according to threshold
+            elif(point_groups[id].shape[0] - right_points.shape[0]) < th:
                 right_planes.append(id)
-                right_points = np.concatenate((right_points, np.zeros(shape=(mpg - right_points.shape[0], 3)) * np.nan),
-                                              axis=0)
-                point_groups[id, :] = right_points
+                point_groups[id] = right_points # update the point group, in case some points got dropped according to threshold
             else:
                 # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
                 if (left_points.shape[0] > th):
                     left_planes.append(planes.shape[0])
-                    n_points_per_plane = np.append(n_points_per_plane, left_points.shape[0])
-                    left_points = np.concatenate(
-                        (left_points, np.zeros(shape=(mpg - left_points.shape[0], 3)) * np.nan), axis=0)
-                    point_groups = np.vstack((point_groups, left_points[np.newaxis, :, :]))
+                    point_groups.append(left_points)
                     planes = np.vstack((planes, planes[id]))
+                    halfspaces = np.vstack((halfspaces,halfspaces[id]))
                 if (right_points.shape[0] > th):
                     right_planes.append(planes.shape[0])
-                    n_points_per_plane = np.append(n_points_per_plane, right_points.shape[0])
-                    right_points = np.concatenate(
-                        (right_points, np.zeros(shape=(mpg - right_points.shape[0], 3)) * np.nan), axis=0)
-                    point_groups = np.vstack((point_groups, right_points[np.newaxis, :, :]))
+                    point_groups.append(right_points)
                     planes = np.vstack((planes, planes[id]))
+                    halfspaces = np.vstack((halfspaces,halfspaces[id]))
 
                 self.split_count+=1
 
                 planes[id, :] = np.nan
-                point_groups[id, :] = np.nan
+                point_groups[id][:, :] = np.nan
 
-        return left_planes,right_planes, planes, point_groups, n_points_per_plane
+        return left_planes,right_planes, planes, halfspaces, point_groups
 
 
 
-    def my_construct(self, m, mode=Tree.DEPTH, th=1, export=False):
+
+    def my_construct(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
 
         self.split_count = 0
 
@@ -425,17 +421,11 @@ class CellComplex:
 
         ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
-        point_groups = []
-        for pg in self.points:
-            point_groups.append(pg.shape[0])
-        n_points_per_plane = np.array(point_groups)
-        for i,pg in enumerate(self.points):
-            pg = self.points[i]
-            point_groups[i] = np.concatenate((pg,np.zeros(shape=(max(n_points_per_plane)-pg.shape[0],3))*np.nan),axis=0)
-        point_groups = np.array(point_groups)
+
         ### make a new planes array, to which planes that are split can be appanded
         planes = deepcopy(self.planes)
-        plane_order = []
+        halfspaces = deepcopy(self.halfspaces)
+        point_groups = list(self.points)
 
         cell_count = 0
 
@@ -448,48 +438,57 @@ class CellComplex:
         dd = {"convex": self.bounding_poly, "plane_ids": np.arange(self.planes.shape[0])}
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
+        plane_count = 0
         for child in children:
 
             current_ids = tree[child].data["plane_ids"]
 
             ### get the best plane
-            best_plane_id = self._get_best_plane(current_ids,planes,point_groups)
-            # best_plane_id = 0
+            if ordering == "optimal":
+                best_plane_id = self._get_best_plane(current_ids,planes,point_groups)
+            else:
+                best_plane_id = 0
             best_plane = planes[current_ids[best_plane_id]]
+            plane_count+=1
 
-
-            # plane_order.append(current_ids[best_plane_id])
-
-
+            if current_ids[best_plane_id] >= len(self.planes):
+                a=5
 
             ### export best plane
             if export:
-                color = [1, 0, 0] if current_ids[best_plane_id] > len(self.planes) else [0, 1,0]  # split planes are red, unsplit planes are green
+                color = [1, 0, 0] if current_ids[best_plane_id] >= len(self.planes) else [0, 1, 0]  # split planes are red, unsplit planes are green
                 epoints = point_groups[current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
                 if epoints.shape[0]>3:
-                    self.exporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(current_ids[best_plane_id]),color=color)
+                    self.exporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
             ### split the planes
-            left_planes, right_planes, planes, point_groups, n_points_per_plane = self._split_planes(best_plane_id,current_ids,planes,point_groups,n_points_per_plane, th)
+            left_planes, right_planes, planes, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,halfspaces,point_groups, th)
 
             ## create the new convexes
             current_cell = tree[child].data["convex"]
-            hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-                                                self._inequalities(best_plane)]
+            # hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
+            #                                     self._inequalities(best_plane)]
+            hspace_positive, hspace_negative = halfspaces[current_ids[best_plane_id],0], halfspaces[current_ids[best_plane_id],1]
 
             cell_negative = current_cell.intersection(hspace_negative)
             cell_positive = current_cell.intersection(hspace_positive)
 
+
+
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
             if(cell_negative.dim() > 0):
+                if export:
+                    self.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
                 graph.add_node(cell_count,convex=cell_negative)
 
             if(cell_positive.dim() > 0):
+                if export:
+                    self.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
@@ -497,6 +496,9 @@ class CellComplex:
 
             if(cell_positive.dim() > 0 and cell_negative.dim() > 0):
                 graph.add_edge(cell_count-1, cell_count, intersection=None)
+                if export:
+                    intersection = cell_negative.intersection(cell_positive)
+                    self.write_faces(m,intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors = list(graph[child])
@@ -534,7 +536,7 @@ class CellComplex:
         # self.bounds = np.array(self.bounds)
 
 
-        logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(planes)))
+        logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))
 
         return 0
 

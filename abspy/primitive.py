@@ -23,13 +23,14 @@ from .logger import attach_to_log
 
 logger = attach_to_log()
 
+from sage.all import polytopes, QQ, RR, Polyhedron
 
 class VertexGroup:
     """
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, quiet=False, vg_oneline=True):
+    def __init__(self, filepath, merge_duplicates=False, quiet=False, vg_oneline=True):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -53,10 +54,12 @@ class VertexGroup:
         self.processed = False
         self.points = None
         self.planes = None
+        self.halfspaces = []
         self.bounds = None
         self.points_grouped = None
         self.points_ungrouped = None
         self.vg_oneline = vg_oneline
+        self.merge_duplicates = merge_duplicates
 
         self.process_npz()
 
@@ -167,6 +170,8 @@ class VertexGroup:
         self.bounds = []
         self.planes = data["group_parameters"]
 
+
+
         points = data["points"]
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
@@ -179,10 +184,34 @@ class VertexGroup:
             self.points_grouped.append(point_group)
             self.bounds.append(self._points_bound(point_group))
             last += npp
-        
+
+
+
+        if self.merge_duplicates:
+            from collections import defaultdict
+            # d = defaultdict(list)
+            d = defaultdict(int)
+            un, inv = np.unique(self.planes, return_inverse=True, axis=0)
+            for i in range(len(self.planes)):
+                # d[inv[i]].append(self.points_grouped[i])
+                # d[inv[i]]+=self.points_grouped[i]
+                if isinstance(d[inv[i]],int):
+                    d[inv[i]] = self.points_grouped[i]
+                else:
+                    d[inv[i]] = np.concatenate((d[inv[i]],self.points_grouped[i]))
+
+            self.planes = un[list(d.keys())]
+            self.points_grouped = list(d.values())
+            self.bounds = None
+        else:
+            self.bounds = np.array(self.bounds)
+
+        for p in self.planes:
+            self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
+        self.halfspaces = np.array(self.halfspaces)
+
         self.points_grouped = np.array(self.points_grouped, dtype=object)
-        
-        self.bounds = np.array(self.bounds)
+
 
         self.points_ungrouped = np.zeros(points.shape[0])
         self.points_ungrouped[verts] = 1
@@ -190,15 +219,32 @@ class VertexGroup:
         self.points_ungrouped = points[self.points_ungrouped.astype(int)]
 
         self.processed = True
-        a = 4
 
 
     def my_get_points(self):
 
-
         npoints = int(self.lines[0].split(':')[1])
         return np.genfromtxt(self.lines[1:npoints+1])
 
+    def _inequalities(self,plane):
+        """
+        Inequalities from plane parameters.
+
+        Parameters
+        ----------
+        plane: (4,) float
+            Plane parameters
+
+        Returns
+        -------
+        positive: (4,) float
+            Inequality of the positive half-plane
+        negative: (4,) float
+            Inequality of the negative half-plane
+        """
+        positive = [QQ(plane[-1]), QQ(plane[0]), QQ(plane[1]), QQ(plane[2])]
+        negative = [QQ(-element) for element in positive]
+        return positive, negative
 
     def get_primitives(self):
         """
