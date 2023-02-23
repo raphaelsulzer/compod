@@ -123,7 +123,7 @@ class CellComplex:
             intervals=[[QQ(self.initial_bound[0][i]), QQ(self.initial_bound[1][i])] for i in range(3)])
 
 
-    def get_bounding_box(self,m):
+    def get_bounding_box(self,m,scale=1.2):
 
         self.bounding_verts = []
         # points = np.load(m["pointcloud"])["points"]
@@ -132,8 +132,8 @@ class CellComplex:
         ppmin = points.min(axis=0)
         ppmax = points.max(axis=0)
 
-        ppmin = [-40,-40,-40]
-        ppmax = [40,40,40]
+        # ppmin = [-40,-40,-40]
+        # ppmax = [40,40,40]
 
         pmin=[]
         for p in ppmin:
@@ -154,11 +154,11 @@ class CellComplex:
         self.bounding_poly = Polyhedron(vertices=self.bounding_verts)
 
 
-    def write_cells(self, m, polyhedron, points=None, count=0):
+    def write_cells(self, m, polyhedron, points=None, subfolder="partitions",count=0):
 
         c = np.random.random(size=3)
 
-        path = os.path.join(os.path.dirname(m['planes']),"partitions")
+        path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(count)+'.obj')
 
@@ -175,11 +175,11 @@ class CellComplex:
 
         f.close()
 
-    def write_faces(self,m,facet,count=0):
+    def write_faces(self,m,facet,subfolder="facets",count=0):
 
         c = np.random.random(size=3)
 
-        path = os.path.join(os.path.dirname(m['planes']),"facets")
+        path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(count)+'.obj')
 
@@ -298,18 +298,24 @@ class CellComplex:
 
         a = 4
 
-    def label_graph_nodes(self, m, n_test_points=50):
+    def label_graph_nodes(self, m, n_test_points=50,export=False):
 
 
         pl=PL.PyLabeler(n_test_points)
         pl.loadMesh(m["mesh"])
         points = []
         points_len = []
-        for node in self.graph.nodes(data=True):
+        for i,node in enumerate(self.graph.nodes(data=True)):
             cell = node[1]['convex']
+            if export:
+                self.write_cells(m,cell,count=i,subfolder="final_cells")
             pts = np.array(cell.vertices())
             points.append(pts)
+            # print(pts)
             points_len.append(pts.shape[0])
+
+
+        # assert(isinstance(points[0].dtype,np.float32))
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
 
         for i,node in enumerate(self.graph.nodes(data=True)):
@@ -511,12 +517,16 @@ class CellComplex:
                 if positive_intersection.dim() == 2:
                     graph.add_edge(n, cell_count, intersection=positive_intersection)
 
-            # nx.draw(graph,with_labels=True)  # networkx draw()
-            # plt.draw()
-            # plt.show()
+
 
             ## remove the parent node
             graph.remove_node(child)
+
+            nx.draw(graph,with_labels=True)  # networkx draw()
+            plt.draw()
+            plt.show()
+
+            a=6
 
 
         self.graph = graph

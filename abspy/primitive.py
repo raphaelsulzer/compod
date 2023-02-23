@@ -180,6 +180,7 @@ class VertexGroup:
         last = 0
         for npp in npoints:
             vert_group = verts[last:(npp+last)]
+            # point_group = points[vert_group].astype(np.float32)
             point_group = points[vert_group]
             self.points_grouped.append(point_group)
             self.bounds.append(self._points_bound(point_group))
@@ -210,7 +211,7 @@ class VertexGroup:
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
         self.halfspaces = np.array(self.halfspaces)
 
-        self.points_grouped = np.array(self.points_grouped, dtype=object)
+        # self.points_grouped = np.array(self.points_grouped, dtype=object)
 
 
         self.points_ungrouped = np.zeros(points.shape[0])
