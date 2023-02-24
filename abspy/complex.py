@@ -153,10 +153,43 @@ class CellComplex:
 
         self.bounding_poly = Polyhedron(vertices=self.bounding_verts)
 
+    def write_graph(self, m, graph, subfolder="", color = None):
 
-    def write_cells(self, m, polyhedron, points=None, subfolder="partitions",count=0):
+        c = color if color is not None else np.random.random(size=3)
+        c = (c*255).astype(int)
 
-        c = np.random.random(size=3)
+        path = os.path.join(os.path.dirname(m['planes']),subfolder)
+        os.makedirs(path,exist_ok=True)
+        filename = os.path.join(path,'graph.obj')
+
+        edge_strings = []
+        f = open(filename,'w')
+        all_nodes = np.array(graph.nodes())
+        for i,node in enumerate(graph.nodes(data=True)):
+            centroid = np.array(node[1]["convex"].centroid())
+            f.write("v {} {} {} {} {} {}\n".format(centroid[0],centroid[1],centroid[2],c[0],c[1],c[2]))
+            edges = list(graph.edges(node[0]))
+            for c1,c2 in edges:
+                nc1 = np.where(all_nodes==c1)[0][0]
+                nc2 = np.where(all_nodes==c2)[0][0]
+                edge_strings.append("l {} {}\n".format(nc1+1,nc2+1))
+
+
+        for edge in edge_strings:
+            f.write(edge)
+
+        f.close()
+
+        a=4
+
+
+
+
+
+    def write_cells(self, m, polyhedron, points=None, subfolder="partitions",count=0, color=None):
+
+        c = color if color is not None else np.random.random(size=3)
+        c = (c*255).astype(int)
 
         path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
@@ -165,9 +198,17 @@ class CellComplex:
         ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
 
         f = open(filename,'w')
-        for out in ss[2:4]:
-            for line in out:
-                f.write(line+"\n")
+
+        verts = ss[2]
+        for v in verts:
+            f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
+        faces = ss[3]
+        for fa in faces:
+            f.write(fa+"\n")
+
+        # for out in ss[2:4]:
+        #     for line in out:
+        #         f.write(line+"\n")
 
         if points is not None:
             for p in points:
@@ -175,9 +216,10 @@ class CellComplex:
 
         f.close()
 
-    def write_faces(self,m,facet,subfolder="facets",count=0):
+    def write_faces(self,m,facet,subfolder="facets",count=0, color=None):
 
-        c = np.random.random(size=3)
+        c = color if color is not None else np.random.random(size=3)
+        c = (c*255).astype(int)
 
         path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
@@ -186,14 +228,43 @@ class CellComplex:
         ss = facet.render_solid().obj_repr(facet.render_solid().default_render_params())
 
         f = open(filename,'w')
-        for out in ss[2:4]:
-            for line in out:
-                f.write(line+"\n")
+        verts = ss[2]
+        for v in verts:
+            f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
+        faces = ss[3]
+        for fa in faces:
+            f.write(fa+"\n")
 
         f.close()
 
+    def write_points(self,m,points,filename="points",count=0, color=None):
 
-    def contains(self,polyhedron,points):
+        path = os.path.join(os.path.dirname(m['planes']))
+        filename = os.path.join(path,'{}.off'.format(filename))
+
+        f = open(filename, 'w')
+        f.write("OFF\n")
+        f.write("{} 0 0\n".format(points.shape[0]))
+        for p in points:
+            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
+        f.close()
+
+    def write_off(self,filename):
+
+        f = open(filename[:-3]+"off",'w')
+        f.write("OFF\n")
+        f.write("{} {} 0\n".format(self.pset.shape[0],len(self.facets)))
+        for p in self.pset:
+            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
+        for face in self.facets:
+            f.write("{}".format(len(face)))
+            for v in face:
+                f.write(" {}".format(v))
+            f.write('\n')
+        f.close()
+
+
+    def _contains(self,polyhedron,points):
         """check if any of the points are contained in the polyhedron"""
 
         ineqs = np.array(polyhedron.inequalities())
@@ -209,19 +280,7 @@ class CellComplex:
         return at_least_one_point_inside_all_planes
 
 
-    def write_off(self,filename):
 
-        f = open(filename[:-3]+"off",'w')
-        f.write("OFF\n")
-        f.write("{} {} 0\n".format(self.pset.shape[0],len(self.facets)))
-        for p in self.pset:
-            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
-        for face in self.facets:
-            f.write("{}".format(len(face)))
-            for v in face:
-                f.write(" {}".format(v))
-            f.write('\n')
-        f.close()
 
 
     def _sorted_vertex_indices(self,adjacency_matrix):
@@ -317,11 +376,17 @@ class CellComplex:
 
         # assert(isinstance(points[0].dtype,np.float32))
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
+        del pl
 
         for i,node in enumerate(self.graph.nodes(data=True)):
             node[1]["occupancy"] = np.rint(occs[i]).astype(int)
+            if export:
+                col = [1,0,0] if node[1]["occupancy"] == 1 else [0,0,1]
+                self.write_cells(m,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
 
-        del pl
+        if export:
+            self.write_graph(m,self.graph)
+
 
 
     def _get_best_plane(self,current_ids,planes,point_groups,export=False):
@@ -435,6 +500,9 @@ class CellComplex:
 
         cell_count = 0
 
+        dim0points = []
+        dim1points = []
+
         ## init the graph
         graph = nx.Graph()
         graph.add_node(cell_count, convex=self.bounding_poly)
@@ -481,7 +549,6 @@ class CellComplex:
             cell_positive = current_cell.intersection(hspace_positive)
 
 
-
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
             if(cell_negative.dim() > 0):
@@ -489,16 +556,18 @@ class CellComplex:
                     self.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
+                neg_cell_count = cell_count
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(cell_count,convex=cell_negative)
+                graph.add_node(neg_cell_count,convex=cell_negative)
 
             if(cell_positive.dim() > 0):
                 if export:
                     self.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
+                pos_cell_count = cell_count
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(cell_count,convex=cell_positive)
+                graph.add_node(pos_cell_count,convex=cell_positive)
 
             if(cell_positive.dim() > 0 and cell_negative.dim() > 0):
                 graph.add_edge(cell_count-1, cell_count, intersection=None)
@@ -510,24 +579,42 @@ class CellComplex:
             neighbors = list(graph[child])
             for n in neighbors:
                 nconvex = graph.nodes[n]["convex"]
+
                 negative_intersection = nconvex.intersection(cell_negative)
                 if negative_intersection.dim() == 2:
-                    graph.add_edge(n,cell_count-1,intersection=negative_intersection)
+                    graph.add_edge(n,neg_cell_count,intersection=negative_intersection)
+                # elif negative_intersection.dim() == 1:
+                #     dim1points.append(np.array(negative_intersection.vertices()))
+                # elif negative_intersection.dim() == 0:
+                #     dim0points.append(np.array(negative_intersection.vertices()))
+
                 positive_intersection = nconvex.intersection(cell_positive)
                 if positive_intersection.dim() == 2:
-                    graph.add_edge(n, cell_count, intersection=positive_intersection)
+                    graph.add_edge(n, pos_cell_count, intersection=positive_intersection)
+                # elif positive_intersection.dim() == 1:
+                #     dim1points.append(np.array(positive_intersection.vertices()))
+                # elif positive_intersection.dim() == 0:
+                #     dim0points.append(np.array(positive_intersection.vertices()))
 
 
 
             ## remove the parent node
             graph.remove_node(child)
 
-            nx.draw(graph,with_labels=True)  # networkx draw()
-            plt.draw()
-            plt.show()
+            # nx.draw(graph,with_labels=True)  # networkx draw()
+            # plt.draw()
+            # plt.show()
 
-            a=6
+            # self.write_graph(m,graph)
+            # self.cells = list(nx.get_node_attributes(graph, "convex").values())
+            # self.save_obj(os.path.join(m["abspy"]["partition"]))
 
+
+
+        if len(dim0points) > 0:
+            self.write_points(m,np.concatenate(dim0points),"dim0points")
+        if len(dim1points) > 0:
+            self.write_points(m,np.concatenate(dim1points),"dim1points")
 
         self.graph = graph
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
@@ -665,18 +752,6 @@ class CellComplex:
 
         extent = bound[1] - bound[0]
         return [bound[0] - extent * padding, bound[1] + extent * padding]
-
-    # def _my_pad_bound(self,bounds, padding=0.00):
-    #
-    #     """
-    #     pad each dimension separately as in Kinetic_Propagation::pre_init_main_bounding_box()
-    #     as opposed to the _pad_bounds function above that pads with the max of all dimensions
-    #     :param bounds:
-    #     :param padding:
-    #     :return:
-    #     """
-    #
-    #     a=5
 
 
     def _intersect_bound_plane(self, bound, plane, exhaustive=False, epsilon=10e-5):
@@ -912,39 +987,6 @@ class CellComplex:
         self.constructed = True
         logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
 
-    def visualise(self, indices_cells=None, temp_dir='./'):
-        """
-        Visualise the cells using trimesh.
-
-        pyglet installation is needed for the visualisation.
-
-        Parameters
-        ----------
-        indices_cells: None or (n,) int
-            Indices of cells to be visualised
-        temp_dir: str
-            Temp dir to save intermediate visualisation
-        """
-        if self.constructed:
-            try:
-                import pyglet
-            except ImportError:
-                logger.warning('pyglet installation not found; skip visualisation')
-                return
-            if indices_cells is not None and len(indices_cells) == 0:
-                raise ValueError('no indices provided')
-
-            filename_stem = ''.join(choices(string.ascii_uppercase + string.digits, k=5))
-            filename_mesh = filename_stem + '.obj'
-            filename_mtl = filename_stem + '.mtl'
-
-            self.save_obj(filepath=temp_dir + filename_mesh, indices_cells=indices_cells, use_mtl=True)
-            scene = trimesh.load_mesh(temp_dir + filename_mesh)
-            scene.show()
-            os.remove(temp_dir + filename_mesh)
-            os.remove(temp_dir + filename_mtl)
-        else:
-            raise RuntimeError('cell complex has not been constructed')
 
     @property
     def num_cells(self):
@@ -1190,63 +1232,17 @@ class CellComplex:
         use_mtl: bool
             Use mtl attribute in obj if set True
         """
-        if self.constructed:
-            # create the dir if not exists
-            filepath = Path(filepath)
-            filepath.parent.mkdir(parents=True, exist_ok=True)
+        # create the dir if not exists
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
 
-            cells = [self.cells[i] for i in indices_cells] if indices_cells is not None else self.cells
-            scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
+        cells = [self.cells[i] for i in indices_cells] if indices_cells is not None else self.cells
+        scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
 
-            with open(filepath, 'w') as f:
-                f.writelines("# cells: {}\n".format(len(self.cells)))
-                f.writelines(scene_str)
-            if use_mtl:
-                with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
-                    f.writelines(material_str)
-        else:
-            raise RuntimeError('cell complex has not been constructed')
+        with open(filepath, 'w') as f:
+            f.writelines("# cells: {}\n".format(len(self.cells)))
+            f.writelines(scene_str)
+        if use_mtl:
+            with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
+                f.writelines(material_str)
 
-    def save_plm(self, filepath, indices_cells=None):
-        """
-        Save polygon soup of indexed convexes to a plm file (polyhedron mesh in Mapple).
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save plm file
-        indices_cells: (n,) int
-            Indices of cells to save to file
-        """
-        if self.constructed:
-            # create the dir if not exists
-            filepath = Path(filepath)
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-
-            num_vertices = 0
-            info_vertices = ''
-            info_facets = ''
-            info_header = ''
-
-            cells = [self.cells[i] for i in indices_cells] if indices_cells is not None else self.cells
-
-            scene = None
-            for cell in cells:
-                scene += cell.render_solid()
-                num_vertices += cell.n_vertices()
-
-            info_header += '#vertices {}\n'.format(num_vertices)
-            info_header += '#cells {}\n'.format(len(cells))
-
-            with open(filepath, 'w') as f:
-                contents = scene.obj_repr(scene.default_render_params())
-                for o in range(len(cells)):
-                    info_vertices += '\n'.join([st[2:] for st in contents[o][2]]) + '\n'
-                    info_facets += str(len(contents[o][3])) + '\n'
-                    for st in contents[o][3]:
-                        info_facets += str(len(st[2:].split())) + ' '  # number of vertices on this facet
-                        info_facets += ' '.join([str(int(n) - 1) for n in st[2:].split()]) + '\n'
-                f.writelines(info_header + info_vertices + info_facets)
-
-        else:
-            raise RuntimeError('cell complex has not been constructed')
