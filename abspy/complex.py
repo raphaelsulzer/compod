@@ -186,25 +186,32 @@ class CellComplex:
 
 
 
-    def write_cells(self, m, polyhedron, points=None, subfolder="partitions",count=0, color=None):
+    def write_cells(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0):
 
         c = color if color is not None else np.random.random(size=3)
         c = (c*255).astype(int)
 
         path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
-        filename = os.path.join(path,str(count)+'.obj')
+
+        if filename is None:
+            filename = os.path.join(path,str(count)+'.obj')
+            f = open(filename,'w')
+        else:
+            f = open(filename, 'a+')
+            f.write('o {}\n'.format(count))
 
         ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
-
-        f = open(filename,'w')
 
         verts = ss[2]
         for v in verts:
             f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
         faces = ss[3]
         for fa in faces:
-            f.write(fa+"\n")
+            f.write(fa[0] + " ")
+            for ffa in fa[2:].split(' '):
+                f.write(str(int(ffa)+inside_vert_count)+" ")
+            f.write("\n")
 
         # for out in ss[2:4]:
         #     for line in out:
@@ -378,14 +385,24 @@ class CellComplex:
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
         del pl
 
+        in_vert_count = 0
         for i,node in enumerate(self.graph.nodes(data=True)):
             node[1]["occupancy"] = np.rint(occs[i]).astype(int)
             if export:
                 col = [1,0,0] if node[1]["occupancy"] == 1 else [0,0,1]
                 self.write_cells(m,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
+                if node[1]["occupancy"] == 1:
+                    filename=os.path.join(os.path.dirname(m["abspy"]['partition']), "in_cells.obj")
+                    self.write_cells(m, node[1]['convex'],filename=filename,count=i, inside_vert_count=in_vert_count)
+                    in_vert_count+=len(node[1]['convex'].vertices())
+
 
         if export:
             self.write_graph(m,self.graph)
+
+
+
+
 
 
 
@@ -487,6 +504,8 @@ class CellComplex:
 
         # TODO: i need a secomd ordering for when two planes have the same surface split score, take the one with the bigger area.
         # because randommly shuffling the planes before this function has a big influence on the result
+        # save the number how often a certain plane has been split, so when I export split / non-split planes in green and red, I can export
+        # green: non-split, blue: 1-split, red: 2-split and more
 
         self.get_bounding_box(m)
 
