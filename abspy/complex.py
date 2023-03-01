@@ -198,7 +198,7 @@ class CellComplex:
 
         f.close()
 
-    def write_faces(self,m,facet,subfolder="facets",count=0, color=None):
+    def write_facet(self,m,facet,subfolder="facets",count=0, color=None):
 
         c = color if color is not None else np.random.random(size=3)
         c = (c*255).astype(int)
@@ -219,6 +219,54 @@ class CellComplex:
 
         f.close()
 
+    def write_graph_edge(self,graph,e0,e1):
+
+        assert (len(graph[e0][e1]["vertices"]) > 2)
+
+        pts = []
+        for v in graph[e0][e1]["vertices"]:
+            pts.append(tuple(v))
+        pts = list(set(pts))
+        intersection_points = np.array(pts, dtype=object)
+
+        correct_order = self._my_sort_vertex_indices(intersection_points.astype(float),
+                                                     graph[e0][e1]["supporting_plane"])
+        assert (len(intersection_points) == len(correct_order))
+        intersection_points = intersection_points[correct_order]
+
+        if (len(intersection_points) < 3):
+            print("WARNING: graph edge with less than three polygon vertices")
+            return
+
+        ## orient triangle
+
+        ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
+        outside = graph.nodes[e0]["convex"].centroid()
+        ei1 = (intersection_points[1] - intersection_points[0]).astype(float)
+        ei1 = ei1 / np.linalg.norm(ei1)
+        ei2 = (intersection_points[-1] - intersection_points[0]).astype(float)
+        ei2 = ei2 / np.linalg.norm(ei2)
+        # e2 = e1
+        # s=1
+        # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
+        #     s+=1
+        #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
+        #     e2 = e2/np.linalg.norm(e2)
+        ei3 = (outside - intersection_points[0]).astype(float)
+        ei3 = ei3 / np.linalg.norm(ei3)
+        if self._orient_triangle(ei1, ei2, ei3):
+            intersection_points = np.flip(intersection_points, axis=0)
+
+        id = graph[e0][e1]["id"]
+        filename = os.path.join(os.path.dirname(self.model["planes"]),"graph_facets",str(id)+".off")
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        self.write_off(filename, points=intersection_points.astype(float),facets=[np.arange(len(intersection_points))],color=graph[e0][e1]["color"])
+
+
+
+
+
+
     def write_points(self,m,points,filename="points",count=0, color=None):
 
         path = os.path.join(os.path.dirname(m['planes']))
@@ -231,14 +279,17 @@ class CellComplex:
             f.write("{:.3f} {:.3f} {:.3f}\n".format(p[0],p[1],p[2]))
         f.close()
 
-    def write_off(self,filename):
+    def write_off(self,filename,points,facets,color=None):
+
+        c = color if color is not None else (np.random.random(size=3)*255).astype(int)
+
 
         f = open(filename[:-3]+"off",'w')
-        f.write("OFF\n")
-        f.write("{} {} 0\n".format(self.pset.shape[0],len(self.facets)))
-        for p in self.pset:
-            f.write("{:.3f} {:.3f} {:.3f}\n".format(p[0],p[1],p[2]))
-        for face in self.facets:
+        f.write("COFF\n")
+        f.write("{} {} 0\n".format(points.shape[0],len(facets)))
+        for p in points:
+            f.write("{:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
+        for face in facets:
             f.write("{}".format(len(face)))
             for v in face:
                 f.write(" {}".format(v))
@@ -296,16 +347,42 @@ class CellComplex:
         # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
         return np.dot(np.cross(e1,e2),e3)>0
 
-    def _my_sort_vertex_indices(self,points,plane):
-        '''order vertices of a convex polygon: https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon.'''
-        ## project to plane
+
+    def _project_points_to_plane(self,points,plane):
+
+        ### project inlier points to plane
+        ## https://www.baeldung.com/cs/3d-point-2d-plane
         k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / \
             (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
-        pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]]).transpose()
+        pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]])
+        ## make e1 and e2 (see bottom of page linked above)
+        ## take a starting vector (e0) and take a component of this vector which is nonzero (see here: https://stackoverflow.com/a/33758795)
+        z = np.argmax(np.abs(plane[:3]))
+        y = (z+1)%3
+        x = (y+1)%3
+        e0 = np.array(plane[:3])
+        e0 = e0/np.linalg.norm(e0)
+        e1 = np.zeros(3)
+        ## reverse the non-zero component and put it on a different axis
+        e1[x], e1[y], e1[z] = e0[x], -e0[z], e0[y]
+        ## take the cross product of e0 and e1 to make e2
+        e2 = np.cross(e0,e1)
+        e12 = np.array([e1,e2])
+        return (e12@pp).transpose()
+
+    def _my_sort_vertex_indices(self,points,plane):
+        '''order vertices of a convex polygon:
+        https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
+        '''
+        ## project to plane
+        pp=self._project_points_to_plane(points,plane)
 
         centroid = np.mean(pp,axis=0)
         vectors = pp[:,:2] - centroid[:2]
+        vectors = vectors/np.linalg.norm(vectors)
         radian = np.arctan2(vectors[:,1],vectors[:,0])
+
+
 
         return np.argsort(radian)
 
@@ -329,35 +406,39 @@ class CellComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                interface = self.graph[e0][e1]["intersection"]
-                interface = interface if interface is not None else c0["convex"].intersection(c1["convex"])
+                assert(len(self.graph[e0][e1]["vertices"])>2)
 
+                pts = []
+                for v in self.graph[e0][e1]["vertices"]:
+                    pts.append(tuple(v))
+                pts = list(set(pts))
+                intersection_points = np.array(pts, dtype=object)
 
-                # intersection_points = np.array(interface.vertices(),dtype=object)
-                # correct_order = self._sorted_vertex_indices(interface.adjacency_matrix())
-                if len(self.graph[e0][e1]["vertices"])==0:
-                    intersection_points = np.array(interface.vertices(),dtype=object)
-                else:
-                    pts = []
-                    for v in self.graph[e0][e1]["vertices"]:
-                        pts.append(tuple(v))
-                    pts = list(set(pts))
-                    intersection_points = np.array(pts,dtype=object)
                 correct_order = self._my_sort_vertex_indices(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
-
+                assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
-                ## orient triangle towards outside cell
-                outside = c0["convex"].centroid() if c1["occupancy"] else c1["convex"].centroid()
-                outside_points.append(np.array(outside,dtype=float))
+                if(len(intersection_points)<3):
+                    continue
+
+
+                ## orient triangle
+
+                ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
+                outside = c0["convex"].centroid() if c0["occupancy"] else c1["convex"].centroid()
                 e1 = (intersection_points[1] - intersection_points[0]).astype(float)
-                e2 = e1
-                s=1
-                while np.dot(e1,e2)==0:
-                    s+=1
-                    e2 = (intersection_points[s] - intersection_points[0]).astype(float)
-                e3 = outside - intersection_points[0]
-                if not self._orient_triangle(e1, e2, e3):
+                e1 = e1/np.linalg.norm(e1)
+                e2 = (intersection_points[-1] - intersection_points[0]).astype(float)
+                e2 = e2/np.linalg.norm(e2)
+                # e2 = e1
+                # s=1
+                # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
+                #     s+=1
+                #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
+                #     e2 = e2/np.linalg.norm(e2)
+                e3 = (outside - intersection_points[0]).astype(float)
+                e3 = e3/np.linalg.norm(e3)
+                if self._orient_triangle(e1, e2, e3):
                     intersection_points = np.flip(intersection_points,axis=0)
 
                 for i in range(intersection_points.shape[0]):
@@ -365,14 +446,12 @@ class CellComplex:
                 faces.append(np.arange(len(intersection_points))+n_points)
                 n_points+=len(intersection_points)
 
-        self.pset = np.array(all_points,dtype=float)
-        self.facets = faces
 
         logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.write_off(filename)
+        self.write_off(filename,points=np.array(all_points,dtype=float),facets=faces)
 
-        self.write_points(self.model,np.array(outside_points),"outside_points")
+        # self.write_points(self.model,np.array(outside_points),"outside_points")
 
 
 
@@ -390,22 +469,20 @@ class CellComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                interface = self.graph[e0][e1]["intersection"]
-                interface = interface if interface is not None else c0["convex"].intersection(c1["convex"])
+                assert(len(self.graph[e0][e1]["vertices"])>2)
 
-                if len(self.graph[e0][e1]["vertices"])==0:
-                    intersection_points = np.array(interface.vertices(),dtype=object)
-                else:
-                    pts = []
-                    for v in self.graph[e0][e1]["vertices"]:
-                        pts.append(tuple(v))
-                    pts = list(set(pts))
-                    intersection_points = np.array(pts, dtype=object)
-                # correct_order = self._sorted_vertex_indices(interface.adjacency_matrix())
-                # intersection_points = intersection_points[correct_order]
+                pts = []
+                for v in self.graph[e0][e1]["vertices"]:
+                    pts.append(tuple(v))
+                pts = list(set(pts))
+                intersection_points = np.array(pts, dtype=object)
 
                 correct_order = self._my_sort_vertex_indices(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
+                assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
+
+                if(len(intersection_points)<3):
+                    continue
 
 
                 ## orient triangle
@@ -428,7 +505,6 @@ class CellComplex:
                     intersection_points = np.flip(intersection_points,axis=0)
 
 
-
                 for i in range(intersection_points.shape[0]):
                     all_points.append(tuple(intersection_points[i,:]))
                 tris.append(intersection_points)
@@ -445,14 +521,12 @@ class CellComplex:
                 # face.append(np.argwhere(np.isclose(pset, p,atol=tol*1.01).all(-1))[0][0])
             facets.append(face)
 
-        self.pset = np.array(pset,dtype=float)
-        self.facets = facets
 
         logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         # self.toTrimesh(filename)
         # self.write_obj(filename)
-        self.write_off(filename)
+        self.write_off(filename,points=np.array(pset,dtype=float),facets=facets)
         # self.write_ply(filename)
 
         a = 4
@@ -587,6 +661,15 @@ class CellComplex:
         return left_planes,right_planes, planes, halfspaces, point_groups
 
 
+    def _which_side(self,points,plane):
+
+        points = np.array(points,dtype=float)
+
+        which_side = plane[0] * points[:, 0] + plane[1] * points[:, 1] + plane[2] * points[:, 2] + plane[3]
+        left = which_side <= 0
+        right = which_side >=0
+
+        return left,right
 
 
     def my_construct(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
@@ -625,6 +708,7 @@ class CellComplex:
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0
+        edge_id=0
         for child in children:
 
             current_ids = tree[child].data["plane_ids"]
@@ -663,7 +747,8 @@ class CellComplex:
 
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
-            if(cell_negative.dim() > 0):
+            if(cell_negative.dim() > 2):
+            # if(not cell_negative.is_empty()):
                 if export:
                     self.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
@@ -672,7 +757,8 @@ class CellComplex:
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
                 graph.add_node(neg_cell_count,convex=cell_negative)
 
-            if(cell_positive.dim() > 0):
+            if(cell_positive.dim() > 2):
+            # if(not cell_positive.is_empty()):
                 if export:
                     self.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
@@ -681,91 +767,286 @@ class CellComplex:
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
                 graph.add_node(pos_cell_count,convex=cell_positive)
 
-            if(cell_positive.dim() > 0 and cell_negative.dim() > 0):
-                graph.add_edge(cell_count-1, cell_count, intersection=None, vertices=[],supporting_plane=best_plane)
+            # if(not cell_positive.is_empty() and not cell_negative.is_empty()):
+            new_intersection = None
+            if(cell_positive.dim() > 2 and cell_negative.dim() > 2):
+                new_intersection = cell_negative.intersection(cell_positive)
+                graph.add_edge(cell_count-1, cell_count, intersection=new_intersection, vertices=new_intersection.vertices_list(),
+                               supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int))
+                self.write_graph_edge(graph,cell_count-1, cell_count)
+                edge_id+=1
                 if export:
-                    intersection = cell_negative.intersection(cell_positive)
-                    self.write_faces(m,intersection,count=plane_count)
+                    self.write_facet(m,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
-            neighbors = list(graph[child])
-            for n in neighbors:
+            neighbors_of_old_cell = list(graph[child])
+            old_cell=child
+            for neighbor_of_old_cell in neighbors_of_old_cell:
                 # get the neighboring convex
-                nconvex = graph.nodes[n]["convex"]
-
+                nconvex = graph.nodes[neighbor_of_old_cell]["convex"]
+                # intersect new cells with old neighbors to make the new facets
                 negative_intersection = nconvex.intersection(cell_negative)
-                if not negative_intersection.is_empty():
-                    for nn1, nn2 in graph.edges(n):
-                        if nn1 == neg_cell_count or nn2 == neg_cell_count or nn1 == child or nn2 == child: continue
-                        neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
-                        if neighbor_neighbor_face is not None:
-                            convex_edge = negative_intersection.intersection(neighbor_neighbor_face)
-                            # TODO: also add dim()==0; ie intersection which are vertices
-                            if not convex_edge.is_empty():
-                                # if convex_edge.dim() == 1:
-                                graph[nn1][nn2]["vertices"] += (
-                                            neighbor_neighbor_face.vertices_list() + convex_edge.vertices_list())
-                if negative_intersection.dim() == 2:
-                    graph.add_edge(n,neg_cell_count,intersection=negative_intersection, vertices=[], supporting_plane=best_plane)
-
-
-
                 positive_intersection = nconvex.intersection(cell_positive)
-                if not positive_intersection.is_empty():
-                    for nn1,nn2 in graph.edges(n):
-                        if nn1 == pos_cell_count or nn2 == pos_cell_count or nn1 == child or nn2 == child: continue
+
+                # n_nonempty = not negative_intersection.is_empty()
+                # p_nonempty = not positive_intersection.is_empty()
+                n_nonempty = negative_intersection.dim()==2
+                p_nonempty = positive_intersection.dim()==2
+                # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
+                if n_nonempty:
+                    # add the vertices of the intersection with the parent, that are left of the plane
+                    previous_facet = graph[neighbor_of_old_cell][old_cell]
+                    previous_facet_vertices = [b for a, b in zip(self._which_side(previous_facet["vertices"],best_plane)[0],previous_facet["vertices"]) if a]
+                    graph.add_edge(neighbor_of_old_cell,neg_cell_count,intersection=negative_intersection, vertices=negative_intersection.vertices_list()+previous_facet_vertices,
+                                   supporting_plane=previous_facet["supporting_plane"],id=edge_id,color=(np.random.rand(3)*255).astype(int))
+                    self.write_graph_edge(graph,neighbor_of_old_cell,neg_cell_count)
+                    edge_id+=1
+                if p_nonempty:
+                    previous_facet = graph[neighbor_of_old_cell][old_cell]
+                    previous_facet_vertices = [b for a, b in zip(self._which_side(previous_facet["vertices"],best_plane)[1],previous_facet["vertices"]) if a]
+                    graph.add_edge(neighbor_of_old_cell, pos_cell_count, intersection=positive_intersection, vertices=positive_intersection.vertices_list()+previous_facet_vertices,
+                                   supporting_plane=previous_facet["supporting_plane"],id=edge_id,color=(np.random.rand(3)*255).astype(int))
+                    self.write_graph_edge(graph,neighbor_of_old_cell,pos_cell_count)
+                    edge_id+=1
+                # now intersect the new facets also with the neighbors of the neighbor and update those
+                if n_nonempty:
+                    for nn1, nn2 in graph.edges(neighbor_of_old_cell):
+                        # if nn1 == child or nn2 == child: continue
                         neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
-                        if neighbor_neighbor_face is not None:
-                            convex_edge = positive_intersection.intersection(neighbor_neighbor_face)
-                            if not convex_edge.is_empty():
-                            # if convex_edge.dim() == 1:
-                                graph[nn1][nn2]["vertices"]+=(neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list())
-                if positive_intersection.dim() == 2:
-                    graph.add_edge(n, pos_cell_count, intersection=positive_intersection, vertices=[], supporting_plane=best_plane)
+                        convex_edge = negative_intersection.intersection(neighbor_neighbor_face)
+                        # if not convex_edge.is_empty():
+                        if convex_edge.dim() > 0:
+                            graph[nn1][nn2]["vertices"] += (neighbor_neighbor_face.vertices_list() + convex_edge.vertices_list())
+                            self.write_graph_edge(graph, nn1, nn2)
+                if p_nonempty:
+                    for nn1,nn2 in graph.edges(neighbor_of_old_cell):
+                        # if nn1 == child or nn2 == child: continue
+                        neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
+                        convex_edge = positive_intersection.intersection(neighbor_neighbor_face)
+                        # if not convex_edge.is_empty():
+                        if convex_edge.dim() > 0:
+                            graph[nn1][nn2]["vertices"]+=(neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list())
+                            self.write_graph_edge(graph,nn1,nn2)
+                # and finally intersect the new facets with the new facet from the just inserted plane (=new_intersection) and update the edges there
+                if n_nonempty and (new_intersection is not None):
+                    convex_edge = negative_intersection.intersection(new_intersection)
+                    # if not convex_edge.is_empty():
+                    if convex_edge.dim() > 0:
+                        graph[cell_count-1][cell_count]["vertices"] += convex_edge.vertices_list()
+                        self.write_graph_edge(graph, nn1, nn2)
+                if p_nonempty and (new_intersection is not None):
+                    convex_edge = positive_intersection.intersection(new_intersection)
+                    # if not convex_edge.is_empty():
+                    if convex_edge.dim() > 0:
+                        graph[cell_count-1][cell_count]["vertices"] += convex_edge.vertices_list()
+                        self.write_graph_edge(graph,nn1,nn2)
 
 
 
 
-            ## remove the parent node
-            graph.remove_node(child)
+
+
 
             # nx.draw(graph,with_labels=True)  # networkx draw()
             # plt.draw()
             # plt.show()
-            #
+            # #
             # self.write_graph(m,graph)
             # self.cells = list(nx.get_node_attributes(graph, "convex").values())
             # self.save_obj(os.path.join(m["abspy"]["partition"]))
 
             a=5
 
-
-
-        if len(dim0points) > 0:
-            self.write_points(m,np.concatenate(dim0points),"dim0points")
-        if len(dim1points) > 0:
-            self.write_points(m,np.concatenate(dim1points),"dim1points")
+            ## remove the parent node
+            graph.remove_node(child)
 
         self.graph = graph
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
         self.constructed = True
 
-        # ### reorder the planes and recalculate the bounds from the new point groups (ie the planes that were split)
-        # self.planes = planes[plane_order]
-        # self.points = []
-        # self.bounds = []
-        # point_groups = point_groups[plane_order]
-        # for i,group in enumerate(point_groups):
-        #     group = group[~np.isnan(group).all(axis=-1)]
-        #     self.points.append(group)
-        #     self.bounds.append(np.array([np.amin(group, axis=0), np.amax(group, axis=0)]))
-        # self.points = np.array(self.points, dtype=object)
-        # self.bounds = np.array(self.bounds)
-
-
         logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))
 
         return 0
+
+
+
+    # def my_construct(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
+    #
+    #     self.split_count = 0
+    #
+    #     ## Tree.DEPTH seems slightly faster then Tree.WIDTH
+    #
+    #     # TODO: i need a secomd ordering for when two planes have the same surface split score, take the one with the bigger area.
+    #     # because randommly shuffling the planes before this function has a big influence on the result
+    #     # save the number how often a certain plane has been split, so when I export split / non-split planes in green and red, I can export
+    #     # green: non-split, blue: 1-split, red: 2-split and more
+    #
+    #     self._init_bounding_box(m)
+    #
+    #     ### pad the point groups with NaNs to make a numpy array from the variable lenght list
+    #     ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
+    #
+    #     ### make a new planes array, to which planes that are split can be appanded
+    #     planes = deepcopy(self.planes)
+    #     halfspaces = deepcopy(self.halfspaces)
+    #     point_groups = list(self.points)
+    #
+    #     cell_count = 0
+    #
+    #     dim0points = []
+    #     dim1points = []
+    #
+    #     ## init the graph
+    #     graph = nx.Graph()
+    #     graph.add_node(cell_count, convex=self.bounding_poly)
+    #
+    #     ## expand the tree as long as there is at least one plane in any of the subspaces
+    #     tree = Tree()
+    #     dd = {"convex": self.bounding_poly, "plane_ids": np.arange(self.planes.shape[0])}
+    #     tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
+    #     children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
+    #     plane_count = 0
+    #     for child in children:
+    #
+    #         current_ids = tree[child].data["plane_ids"]
+    #
+    #         ### get the best plane
+    #         if ordering == "optimal":
+    #             best_plane_id = self._get_best_plane(current_ids,planes,point_groups)
+    #         else:
+    #             best_plane_id = 0
+    #         best_plane = planes[current_ids[best_plane_id]]
+    #         plane_count+=1
+    #
+    #         if current_ids[best_plane_id] >= len(self.planes):
+    #             a=5
+    #
+    #         ### export best plane
+    #         if export:
+    #             color = [1, 0, 0] if current_ids[best_plane_id] >= len(self.planes) else [0, 1, 0]  # split planes are red, unsplit planes are green
+    #             epoints = point_groups[current_ids[best_plane_id]]
+    #             epoints = epoints[~np.isnan(epoints).all(axis=-1)]
+    #             if epoints.shape[0]>3:
+    #                 self.exporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
+    #
+    #         ### split the planes
+    #         left_planes, right_planes, planes, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,halfspaces,point_groups, th)
+    #
+    #         ## create the new convexes
+    #         current_cell = tree[child].data["convex"]
+    #         # hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
+    #         #                                     self._inequalities(best_plane)]
+    #         hspace_positive, hspace_negative = halfspaces[current_ids[best_plane_id],0], halfspaces[current_ids[best_plane_id],1]
+    #
+    #         cell_negative = current_cell.intersection(hspace_negative)
+    #         cell_positive = current_cell.intersection(hspace_positive)
+    #
+    #
+    #         ## update tree by creating the new nodes with the planes that fall into it
+    #         ## and update graph with new nodes
+    #         if(cell_negative.dim() > 0):
+    #             if export:
+    #                 self.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
+    #             dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
+    #             cell_count = cell_count+1
+    #             neg_cell_count = cell_count
+    #             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+    #             graph.add_node(neg_cell_count,convex=cell_negative)
+    #
+    #         if(cell_positive.dim() > 0):
+    #             if export:
+    #                 self.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
+    #             dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
+    #             cell_count = cell_count+1
+    #             pos_cell_count = cell_count
+    #             tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
+    #             graph.add_node(pos_cell_count,convex=cell_positive)
+    #
+    #         if(cell_positive.dim() > 0 and cell_negative.dim() > 0):
+    #             graph.add_edge(cell_count-1, cell_count, intersection=None, vertices=[],supporting_plane=best_plane)
+    #             if export:
+    #                 intersection = cell_negative.intersection(cell_positive)
+    #                 self.write_faces(m,intersection,count=plane_count)
+    #
+    #         ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
+    #         neighbors = list(graph[child])
+    #         for n in neighbors:
+    #             # get the neighboring convex
+    #             nconvex = graph.nodes[n]["convex"]
+    #
+    #             negative_intersection = nconvex.intersection(cell_negative)
+    #             if not negative_intersection.is_empty():
+    #                 for nn1, nn2 in graph.edges(n):
+    #                     if nn1 == neg_cell_count or nn2 == neg_cell_count or nn1 == child or nn2 == child: continue
+    #                     neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
+    #                     if neighbor_neighbor_face is not None:
+    #                         convex_edge = negative_intersection.intersection(neighbor_neighbor_face)
+    #                         # TODO: also add dim()==0; ie intersection which are vertices
+    #                         if not convex_edge.is_empty():
+    #                             # if convex_edge.dim() == 1:
+    #                             graph[nn1][nn2]["vertices"] += (
+    #                                         neighbor_neighbor_face.vertices_list() + convex_edge.vertices_list())
+    #             if negative_intersection.dim() == 2:
+    #                 graph.add_edge(n,neg_cell_count,intersection=negative_intersection, vertices=[], supporting_plane=best_plane)
+    #
+    #
+    #
+    #             positive_intersection = nconvex.intersection(cell_positive)
+    #             if not positive_intersection.is_empty():
+    #                 for nn1,nn2 in graph.edges(n):
+    #                     if nn1 == pos_cell_count or nn2 == pos_cell_count or nn1 == child or nn2 == child: continue
+    #                     neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
+    #                     if neighbor_neighbor_face is not None:
+    #                         convex_edge = positive_intersection.intersection(neighbor_neighbor_face)
+    #                         if not convex_edge.is_empty():
+    #                         # if convex_edge.dim() == 1:
+    #                             graph[nn1][nn2]["vertices"]+=(neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list())
+    #             if positive_intersection.dim() == 2:
+    #                 graph.add_edge(n, pos_cell_count, intersection=positive_intersection, vertices=[], supporting_plane=best_plane)
+    #
+    #
+    #
+    #
+    #         ## remove the parent node
+    #         graph.remove_node(child)
+    #
+    #         # nx.draw(graph,with_labels=True)  # networkx draw()
+    #         # plt.draw()
+    #         # plt.show()
+    #         #
+    #         # self.write_graph(m,graph)
+    #         # self.cells = list(nx.get_node_attributes(graph, "convex").values())
+    #         # self.save_obj(os.path.join(m["abspy"]["partition"]))
+    #
+    #         a=5
+    #
+    #
+    #
+    #     if len(dim0points) > 0:
+    #         self.write_points(m,np.concatenate(dim0points),"dim0points")
+    #     if len(dim1points) > 0:
+    #         self.write_points(m,np.concatenate(dim1points),"dim1points")
+    #
+    #     self.graph = graph
+    #     self.cells = list(nx.get_node_attributes(graph, "convex").values())
+    #     self.constructed = True
+    #
+    #     # ### reorder the planes and recalculate the bounds from the new point groups (ie the planes that were split)
+    #     # self.planes = planes[plane_order]
+    #     # self.points = []
+    #     # self.bounds = []
+    #     # point_groups = point_groups[plane_order]
+    #     # for i,group in enumerate(point_groups):
+    #     #     group = group[~np.isnan(group).all(axis=-1)]
+    #     #     self.points.append(group)
+    #     #     self.bounds.append(np.array([np.amin(group, axis=0), np.amax(group, axis=0)]))
+    #     # self.points = np.array(self.points, dtype=object)
+    #     # self.bounds = np.array(self.bounds)
+    #
+    #
+    #     logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))
+    #
+    #     return 0
 
 
 
