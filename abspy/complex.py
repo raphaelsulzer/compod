@@ -297,23 +297,18 @@ class CellComplex:
         return np.dot(np.cross(e1,e2),e3)>0
 
     def _my_sort_vertex_indices(self,points,plane):
-
-        # points = np.array(points)
-
+        '''order vertices of a convex polygon: https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon.'''
         ## project to plane
         k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / \
             (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
         pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]]).transpose()
 
-
         centroid = np.mean(pp,axis=0)
-
         vectors = pp[:,:2] - centroid[:2]
         radian = np.arctan2(vectors[:,1],vectors[:,0])
 
         return np.argsort(radian)
 
-        a=5
 
 
     def extract_soup(self, filename):
@@ -418,13 +413,17 @@ class CellComplex:
                 ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
                 outside = c0["convex"].centroid() if c0["occupancy"] else c1["convex"].centroid()
                 e1 = (intersection_points[1] - intersection_points[0]).astype(float)
-                # e2 = intersection_points[-1] - intersection_points[0]
-                e2 = e1
-                s=1
-                while np.isclose(np.arccos(np.dot(e1,e2)/(np.linalg.norm(e1)*np.linalg.norm(e2))),0,rtol=1e-02):
-                    s+=1
-                    e2 = (intersection_points[s] - intersection_points[0]).astype(float)
+                e1 = e1/np.linalg.norm(e1)
+                e2 = (intersection_points[-1] - intersection_points[0]).astype(float)
+                e2 = e2/np.linalg.norm(e2)
+                # e2 = e1
+                # s=1
+                # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
+                #     s+=1
+                #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
+                #     e2 = e2/np.linalg.norm(e2)
                 e3 = (outside - intersection_points[0]).astype(float)
+                e3 = e3/np.linalg.norm(e3)
                 if self._orient_triangle(e1, e2, e3):
                     intersection_points = np.flip(intersection_points,axis=0)
 
@@ -691,32 +690,37 @@ class CellComplex:
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors = list(graph[child])
             for n in neighbors:
+                # get the neighboring convex
                 nconvex = graph.nodes[n]["convex"]
 
                 negative_intersection = nconvex.intersection(cell_negative)
-                if negative_intersection.dim() == 2:
-                    for nn1,nn2 in graph.edges(n):
+                if not negative_intersection.is_empty():
+                    for nn1, nn2 in graph.edges(n):
                         if nn1 == neg_cell_count or nn2 == neg_cell_count or nn1 == child or nn2 == child: continue
                         neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
                         if neighbor_neighbor_face is not None:
                             convex_edge = negative_intersection.intersection(neighbor_neighbor_face)
-                            if convex_edge.dim() == 1:
-                                # graph[nn1][nn2]["vertices"] = neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list()
-                                graph[nn1][nn2]["vertices"]+=(neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list())
+                            # TODO: also add dim()==0; ie intersection which are vertices
+                            if not convex_edge.is_empty():
+                                # if convex_edge.dim() == 1:
+                                graph[nn1][nn2]["vertices"] += (
+                                            neighbor_neighbor_face.vertices_list() + convex_edge.vertices_list())
+                if negative_intersection.dim() == 2:
                     graph.add_edge(n,neg_cell_count,intersection=negative_intersection, vertices=[], supporting_plane=best_plane)
 
 
 
                 positive_intersection = nconvex.intersection(cell_positive)
-                if positive_intersection.dim() == 2:
+                if not positive_intersection.is_empty():
                     for nn1,nn2 in graph.edges(n):
                         if nn1 == pos_cell_count or nn2 == pos_cell_count or nn1 == child or nn2 == child: continue
                         neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
                         if neighbor_neighbor_face is not None:
                             convex_edge = positive_intersection.intersection(neighbor_neighbor_face)
-                            if convex_edge.dim() == 1:
-                                # graph[nn1][nn2]["vertices"] = neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list()
+                            if not convex_edge.is_empty():
+                            # if convex_edge.dim() == 1:
                                 graph[nn1][nn2]["vertices"]+=(neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list())
+                if positive_intersection.dim() == 2:
                     graph.add_edge(n, pos_cell_count, intersection=positive_intersection, vertices=[], supporting_plane=best_plane)
 
 
