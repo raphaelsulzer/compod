@@ -265,7 +265,23 @@ class CellComplex:
 
 
 
+    def write_facet_with_outside_centroid(self, points, outside, count=0):
 
+        filename = os.path.join(os.path.dirname(self.model["planes"]),"facets_with_outside_centroid",str(count)+".obj")
+        os.makedirs(os.path.dirname(filename),exist_ok=True)
+
+        f = open(filename, 'w')
+        for p in points:
+            f.write("v {:3f} {:3f} {:3f}\n".format(p[0],p[1],p[2]))
+
+        f.write("v {:3f} {:3f} {:3f}\n".format(outside[0], outside[1], outside[2]))
+
+        nump = points.shape[0]
+        for i,p in enumerate(points):
+            f.write("l {} {}\n".format((i)%nump+1,(i+1)%nump+1))
+            f.write("l {} {}\n".format(i+1,nump+1))
+
+        f.close()
 
     def write_points(self,m,points,filename="points",count=0, color=None):
 
@@ -342,10 +358,11 @@ class CellComplex:
                 sorted_.append(connected[1])
         return sorted_
 
-    def _orient_triangle(self,e1,e2,e3):
+    def _orient_polygon(self,e1,e2,e3):
         # check for left or right orientation
         # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
-        return np.dot(np.cross(e1,e2),e3)>0
+        return np.dot(np.cross(e1,e2),e3)>=0
+
 
 
     def _project_points_to_plane(self,points,plane):
@@ -399,7 +416,7 @@ class CellComplex:
 
         facet_lens = []
 
-        for e0, e1 in self.graph.edges:
+        for ec, (e0, e1) in enumerate(self.graph.edges):
 
             if e0 > e1:
                 continue
@@ -426,24 +443,12 @@ class CellComplex:
                     continue
 
 
-                ## orient triangle
+                ## orient polygon
+                outside = c0["convex"].centroid() if c1["occupancy"] else c1["convex"].centroid()
+                if self._orient_exact_polygon(intersection_points,outside):
+                    intersection_points = np.flip(intersection_points, axis=0)
 
-                ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
-                outside = c0["convex"].centroid() if c0["occupancy"] else c1["convex"].centroid()
-                e1 = (intersection_points[1] - intersection_points[0]).astype(float)
-                e1 = e1/np.linalg.norm(e1)
-                e2 = (intersection_points[-1] - intersection_points[0]).astype(float)
-                e2 = e2/np.linalg.norm(e2)
-                # e2 = e1
-                # s=1
-                # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
-                #     s+=1
-                #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
-                #     e2 = e2/np.linalg.norm(e2)
-                e3 = (outside - intersection_points[0]).astype(float)
-                e3 = e3/np.linalg.norm(e3)
-                if self._orient_triangle(e1, e2, e3):
-                    intersection_points = np.flip(intersection_points,axis=0)
+                self.write_facet_with_outside_centroid(intersection_points.astype(float),np.array(outside,dtype=float),ec)
 
                 for i in range(intersection_points.shape[0]):
                     all_points.append(tuple(intersection_points[i,:]))
@@ -452,20 +457,45 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
 
-        sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/Soup2Mesh")
-        import libSoup2Mesh as s2m
-        sm = s2m.Soup2Mesh()
-        sm.loadSoup(np.array(all_points,dtype=float), np.array(facet_lens,dtype=int), np.concatenate(faces,dtype=int))
-        triangulate = False
-        sm.makeMesh(triangulate)
-        sm.saveMesh(filename)
+        # sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/Soup2Mesh")
+        # import libSoup2Mesh as s2m
+        # sm = s2m.Soup2Mesh()
+        # sm.loadSoup(np.array(all_points,dtype=float), np.array(facet_lens,dtype=int), np.concatenate(faces,dtype=int))
+        # triangulate = False
+        # sm.makeMesh(triangulate)
+        # sm.saveMesh(filename)
 
-        # logger.debug('Save polygon mesh to {}'.format(filename))
-        # os.makedirs(os.path.dirname(filename), exist_ok=True)
-        # self.write_off(filename,points=np.array(all_points,dtype=float),facets=faces)
+        logger.debug('Save polygon mesh to {}'.format(filename))
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        self.write_off(filename,points=np.array(all_points,dtype=float),facets=faces)
 
         # self.write_points(self.model,np.array(outside_points),"outside_points")
 
+    def _orient_exact_polygon(self, points, outside):
+        # check for left or right orientation
+        # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
+
+        from sage.all import vector
+
+        i = 0
+        cross=0
+        while np.sum(cross) == 0:
+            a = vector(points[i+1] - points[i])
+            a = a/a.norm()
+            b = vector(points[i+2] - points[i])
+            b = b/b.norm()
+            cross = a.cross_product(b)
+            i+=1
+
+        c = vector(np.array(outside,dtype=object) - points[i])
+        c = c/c.norm()
+        cross = cross/cross.norm()
+        dot = cross.dot_product(c)
+        # cross = [a[1]*b[2]-a[2]*b[1],a[0]*b[2]-a[2]*b[0],a[0]*b[1]-a[1]*b[0]]
+        # dot = cross[0]*c[0]+cross[1]*c[1]+cross[2]*c[2]
+
+
+        return dot < 0
 
     def extract_surface(self, filename):
 
@@ -497,25 +527,10 @@ class CellComplex:
                 if(len(intersection_points)<3):
                     continue
 
-
-                ## orient triangle
-
-                ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
-                outside = c0["convex"].centroid() if c0["occupancy"] else c1["convex"].centroid()
-                e1 = (intersection_points[1] - intersection_points[0]).astype(float)
-                e1 = e1/np.linalg.norm(e1)
-                e2 = (intersection_points[-1] - intersection_points[0]).astype(float)
-                e2 = e2/np.linalg.norm(e2)
-                # e2 = e1
-                # s=1
-                # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
-                #     s+=1
-                #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
-                #     e2 = e2/np.linalg.norm(e2)
-                e3 = (outside - intersection_points[0]).astype(float)
-                e3 = e3/np.linalg.norm(e3)
-                if self._orient_triangle(e1, e2, e3):
-                    intersection_points = np.flip(intersection_points,axis=0)
+                ## orient polygon
+                outside = c0["convex"].centroid() if c1["occupancy"] else c1["convex"].centroid()
+                if self._orient_exact_polygon(intersection_points,outside):
+                    intersection_points = np.flip(intersection_points, axis=0)
 
                 for i in range(intersection_points.shape[0]):
                     all_points.append(tuple(intersection_points[i,:]))
@@ -701,7 +716,8 @@ class CellComplex:
                 this_facet = this_edge["intersection"]
                 facet_intersection = current_facet.intersection(this_facet)
 
-                if not facet_intersection.is_empty():
+                # if not facet_intersection.is_empty():
+                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"]+=facet_intersection.vertices_list()
                     this_edge["vertices"]+=facet_intersection.vertices_list()
 
@@ -711,7 +727,8 @@ class CellComplex:
                 this_facet = this_edge["intersection"]
                 facet_intersection = current_facet.intersection(this_facet)
 
-                if not facet_intersection.is_empty():
+                # if not facet_intersection.is_empty():
+                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
                     this_edge["vertices"] += facet_intersection.vertices_list()
 
@@ -857,8 +874,6 @@ class CellComplex:
             graph.remove_node(child)
 
 
-
-        tree.show()
         self.graph = graph
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
         self.constructed = True
