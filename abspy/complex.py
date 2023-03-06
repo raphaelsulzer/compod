@@ -10,11 +10,12 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 
-import os
+import os, sys
 import string
 from pathlib import Path
 import itertools
 import heapq
+from copy import  deepcopy
 from copy import copy
 from random import random, choices, uniform
 import pickle
@@ -26,27 +27,27 @@ import numpy as np
 from tqdm import trange
 import networkx as nx
 import trimesh
-from sage.all import polytopes, QQ, RR, Polyhedron
+from sage.all import polytopes, QQ, RR, Polyhedron, vector
+from treelib import Tree
+
 from .logger import attach_to_log
-import matplotlib.pyplot as plt
+logger = attach_to_log()
 
-from copy import  deepcopy
+from .export_complex import CellComplexExporter
 
-
-import sys
 sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/PyLabeler")
 import libPyLabeler as PL
 
-logger = attach_to_log()
-
-from treelib import Tree
+PYTHONPATH="/home/rsulzer/python"
+sys.path.append(os.path.join(PYTHONPATH,"pyRANSAC-3D"))
+from export import PlaneExporter
 
 class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
     def __init__(self, model, planes, halfspaces, bounds, points=None, initial_bound=None, initial_padding=0.1, additional_planes=None,
-                 build_graph=False, quiet=False,exporter=None):
+                 build_graph=False, quiet=False):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -70,7 +71,8 @@ class CellComplex:
             Disable logging and progress bar if set True
         """
         self.model = model
-        self.exporter = exporter
+        self.planeExporter = PlaneExporter()
+        self.cellComplexExporter = CellComplexExporter(self)
 
 
         self.quiet = quiet
@@ -95,7 +97,6 @@ class CellComplex:
             self.graph = None
 
         self.constructed = False
-
 
     def _init_bounding_box(self,m,scale=1.2):
 
@@ -127,210 +128,27 @@ class CellComplex:
 
         self.bounding_poly = Polyhedron(vertices=self.bounding_verts)
 
-    def write_graph(self, m, graph, subfolder="", color = None):
+    def _project_points_to_plane(self,points,plane):
 
-        c = color if color is not None else np.random.random(size=3)
-        c = (c*255).astype(int)
-
-        path = os.path.join(os.path.dirname(m['planes']),subfolder)
-        os.makedirs(path,exist_ok=True)
-        filename = os.path.join(path,'graph.obj')
-
-        edge_strings = []
-        f = open(filename,'w')
-        all_nodes = np.array(graph.nodes())
-        for i,node in enumerate(graph.nodes(data=True)):
-            centroid = np.array(node[1]["convex"].centroid())
-            f.write("v {:.3f} {:.3f} {:.3f} {} {} {}\n".format(centroid[0],centroid[1],centroid[2],c[0],c[1],c[2]))
-            edges = list(graph.edges(node[0]))
-            for c1,c2 in edges:
-                nc1 = np.where(all_nodes==c1)[0][0]
-                nc2 = np.where(all_nodes==c2)[0][0]
-                edge_strings.append("l {} {}\n".format(nc1+1,nc2+1))
-
-
-        for edge in edge_strings:
-            f.write(edge)
-
-        f.close()
-
-        a=4
-
-
-
-
-
-    def write_cells(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0):
-
-        c = color if color is not None else np.random.random(size=3)
-        c = (c*255).astype(int)
-
-        path = os.path.join(os.path.dirname(m['planes']),subfolder)
-        os.makedirs(path,exist_ok=True)
-
-        if filename is None:
-            filename = os.path.join(path,str(count)+'.obj')
-            f = open(filename,'w')
-        else:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            f = open(filename, 'a')
-            f.write('o {}\n'.format(count))
-
-        ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
-
-        verts = ss[2]
-        for v in verts:
-            f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
-        faces = ss[3]
-        for fa in faces:
-            f.write(fa[0] + " ")
-            for ffa in fa[2:].split(' '):
-                f.write(str(int(ffa)+inside_vert_count)+" ")
-            f.write("\n")
-
-        # for out in ss[2:4]:
-        #     for line in out:
-        #         f.write(line+"\n")
-
-        if points is not None:
-            for p in points:
-                f.write("v {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
-
-        f.close()
-
-    def write_facet(self,m,facet,subfolder="facets",count=0, color=None):
-
-        c = color if color is not None else np.random.random(size=3)
-        c = (c*255).astype(int)
-
-        path = os.path.join(os.path.dirname(m['planes']),subfolder)
-        os.makedirs(path,exist_ok=True)
-        filename = os.path.join(path,str(count)+'.obj')
-
-        ss = facet.render_solid().obj_repr(facet.render_solid().default_render_params())
-
-        f = open(filename,'w')
-        verts = ss[2]
-        for v in verts:
-            f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
-        faces = ss[3]
-        for fa in faces:
-            f.write(fa+"\n")
-
-        f.close()
-
-    def write_graph_edge(self,graph,e0,e1):
-
-        assert (len(graph[e0][e1]["vertices"]) > 2)
-
-        pts = []
-        for v in graph[e0][e1]["vertices"]:
-            pts.append(tuple(v))
-        pts = list(set(pts))
-        intersection_points = np.array(pts, dtype=object)
-
-        correct_order = self._my_sort_vertex_indices(intersection_points.astype(float),
-                                                     graph[e0][e1]["supporting_plane"])
-        assert (len(intersection_points) == len(correct_order))
-        intersection_points = intersection_points[correct_order]
-
-        if (len(intersection_points) < 3):
-            print("WARNING: graph edge with less than three polygon vertices")
-            return
-
-        ## orient triangle
-
-        ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
-        outside = graph.nodes[e0]["convex"].centroid()
-        ei1 = (intersection_points[1] - intersection_points[0]).astype(float)
-        ei1 = ei1 / np.linalg.norm(ei1)
-        ei2 = (intersection_points[-1] - intersection_points[0]).astype(float)
-        ei2 = ei2 / np.linalg.norm(ei2)
-        # e2 = e1
-        # s=1
-        # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
-        #     s+=1
-        #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
-        #     e2 = e2/np.linalg.norm(e2)
-        ei3 = (outside - intersection_points[0]).astype(float)
-        ei3 = ei3 / np.linalg.norm(ei3)
-        if self._orient_triangle(ei1, ei2, ei3):
-            intersection_points = np.flip(intersection_points, axis=0)
-
-        id = graph[e0][e1]["id"]
-        filename = os.path.join(os.path.dirname(self.model["planes"]),"graph_facets",str(id)+".off")
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.write_off(filename, points=intersection_points.astype(float),facets=[np.arange(len(intersection_points))],color=graph[e0][e1]["color"])
-
-
-
-
-    def write_facet_with_outside_centroid(self, points, outside, count=0):
-
-        filename = os.path.join(os.path.dirname(self.model["planes"]),"facets_with_outside_centroid",str(count)+".obj")
-        os.makedirs(os.path.dirname(filename),exist_ok=True)
-
-        f = open(filename, 'w')
-        for p in points:
-            f.write("v {:3f} {:3f} {:3f}\n".format(p[0],p[1],p[2]))
-
-        f.write("v {:3f} {:3f} {:3f}\n".format(outside[0], outside[1], outside[2]))
-
-        nump = points.shape[0]
-        for i,p in enumerate(points):
-            f.write("l {} {}\n".format((i)%nump+1,(i+1)%nump+1))
-            f.write("l {} {}\n".format(i+1,nump+1))
-
-        f.close()
-
-    def write_points(self,m,points,filename="points",count=0, color=None):
-
-        path = os.path.join(os.path.dirname(m['planes']))
-        filename = os.path.join(path,'{}.off'.format(filename))
-
-        f = open(filename, 'w')
-        f.write("OFF\n")
-        f.write("{} 0 0\n".format(points.shape[0]))
-        for p in points:
-            f.write("{:.3f} {:.3f} {:.3f}\n".format(p[0],p[1],p[2]))
-        f.close()
-
-    def write_off(self,filename,points,facets,color=None):
-
-        c = color if color is not None else (np.random.random(size=3)*255).astype(int)
-
-
-        f = open(filename[:-3]+"off",'w')
-        f.write("COFF\n")
-        f.write("{} {} 0\n".format(points.shape[0],len(facets)))
-        for p in points:
-            f.write("{:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
-        for face in facets:
-            f.write("{}".format(len(face)))
-            for v in face:
-                f.write(" {}".format(v))
-            f.write('\n')
-        f.close()
-
-
-    def _contains(self,polyhedron,points):
-        """check if any of the points are contained in the polyhedron"""
-
-        ineqs = np.array(polyhedron.inequalities())
-        # careful here, the ineqs from SageMath have a strange order
-        inside = points[:, 0] * ineqs[:, 1, np.newaxis] + points[:, 1] * ineqs[:, 2, np.newaxis] + \
-                  points[:, 2] * ineqs[:, 3, np.newaxis] + ineqs[:, 0, np.newaxis]
-
-        inside = (np.sign(inside)+1).astype(bool)
-
-        points_inside_all_planes = inside.all(axis=0)
-        at_least_one_point_inside_all_planes = points_inside_all_planes.any()
-
-        return at_least_one_point_inside_all_planes
-
-
-
-
+        ### project inlier points to plane
+        ## https://www.baeldung.com/cs/3d-point-2d-plane
+        k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / \
+            (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
+        pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]])
+        ## make e1 and e2 (see bottom of page linked above)
+        ## take a starting vector (e0) and take a component of this vector which is nonzero (see here: https://stackoverflow.com/a/33758795)
+        z = np.argmax(np.abs(plane[:3]))
+        y = (z+1)%3
+        x = (y+1)%3
+        e0 = np.array(plane[:3])
+        e0 = e0/np.linalg.norm(e0)
+        e1 = np.zeros(3)
+        ## reverse the non-zero component and put it on a different axis
+        e1[x], e1[y], e1[z] = e0[x], -e0[z], e0[y]
+        ## take the cross product of e0 and e1 to make e2
+        e2 = np.cross(e0,e1)
+        e12 = np.array([e1,e2])
+        return (e12@pp).transpose()
 
     def _sorted_vertex_indices(self,adjacency_matrix):
         """
@@ -358,36 +176,7 @@ class CellComplex:
                 sorted_.append(connected[1])
         return sorted_
 
-    def _orient_polygon(self,e1,e2,e3):
-        # check for left or right orientation
-        # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
-        return np.dot(np.cross(e1,e2),e3)>=0
-
-
-
-    def _project_points_to_plane(self,points,plane):
-
-        ### project inlier points to plane
-        ## https://www.baeldung.com/cs/3d-point-2d-plane
-        k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / \
-            (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
-        pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]])
-        ## make e1 and e2 (see bottom of page linked above)
-        ## take a starting vector (e0) and take a component of this vector which is nonzero (see here: https://stackoverflow.com/a/33758795)
-        z = np.argmax(np.abs(plane[:3]))
-        y = (z+1)%3
-        x = (y+1)%3
-        e0 = np.array(plane[:3])
-        e0 = e0/np.linalg.norm(e0)
-        e1 = np.zeros(3)
-        ## reverse the non-zero component and put it on a different axis
-        e1[x], e1[y], e1[z] = e0[x], -e0[z], e0[y]
-        ## take the cross product of e0 and e1 to make e2
-        e2 = np.cross(e0,e1)
-        e12 = np.array([e1,e2])
-        return (e12@pp).transpose()
-
-    def _my_sort_vertex_indices(self,points,plane):
+    def _sort_vertex_indices_by_angle(self,points,plane):
         '''order vertices of a convex polygon:
         https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
         '''
@@ -406,6 +195,26 @@ class CellComplex:
 
         return np.argsort(radians)
 
+    def _orient_exact_polygon(self, points, outside):
+        # check for left or right orientation
+        # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
+
+        i = 0
+        cross=0
+        while np.sum(cross) == 0:
+            a = vector(points[i+1] - points[i])
+            a = a/a.norm()
+            b = vector(points[i+2] - points[i])
+            b = b/b.norm()
+            cross = a.cross_product(b)
+            i+=1
+
+        c = vector(np.array(outside,dtype=object) - points[i])
+        c = c/c.norm()
+        cross = cross/cross.norm()
+        dot = cross.dot_product(c)
+
+        return dot < 0
 
 
     def extract_soup(self, filename):
@@ -435,20 +244,17 @@ class CellComplex:
                 else:
                     intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
 
-                correct_order = self._my_sort_vertex_indices(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
+                correct_order = self._sort_vertex_indices_by_angle(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
                 if(len(intersection_points)<3):
                     continue
 
-
                 ## orient polygon
                 outside = c0["convex"].centroid() if c1["occupancy"] else c1["convex"].centroid()
                 if self._orient_exact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
-
-                self.write_facet_with_outside_centroid(intersection_points.astype(float),np.array(outside,dtype=float),ec)
 
                 for i in range(intersection_points.shape[0]):
                     all_points.append(tuple(intersection_points[i,:]))
@@ -467,35 +273,9 @@ class CellComplex:
 
         logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.write_off(filename,points=np.array(all_points,dtype=float),facets=faces)
-
-        # self.write_points(self.model,np.array(outside_points),"outside_points")
-
-    def _orient_exact_polygon(self, points, outside):
-        # check for left or right orientation
-        # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
-
-        from sage.all import vector
-
-        i = 0
-        cross=0
-        while np.sum(cross) == 0:
-            a = vector(points[i+1] - points[i])
-            a = a/a.norm()
-            b = vector(points[i+2] - points[i])
-            b = b/b.norm()
-            cross = a.cross_product(b)
-            i+=1
-
-        c = vector(np.array(outside,dtype=object) - points[i])
-        c = c/c.norm()
-        cross = cross/cross.norm()
-        dot = cross.dot_product(c)
-        # cross = [a[1]*b[2]-a[2]*b[1],a[0]*b[2]-a[2]*b[0],a[0]*b[1]-a[1]*b[0]]
-        # dot = cross[0]*c[0]+cross[1]*c[1]+cross[2]*c[2]
+        self.cellComplexExporter.write_off(filename,points=np.array(all_points,dtype=float),facets=faces)
 
 
-        return dot < 0
 
     def extract_surface(self, filename):
 
@@ -520,7 +300,7 @@ class CellComplex:
                 else:
                     intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
 
-                correct_order = self._my_sort_vertex_indices(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
+                correct_order = self._sort_vertex_indices_by_angle(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
@@ -552,17 +332,99 @@ class CellComplex:
 
         logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        # self.toTrimesh(filename)
-        # self.write_obj(filename)
-        self.write_off(filename,points=np.array(pset,dtype=float),facets=facets)
-        # self.write_ply(filename)
+        self.cellComplexExporter.write_off(filename,points=np.array(pset,dtype=float),facets=facets)
+
+    def extract_in_out_cells(self):
+        for i,node in enumerate(self.graph.nodes(data=True)):
+            col = [1,0,0] if node[1]["occupancy"] == 1 else [0,0,1]
+            self.cellComplexExporter.write_cells(self.model,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
 
 
+    def extract_in_cells(self,filename):
 
-        a = 4
+        in_vert_count = 0
+        for i,node in enumerate(self.graph.nodes(data=True)):
+            if node[1]["occupancy"] == 1:
+                self.cellComplexExporter.write_cells(self.model, node[1]['convex'],filename=filename,count=i, inside_vert_count=in_vert_count)
+                in_vert_count+=len(node[1]['convex'].vertices())
 
-    def label_graph_nodes(self, m, n_test_points=50,export=False):
 
+    @staticmethod
+    def _obj_str(cells, use_mtl=False, filename_mtl='colours.mtl'):
+        """
+        Convert a list of cells into a string of obj format.
+
+        Parameters
+        ----------
+        cells: list of Polyhedra objects
+            Polyhedra cells
+        use_mtl: bool
+            Use mtl attribute in obj if set True
+        filename_mtl: None or str
+            Material filename
+
+        Returns
+        -------
+        scene_str: str
+            String representation of the object
+        material_str: str
+            String representation of the material
+        """
+        scene = None
+        for cell in cells:
+            scene += cell.render_solid()
+
+        # directly save the obj string from scene.obj() will bring the inverted facets
+        scene_obj = scene.obj_repr(scene.default_render_params())
+        if len(cells) == 1:
+            scene_obj = [scene_obj]
+        scene_str = ''
+        material_str = ''
+
+        if use_mtl:
+            scene_str += f'mtllib {filename_mtl}\n'
+
+        for o in range(len(cells)):
+            scene_str += scene_obj[o][0] + '\n'
+
+            if use_mtl:
+                scene_str += scene_obj[o][1] + '\n'
+                material_str += 'newmtl ' + scene_obj[o][1].split()[1] + '\n'
+                material_str += 'Kd {:.3f} {:.3f} {:.3f}\n'.format(random(), random(), random())  # diffuse colour
+
+            scene_str += '\n'.join(scene_obj[o][2]) + '\n'
+            scene_str += '\n'.join(scene_obj[o][3]) + '\n'  # contents[o][4] are the interior facets
+        return scene_str, material_str
+
+    def extract_partition(self, filepath, indices_cells=None, use_mtl=False):
+        """
+        Save polygon soup of indexed convexes to an obj file.
+
+        Parameters
+        ----------
+        filepath: str or Path
+            Filepath to save obj file
+        indices_cells: (n,) int
+            Indices of cells to save to file
+        use_mtl: bool
+            Use mtl attribute in obj if set True
+        """
+        # create the dir if not exists
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        cells = [self.cells[i] for i in indices_cells] if indices_cells is not None else self.cells
+        scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
+
+        with open(filepath, 'w') as f:
+            f.writelines("# cells: {}\n".format(len(self.cells)))
+            f.writelines(scene_str)
+        if use_mtl:
+            with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
+                f.writelines(material_str)
+
+
+    def label_cells(self, m, n_test_points=50,export=False):
 
         pl=PL.PyLabeler(n_test_points)
         pl.loadMesh(m["mesh"])
@@ -571,7 +433,7 @@ class CellComplex:
         for i,node in enumerate(self.graph.nodes(data=True)):
             cell = node[1]['convex']
             if export:
-                self.write_cells(m,cell,count=i,subfolder="final_cells")
+                self.cellComplexExporter.write_cells(m,cell,count=i,subfolder="final_cells")
             pts = np.array(cell.vertices())
             points.append(pts)
             # print(pts)
@@ -582,25 +444,8 @@ class CellComplex:
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
         del pl
 
-        in_vert_count = 0
-        for i,node in enumerate(self.graph.nodes(data=True)):
-            node[1]["occupancy"] = np.rint(occs[i]).astype(int)
-            if export:
-                col = [1,0,0] if node[1]["occupancy"] == 1 else [0,0,1]
-                self.write_cells(m,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
-                if node[1]["occupancy"] == 1:
-                    filename=os.path.join(os.path.dirname(m["abspy"]['partition']), "in_cells.obj")
-                    self.write_cells(m, node[1]['convex'],filename=filename,count=i, inside_vert_count=in_vert_count)
-                    in_vert_count+=len(node[1]['convex'].vertices())
-
-
-        if export:
-            self.write_graph(m,self.graph)
-
-
-
-
-
+        occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+        nx.set_node_attributes(self.graph,occs,"occupancy")
 
 
     def _get_best_plane(self,current_ids,planes,point_groups,export=False):
@@ -739,7 +584,7 @@ class CellComplex:
 
 
 
-    def my_construct(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
+    def construct_adaptive(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
 
 
         ## Tree.DEPTH seems slightly faster then Tree.WIDTH
@@ -794,7 +639,7 @@ class CellComplex:
                 epoints = point_groups[current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
                 if epoints.shape[0]>3:
-                    self.exporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
+                    self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
             ### split the planes
             left_planes, right_planes, planes, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,halfspaces,point_groups, th)
@@ -814,7 +659,7 @@ class CellComplex:
             if(cell_negative.dim() > 2):
             # if(not cell_negative.is_empty()):
                 if export:
-                    self.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
+                    self.cellComplexExporter.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_count = cell_count
@@ -824,7 +669,7 @@ class CellComplex:
             if(cell_positive.dim() > 2):
             # if(not cell_positive.is_empty()):
                 if export:
-                    self.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
+                    self.cellComplexExporter.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_count = cell_count
@@ -837,7 +682,7 @@ class CellComplex:
                 graph.add_edge(cell_count-1, cell_count, intersection=new_intersection, vertices=[],
                                supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int))
                 if export:
-                    self.write_facet(m,new_intersection,count=plane_count)
+                    self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors_of_old_cell = list(graph[child])
@@ -866,7 +711,7 @@ class CellComplex:
             # plt.draw()
             # plt.show()
             # #
-            # self.write_graph(m,graph)
+            # self.cellComplexExporter.write_graph(m,graph)
             # self.cells = list(nx.get_node_attributes(graph, "convex").values())
             # self.save_obj(os.path.join(m["abspy"]["partition"]))
 
@@ -875,219 +720,19 @@ class CellComplex:
 
 
         self.graph = graph
+        if export:
+            self.cellComplexExporter.write_graph(m,graph)
+
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
         self.constructed = True
 
         self.regularize_polygon_edges()
 
-        logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))
 
-        return 0
-
-
-    def my_construct_ori(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
-
-
-        ## Tree.DEPTH seems slightly faster then Tree.WIDTH
-
-        # TODO: i need a secomd ordering for when two planes have the same surface split score, take the one with the bigger area.
-        # because randommly shuffling the planes before this function has a big influence on the result
-        # save the number how often a certain plane has been split, so when I export split / non-split planes in green and red, I can export
-        # green: non-split, blue: 1-split, red: 2-split and more
-
-        self._init_bounding_box(m)
-
-        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
-        ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
-
-        ### make a new planes array, to which planes that are split can be appanded
-        planes = deepcopy(self.planes)
-        halfspaces = deepcopy(self.halfspaces)
-        point_groups = list(self.points)
-
-        cell_count = 0
-        self.split_count = 0
-
-        ## init the graph
-        graph = nx.Graph()
-        graph.add_node(cell_count, convex=self.bounding_poly)
-
-        ## expand the tree as long as there is at least one plane in any of the subspaces
-        tree = Tree()
-        dd = {"convex": self.bounding_poly, "plane_ids": np.arange(self.planes.shape[0])}
-        tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
-        children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
-        plane_count = 0
-        edge_id=0
-        for child in children:
-
-            current_ids = tree[child].data["plane_ids"]
-
-            ### get the best plane
-            if ordering == "optimal":
-                best_plane_id = self._get_best_plane(current_ids,planes,point_groups)
-            else:
-                best_plane_id = 0
-            best_plane = planes[current_ids[best_plane_id]]
-            plane_count+=1
-
-            if current_ids[best_plane_id] >= len(self.planes):
-                a=5
-
-            ### export best plane
-            if export:
-                color = [1, 0, 0] if current_ids[best_plane_id] >= len(self.planes) else [0, 1, 0]  # split planes are red, unsplit planes are green
-                epoints = point_groups[current_ids[best_plane_id]]
-                epoints = epoints[~np.isnan(epoints).all(axis=-1)]
-                if epoints.shape[0]>3:
-                    self.exporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
-
-            ### split the planes
-            left_planes, right_planes, planes, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,halfspaces,point_groups, th)
-
-            ## create the new convexes
-            current_cell = tree[child].data["convex"]
-            # hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-            #                                     self._inequalities(best_plane)]
-            hspace_positive, hspace_negative = halfspaces[current_ids[best_plane_id],0], halfspaces[current_ids[best_plane_id],1]
-
-            cell_negative = current_cell.intersection(hspace_negative)
-            cell_positive = current_cell.intersection(hspace_positive)
-
-
-            ## update tree by creating the new nodes with the planes that fall into it
-            ## and update graph with new nodes
-            if(cell_negative.dim() > 2):
-            # if(not cell_negative.is_empty()):
-                if export:
-                    self.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
-                dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
-                cell_count = cell_count+1
-                neg_cell_count = cell_count
-                tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(neg_cell_count,convex=cell_negative)
-
-            if(cell_positive.dim() > 2):
-            # if(not cell_positive.is_empty()):
-                if export:
-                    self.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
-                dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
-                cell_count = cell_count+1
-                pos_cell_count = cell_count
-                tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(pos_cell_count,convex=cell_positive)
-
-            # if(not cell_positive.is_empty() and not cell_negative.is_empty()):
-            new_intersection = None
-            if(cell_positive.dim() > 2 and cell_negative.dim() > 2):
-                new_intersection = cell_negative.intersection(cell_positive)
-                graph.add_edge(cell_count-1, cell_count, intersection=new_intersection, vertices=new_intersection.vertices_list(),
-                               supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int))
-                self.write_graph_edge(graph,cell_count-1, cell_count)
-                edge_id+=1
-                if export:
-                    self.write_facet(m,new_intersection,count=plane_count)
-
-            ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
-            neighbors_of_old_cell = list(graph[child])
-            old_cell=child
-            for neighbor_of_old_cell in neighbors_of_old_cell:
-                # get the neighboring convex
-                nconvex = graph.nodes[neighbor_of_old_cell]["convex"]
-                # intersect new cells with old neighbors to make the new facets
-                negative_intersection = nconvex.intersection(cell_negative)
-                positive_intersection = nconvex.intersection(cell_positive)
-
-                # n_nonempty = not negative_intersection.is_empty()
-                # p_nonempty = not positive_intersection.is_empty()
-                n_nonempty = negative_intersection.dim()==2
-                p_nonempty = positive_intersection.dim()==2
-                # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
-                if n_nonempty:
-                    # add the vertices of the intersection with the parent, that are left of the plane
-                    previous_facet = graph[neighbor_of_old_cell][old_cell]
-                    previous_facet_vertices = []
-                    for p in previous_facet["vertices"]:
-                        if hspace_negative.contains(p): previous_facet_vertices.append(p)
-                    # previous_facet_vertices = [b for a, b in zip(self._which_side(previous_facet["vertices"],best_plane)[0],previous_facet["vertices"]) if a]
-                    previous_facet_vertices = [b for a, b in zip(self._which_side(previous_facet["vertices"],best_plane)[0],previous_facet["vertices"]) if a]
-                    graph.add_edge(neighbor_of_old_cell,neg_cell_count,intersection=negative_intersection, vertices=negative_intersection.vertices_list()+previous_facet_vertices,
-                                   supporting_plane=previous_facet["supporting_plane"],id=edge_id,color=(np.random.rand(3)*255).astype(int))
-                    self.write_graph_edge(graph,neighbor_of_old_cell,neg_cell_count)
-                    edge_id+=1
-                if p_nonempty:
-                    previous_facet = graph[neighbor_of_old_cell][old_cell]
-                    # previous_facet_vertices = [b for a, b in zip(self._which_side(previous_facet["vertices"],best_plane)[1],previous_facet["vertices"]) if a]
-                    previous_facet_vertices = []
-                    for p in previous_facet["vertices"]:
-                        if hspace_positive.contains(p): previous_facet_vertices.append(p)
-                    graph.add_edge(neighbor_of_old_cell, pos_cell_count, intersection=positive_intersection, vertices=positive_intersection.vertices_list()+previous_facet_vertices,
-                                   supporting_plane=previous_facet["supporting_plane"],id=edge_id,color=(np.random.rand(3)*255).astype(int))
-                    self.write_graph_edge(graph,neighbor_of_old_cell,pos_cell_count)
-                    edge_id+=1
-                # now intersect the new facets also with the neighbors of the neighbor and update those
-                if n_nonempty:
-                    for nn1, nn2 in graph.edges(neighbor_of_old_cell):
-                        # if nn1 == child or nn2 == child: continue
-                        neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
-                        convex_edge = negative_intersection.intersection(neighbor_neighbor_face)
-                        # if not convex_edge.is_empty():
-                        if convex_edge.dim() == 0 or convex_edge.dim() == 1:
-                            graph[nn1][nn2]["vertices"] += (neighbor_neighbor_face.vertices_list() + convex_edge.vertices_list())
-                            self.write_graph_edge(graph, nn1, nn2)
-                if p_nonempty:
-                    for nn1,nn2 in graph.edges(neighbor_of_old_cell):
-                        # if nn1 == child or nn2 == child: continue
-                        neighbor_neighbor_face = graph[nn1][nn2]["intersection"]
-                        convex_edge = positive_intersection.intersection(neighbor_neighbor_face)
-                        # if not convex_edge.is_empty():
-                        if convex_edge.dim() == 0 or convex_edge.dim() == 1:
-                            graph[nn1][nn2]["vertices"]+=(neighbor_neighbor_face.vertices_list()+convex_edge.vertices_list())
-                            self.write_graph_edge(graph,nn1,nn2)
-                # and finally intersect the new facets with the new facet from the just inserted plane (=new_intersection) and update the edges there
-                if n_nonempty and (new_intersection is not None):
-                    convex_edge = negative_intersection.intersection(new_intersection)
-                    # if not convex_edge.is_empty():
-                    if convex_edge.dim() == 0 or convex_edge.dim() == 1:
-                        graph[cell_count-1][cell_count]["vertices"] += convex_edge.vertices_list()
-                        # self.write_graph_edge(graph, nn1, nn2)
-                if p_nonempty and (new_intersection is not None):
-                    convex_edge = positive_intersection.intersection(new_intersection)
-                    # if not convex_edge.is_empty():
-                    if convex_edge.dim() == 0 or convex_edge.dim() == 1:
-                        graph[cell_count-1][cell_count]["vertices"] += convex_edge.vertices_list()
-                        # self.write_graph_edge(graph,nn1,nn2)
-
-
-
-
-
-
-
-            # nx.draw(graph,with_labels=True)  # networkx draw()
-            # plt.draw()
-            # plt.show()
-            # #
-            # self.write_graph(m,graph)
-            # self.cells = list(nx.get_node_attributes(graph, "convex").values())
-            # self.save_obj(os.path.join(m["abspy"]["partition"]))
-
-            a=5
-
-            ## remove the parent node
-            graph.remove_node(child)
-
-
-
-        tree.show()
-        self.graph = graph
-        self.cells = list(nx.get_node_attributes(graph, "convex").values())
-        self.constructed = True
 
         logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))
 
         return 0
-
 
 
     def prioritise_planes(self, mode = ["vertical", "random"]):
@@ -1583,6 +1228,7 @@ class CellComplex:
         else:
             raise ValueError("expected 'ray' or 'distance' as engine, got {}".format(engine))
 
+
     def print_info(self):
         """
         Print info to console.
@@ -1590,110 +1236,7 @@ class CellComplex:
         logger.info('number of planes: {}'.format(self.num_planes))
         logger.info('number of cells: {}'.format(self.num_cells))
 
-    def save(self, filepath):
-        """
-        Save the cell complex to a CC file.
 
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save CC file, '.cc' suffix recommended
-        """
-        if self.constructed:
-            # create the dir if not exists
-            with open(filepath, 'wb') as f:
-                pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
-        else:
-            raise RuntimeError('cell complex has not been constructed')
 
-    def save_npy(self, filepath):
-        """
-        Save the cells to an npy file (deprecated).
 
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save npy file
-        """
-        if self.constructed:
-            # create the dir if not exists
-            filepath = Path(filepath)
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-            np.save(filepath, self.cells, allow_pickle=True)
-        else:
-            raise RuntimeError('cell complex has not been constructed')
-
-    @staticmethod
-    def _obj_str(cells, use_mtl=False, filename_mtl='colours.mtl'):
-        """
-        Convert a list of cells into a string of obj format.
-
-        Parameters
-        ----------
-        cells: list of Polyhedra objects
-            Polyhedra cells
-        use_mtl: bool
-            Use mtl attribute in obj if set True
-        filename_mtl: None or str
-            Material filename
-
-        Returns
-        -------
-        scene_str: str
-            String representation of the object
-        material_str: str
-            String representation of the material
-        """
-        scene = None
-        for cell in cells:
-            scene += cell.render_solid()
-
-        # directly save the obj string from scene.obj() will bring the inverted facets
-        scene_obj = scene.obj_repr(scene.default_render_params())
-        if len(cells) == 1:
-            scene_obj = [scene_obj]
-        scene_str = ''
-        material_str = ''
-
-        if use_mtl:
-            scene_str += f'mtllib {filename_mtl}\n'
-
-        for o in range(len(cells)):
-            scene_str += scene_obj[o][0] + '\n'
-
-            if use_mtl:
-                scene_str += scene_obj[o][1] + '\n'
-                material_str += 'newmtl ' + scene_obj[o][1].split()[1] + '\n'
-                material_str += 'Kd {:.3f} {:.3f} {:.3f}\n'.format(random(), random(), random())  # diffuse colour
-
-            scene_str += '\n'.join(scene_obj[o][2]) + '\n'
-            scene_str += '\n'.join(scene_obj[o][3]) + '\n'  # contents[o][4] are the interior facets
-        return scene_str, material_str
-
-    def save_obj(self, filepath, indices_cells=None, use_mtl=False):
-        """
-        Save polygon soup of indexed convexes to an obj file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save obj file
-        indices_cells: (n,) int
-            Indices of cells to save to file
-        use_mtl: bool
-            Use mtl attribute in obj if set True
-        """
-        # create the dir if not exists
-        filepath = Path(filepath)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-
-        cells = [self.cells[i] for i in indices_cells] if indices_cells is not None else self.cells
-        scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
-
-        with open(filepath, 'w') as f:
-            f.writelines("# cells: {}\n".format(len(self.cells)))
-            f.writelines(scene_str)
-        if use_mtl:
-            with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
-                f.writelines(material_str)
 
