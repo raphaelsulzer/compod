@@ -159,36 +159,26 @@ class VertexGroup:
         """
         Start processing vertex group.
         """
-        
-        other = copy.deepcopy(self)
 
         fn = self.filepath.with_suffix(".npz")
-
         data = np.load(fn)
 
-
-        self.bounds = []
+        # read the data and make the point groups
         self.planes = data["group_parameters"]
-
-
-
         points = data["points"]
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
-
         self.points_grouped = []
         last = 0
         for npp in npoints:
             vert_group = verts[last:(npp+last)]
-            # point_group = points[vert_group].astype(np.float32)
-            point_group = points[vert_group]
-            self.points_grouped.append(point_group)
-            self.bounds.append(self._points_bound(point_group))
+            self.points_grouped.append(points[vert_group])
             last += npp
 
-
-
+        # merge primitives that come from the same plane but are disconnected
+        # this is disarable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
         if self.merge_duplicates:
+            self.bounds = []
             from collections import defaultdict
             # d = defaultdict(list)
             d = defaultdict(int)
@@ -203,14 +193,15 @@ class VertexGroup:
 
             self.planes = un[list(d.keys())]
             self.points_grouped = list(d.values())
-            self.bounds = None
-        else:
-            self.bounds = np.array(self.bounds)
 
-        for p in self.planes:
+        # make the bounds and halfspace used in the cell complex construction
+        self.bounds = []
+        for i,p in enumerate(self.planes):
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
-        self.halfspaces = np.array(self.halfspaces)
+            self.bounds.append(self._points_bound(self.points_grouped[i]))
 
+        self.halfspaces = np.array(self.halfspaces)
+        self.bounds = np.array(self.bounds)
         # self.points_grouped = np.array(self.points_grouped, dtype=object)
 
 

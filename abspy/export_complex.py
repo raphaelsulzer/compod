@@ -1,6 +1,7 @@
 import os
 import numpy as np
-
+import open3d as o3d
+from pathlib import Path
 
 class CellComplexExporter:
     """
@@ -60,7 +61,9 @@ class CellComplexExporter:
         f.close()
 
 
-    def write_cells(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0):
+
+
+    def write_cells(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0, to_ply=False):
 
         c = color if color is not None else np.random.random(size=3)
         c = (c*255).astype(int)
@@ -93,6 +96,10 @@ class CellComplexExporter:
                 f.write("v {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
 
         f.close()
+
+
+
+
 
     def write_facet(self,m,facet,subfolder="facets",count=0, color=None):
 

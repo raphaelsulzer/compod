@@ -27,8 +27,9 @@ import numpy as np
 from tqdm import trange
 import networkx as nx
 import trimesh
-from sage.all import polytopes, QQ, RR, Polyhedron, vector
+from sage.all import polytopes, QQ, RR, Polyhedron, vector, PolyhedralComplex
 from treelib import Tree
+import open3d as o3d
 
 from .logger import attach_to_log
 logger = attach_to_log()
@@ -97,6 +98,9 @@ class CellComplex:
             self.graph = None
 
         self.constructed = False
+        self.polygons_initialized = False
+        self._init_bounding_box(model)
+
 
     def _init_bounding_box(self,m,scale=1.2):
 
@@ -216,6 +220,25 @@ class CellComplex:
 
         return dot < 0
 
+    def _get_intersection(self, e0, e1):
+
+        if "vertices" in self.graph[e0][e1] and self.graph[e0][e1]["vertices"] is not None:
+            pts = []
+            for v in self.graph[e0][e1]["vertices"]:
+                pts.append(tuple(v))
+            pts = list(set(pts))
+            intersection_points = np.array(pts, dtype=object)
+        elif "intersection" in self.graph[e0][e1] and self.graph[e0][e1] is not None:
+            intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
+        else:
+            c0 = self.graph.nodes[e0]["convex"]
+            c1 = self.graph.nodes[e1]["convex"]
+            intersection = c0.intersection(c1)
+            assert(intersection.dim()==2)
+            intersection_points = np.array(intersection.vertices_list(), dtype=object)
+
+        return intersection_points
+
 
     def extract_soup(self, filename):
 
@@ -235,14 +258,7 @@ class CellComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                if self.graph[e0][e1]["vertices"] is not None:
-                    pts = []
-                    for v in self.graph[e0][e1]["vertices"]:
-                        pts.append(tuple(v))
-                    pts = list(set(pts))
-                    intersection_points = np.array(pts, dtype=object)
-                else:
-                    intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
+                intersection_points = self._get_intersection(e0,e1)
 
                 correct_order = self._sort_vertex_indices_by_angle(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
                 assert(len(intersection_points)==len(correct_order))
@@ -291,14 +307,8 @@ class CellComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                if self.graph[e0][e1]["vertices"] is not None:
-                    pts = []
-                    for v in self.graph[e0][e1]["vertices"]:
-                        pts.append(tuple(v))
-                    pts = list(set(pts))
-                    intersection_points = np.array(pts, dtype=object)
-                else:
-                    intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
+
+                intersection_points = self._get_intersection(e0,e1)
 
                 correct_order = self._sort_vertex_indices_by_angle(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
                 assert(len(intersection_points)==len(correct_order))
@@ -340,13 +350,66 @@ class CellComplex:
             self.cellComplexExporter.write_cells(self.model,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
 
 
-    def extract_in_cells(self,filename):
 
-        in_vert_count = 0
+
+    def extract_in_cells(self,filename,to_ply=True):
+
+
+        os.makedirs(os.path.dirname(filename),exist_ok=True)
+        f = open(filename,'w')
+
+
+        verts = []
+        facets = []
+        vert_count = 0
         for i,node in enumerate(self.graph.nodes(data=True)):
             if node[1]["occupancy"] == 1:
-                self.cellComplexExporter.write_cells(self.model, node[1]['convex'],filename=filename,count=i, inside_vert_count=in_vert_count)
-                in_vert_count+=len(node[1]['convex'].vertices())
+                c = np.random.random(size=3)
+                c = (c * 255).astype(int)
+                polyhedron = node[1]["convex"]
+                ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
+                for v in ss[2]:
+                    v = v.split(' ')
+                    verts.append([v[1], v[2], v[3], str(c[0]), str(c[1]), str(c[2])])
+
+                for fa in ss[3]:
+                    tf = []
+                    for ffa in fa[2:].split(' '):
+                        tf.append(str(int(ffa) + vert_count -1) + " ")
+                    facets.append(tf)
+                vert_count+=len(ss[2])
+
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write("element vertex {}\n".format(len(verts)))
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("element face {}\n".format(len(facets)))
+        f.write("property list uchar int vertex_index\n")
+        f.write("end_header\n")
+        for v in verts:
+            f.write("{} {} {} {} {} {}\n".format(v[0],v[1],v[2],v[3],v[4],v[5]))
+        for fa in facets:
+            f.write("{} ".format(len(fa)))
+            for v in fa:
+                f.write("{}".format(v))
+            f.write("\n")
+
+
+        f.close()
+
+        a=5
+
+
+
+        # if to_ply:
+        #     mesh = o3d.io.read_triangle_mesh(filename)
+        #     filename = Path(filename).with_suffix(".ply")
+        #     o3d.io.write_triangle_mesh(filename,mesh)
 
 
     @staticmethod
@@ -430,8 +493,9 @@ class CellComplex:
         pl.loadMesh(m["mesh"])
         points = []
         points_len = []
-        for i,node in enumerate(self.graph.nodes(data=True)):
-            cell = node[1]['convex']
+        # for i,node in enumerate(self.graph.nodes(data=True)):
+        #     cell = node[1]['convex']
+        for i,cell in enumerate(self.cells):
             if export:
                 self.cellComplexExporter.write_cells(m,cell,count=i,subfolder="final_cells")
             pts = np.array(cell.vertices())
@@ -546,16 +610,36 @@ class CellComplex:
 
         return left,right
 
+    def _init_polygons(self):
 
-    def regularize_polygon_edges(self):
+        for e0,e1 in self.graph.edges:
 
+            edge = self.graph.edges[e0,e1]
+            c0 = self.graph.nodes[e0]["convex"]
+            c1 = self.graph.nodes[e1]["convex"]
+            edge["intersection"] = c0.intersection(c1)
+            edge["vertices"] =  []
+
+        self.polygons_initialized = True
+
+
+    def make_polygons(self):
+
+        """adds missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors"""
+
+        if not self.polygons_initialized:
+            self._init_polygons()
 
         for c0,c1 in self.graph.edges:
+
+            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]: continue
 
             current_edge = self.graph[c0][c1]
             current_facet = current_edge["intersection"]
 
             for neighbor in list(self.graph[c0]):
+
+                if neighbor == c1: continue
 
                 this_edge = self.graph[c0][neighbor]
                 this_facet = this_edge["intersection"]
@@ -568,6 +652,8 @@ class CellComplex:
 
             for neighbor in list(self.graph[c1]):
 
+                if neighbor == c0: continue
+
                 this_edge = self.graph[c1][neighbor]
                 this_facet = this_edge["intersection"]
                 facet_intersection = current_facet.intersection(this_facet)
@@ -576,11 +662,6 @@ class CellComplex:
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
                     this_edge["vertices"] += facet_intersection.vertices_list()
-
-
-
-
-
 
 
 
@@ -594,7 +675,6 @@ class CellComplex:
         # save the number how often a certain plane has been split, so when I export split / non-split planes in green and red, I can export
         # green: non-split, blue: 1-split, red: 2-split and more
 
-        self._init_bounding_box(m)
 
         ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
@@ -656,7 +736,7 @@ class CellComplex:
 
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
-            if(cell_negative.dim() > 2):
+            if(cell_negative.dim() == 3):
             # if(not cell_negative.is_empty()):
                 if export:
                     self.cellComplexExporter.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
@@ -666,7 +746,7 @@ class CellComplex:
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
                 graph.add_node(neg_cell_count,convex=cell_negative)
 
-            if(cell_positive.dim() > 2):
+            if(cell_positive.dim() == 3):
             # if(not cell_positive.is_empty()):
                 if export:
                     self.cellComplexExporter.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
@@ -677,7 +757,7 @@ class CellComplex:
                 graph.add_node(pos_cell_count,convex=cell_positive)
 
             # if(not cell_positive.is_empty() and not cell_negative.is_empty()):
-            if(cell_positive.dim() > 2 and cell_negative.dim() > 2):
+            if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
                 new_intersection = cell_negative.intersection(cell_positive)
                 graph.add_edge(cell_count-1, cell_count, intersection=new_intersection, vertices=[],
                                supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int))
@@ -724,9 +804,11 @@ class CellComplex:
             self.cellComplexExporter.write_graph(m,graph)
 
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
-        self.constructed = True
 
-        self.regularize_polygon_edges()
+        self.constructed = True
+        self.polygons_initialized = True
+
+        # self.regularize_polygon_edges()
 
 
 
@@ -735,7 +817,7 @@ class CellComplex:
         return 0
 
 
-    def prioritise_planes(self, mode = ["vertical", "random"]):
+    def prioritise_planes(self, mode = ["vertical", "random", "norm"]):
         """
         Prioritise certain planes to favour building reconstruction.
 
@@ -752,21 +834,21 @@ class CellComplex:
         """
         logger.info('prioritising planar primitives')
 
-        # compute the priority
-        indices_sorted_planes = self._sort_planes()
 
+
+        indices_sorted_planes = np.arange(len(self.planes))
 
         if mode == "random":
             np.random.shuffle(indices_sorted_planes)
             indices_priority = indices_sorted_planes
-
-
-
-        if mode == "vertical":
+        elif mode == "vertical":
             indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
             bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
             indices_priority = np.append(indices_sorted_planes[bool_vertical_planes],
                                          indices_sorted_planes[np.invert(bool_vertical_planes)])
+        else:
+            # compute the priority
+            indices_sorted_planes = self._sort_planes(mode)
 
         # reorder both the planes and their bounds
         self.planes = self.planes[indices_priority]
@@ -957,13 +1039,13 @@ class CellComplex:
 
         if interface_positive.dim() == 2:
             # this neighbour can connect with either or both children
-            self.graph.add_edge(self.index_node + 1, n)
+            self.graph.add_edge(self.index_node + 1, n, supporting_plane=kwargs["supporting_plane"])
             interface_negative = cell_negative.intersection(cell_neighbour)
             if interface_negative.dim() == 2:
-                self.graph.add_edge(self.index_node + 2, n)
+                self.graph.add_edge(self.index_node + 2, n, supporting_plane=kwargs["supporting_plane"])
         else:
             # this neighbour must otherwise connect with the other child
-            self.graph.add_edge(self.index_node + 2, n)
+            self.graph.add_edge(self.index_node + 2, n, supporting_plane=kwargs["supporting_plane"])
 
     def construct(self, exhaustive=False, num_workers=0):
         """
@@ -985,6 +1067,10 @@ class CellComplex:
         num_workers: int
             Number of workers for multi-processing, disabled if set 0
         """
+
+        self.cells_bounds = [self.bounding_poly.bounding_box()]
+        self.cells = [self.bounding_poly]
+
         if exhaustive:
             logger.info('construct exhaustive cell complex'.format())
         else:
@@ -1031,11 +1117,11 @@ class CellComplex:
                 # incrementally build the adjacency graph
                 if self.graph is not None:
                     # append the two nodes (UID) being partitioned
-                    self.graph.add_node(self.index_node + 1)
-                    self.graph.add_node(self.index_node + 2)
+                    self.graph.add_node(self.index_node + 1,convex=cell_positive)
+                    self.graph.add_node(self.index_node + 2,convex=cell_negative)
 
                     # append the edge in between
-                    self.graph.add_edge(self.index_node + 1, self.index_node + 2)
+                    self.graph.add_edge(self.index_node + 1, self.index_node + 2,supporting_plane=self.planes[i])
 
                     # get neighbours of the current cell from the graph
                     neighbours = self.graph[list(self.graph.nodes)[index_cell]]  # index in the node list
@@ -1051,7 +1137,9 @@ class CellComplex:
 
                         kwargs = []
                         for n, cell in zip(neighbours, cells_neighbours):
-                            kwargs.append({'n': n, 'positive': cell_positive, 'negative': cell_negative, 'neighbour': cell})
+                            supporting_plane = self.graph.edges[list(self.graph.nodes)[index_cell],n]["supporting_plane"]
+                            kwargs.append({'n': n, 'positive': cell_positive, 'negative': cell_negative, 'neighbour': cell,
+                                           'supporting_plane':supporting_plane})
 
                         if pool is None:
                             for k in kwargs:
