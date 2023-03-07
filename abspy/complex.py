@@ -187,8 +187,8 @@ class CellComplex:
         ## project to plane
         pp=self._project_points_to_plane(points,plane)
 
-        centroid = np.mean(pp,axis=0)
-        vectors = pp[:,:2] - centroid[:2]
+        center = np.mean(pp,axis=0)
+        vectors = pp[:,:2] - center[:2]
         # vectors = vectors/np.linalg.norm(vectors)
         radians = np.arctan2(vectors[:,1],vectors[:,0])
 
@@ -207,16 +207,37 @@ class CellComplex:
         cross=0
         while np.sum(cross) == 0:
             a = vector(points[i+1] - points[i])
-            a = a/a.norm()
+            # a = a/a.norm()
             b = vector(points[i+2] - points[i])
-            b = b/b.norm()
+            # b = b/b.norm()
             cross = a.cross_product(b)
             i+=1
 
         c = vector(np.array(outside,dtype=object) - points[i])
-        c = c/c.norm()
-        cross = cross/cross.norm()
+        # c = c/c.norm()
+        # cross = cross/cross.norm()
         dot = cross.dot_product(c)
+
+        return dot < 0
+
+    def _orient_inexact_polygon(self, points, outside):
+        # check for left or right orientation
+        # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
+
+        i = 0
+        cross=0
+        while np.sum(cross) == 0:
+            a = points[i+1] - points[i]
+            a = a/np.linalg.norm(a)
+            b = points[i+2] - points[i]
+            b = b/np.linalg.norm(b)
+            cross = np.cross(a,b)
+            i+=1
+
+        c = np.array(outside) - points[i]
+        c = c/np.linalg.norm(c)
+        cross = cross/np.linalg.norm(cross)
+        dot = np.dot(cross,c)
 
         return dot < 0
 
@@ -250,8 +271,8 @@ class CellComplex:
 
         for ec, (e0, e1) in enumerate(self.graph.edges):
 
-            if e0 > e1:
-                continue
+            # if e0 > e1:
+            #     continue
 
             c0 = self.graph.nodes[e0]
             c1 = self.graph.nodes[e1]
@@ -268,8 +289,8 @@ class CellComplex:
                     continue
 
                 ## orient polygon
-                outside = c0["convex"].centroid() if c1["occupancy"] else c1["convex"].centroid()
-                if self._orient_exact_polygon(intersection_points,outside):
+                outside = c0["convex"].center() if c1["occupancy"] else c1["convex"].center()
+                if self._orient_inexact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 for i in range(intersection_points.shape[0]):
@@ -299,8 +320,8 @@ class CellComplex:
         all_points = []
         for e0, e1 in self.graph.edges:
 
-            if e0 > e1:
-                continue
+            # if e0 > e1:
+            #     continue
 
             c0 = self.graph.nodes[e0]
             c1 = self.graph.nodes[e1]
@@ -310,15 +331,18 @@ class CellComplex:
 
                 intersection_points = self._get_intersection(e0,e1)
 
-                correct_order = self._sort_vertex_indices_by_angle(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
+                intersection_points_float = intersection_points.astype(float)
+                correct_order = self._sort_vertex_indices_by_angle(intersection_points_float,self.graph[e0][e1]["supporting_plane"])
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
                 if(len(intersection_points)<3):
-                    continue
+                    print("ERROR: Encountered facet with less than 2 vertices.")
+                    sys.exit(1)
 
                 ## orient polygon
-                outside = c0["convex"].centroid() if c1["occupancy"] else c1["convex"].centroid()
+                outside = c0["convex"].center() if c1["occupancy"] else c1["convex"].center()
+                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
                 if self._orient_exact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
@@ -514,6 +538,9 @@ class CellComplex:
 
     def _get_best_plane(self,current_ids,planes,point_groups,export=False):
 
+        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
+        ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
+
         ### the whole thing vectorized. doesn't really work for some reason
         # UPDATE: should work, first tries where with wrong condition
         # planes = np.repeat(vertex_group.planes[np.newaxis,current_ids,:],current_ids.shape[0],axis=0)
@@ -528,23 +555,24 @@ class CellComplex:
             for id2 in current_ids:
                 if id == id2: continue
                 which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2] + planes[id, 3]
-                left+= (which_side < 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the left of the current plane
-                right+= (which_side > 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the right of the current plane
+                which_side = (which_side < 0)
+                left+=(which_side).all(axis=-1)
+                right+=(~which_side).all(axis=-1)
+                # left+= (which_side < 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the left of the current plane
+                # right+= (which_side > 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the right of the current plane
             if left == current_ids.shape[0]-1 or right == current_ids.shape[0]-1:
                 return i
 
             left_right.append([left, right])
 
-        assert(len(left_right)==len(current_ids))
-
         left_right = np.array(left_right)
-        left_right = left_right.sum(axis=1)
+        # left_right = left_right.sum(axis=1)
+        left_right = np.product(left_right,axis=1)
         best_plane_id = np.argmax(left_right)
-
 
         return best_plane_id
 
-    def _split_planes(self,best_plane_id,current_ids,planes,halfspaces,point_groups, th=1):
+    def _split_planes(self,best_plane_id,current_ids,planes,plane_split_count,halfspaces,point_groups, th=1):
 
         '''
         :param best_plane_id:
@@ -586,18 +614,20 @@ class CellComplex:
                     point_groups.append(left_points)
                     planes = np.vstack((planes, planes[id]))
                     halfspaces = np.vstack((halfspaces,halfspaces[id]))
+                    plane_split_count.append(plane_split_count[id]+1)
                 if (right_points.shape[0] > th):
                     right_planes.append(planes.shape[0])
                     point_groups.append(right_points)
                     planes = np.vstack((planes, planes[id]))
                     halfspaces = np.vstack((halfspaces,halfspaces[id]))
+                    plane_split_count.append(plane_split_count[id]+1)
 
                 self.split_count+=1
 
-                planes[id, :] = np.nan
-                point_groups[id][:, :] = np.nan
+                # planes[id, :] = np.nan
+                # point_groups[id][:, :] = np.nan
 
-        return left_planes,right_planes, planes, halfspaces, point_groups
+        return left_planes,right_planes, planes, plane_split_count, halfspaces, point_groups
 
 
     def _which_side(self,points,plane):
@@ -632,36 +662,36 @@ class CellComplex:
 
         for c0,c1 in self.graph.edges:
 
-            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]: continue
+            if self.graph.nodes[c0]["occupancy"] != self.graph.nodes[c1]["occupancy"]:
 
-            current_edge = self.graph[c0][c1]
-            current_facet = current_edge["intersection"]
+                current_edge = self.graph[c0][c1]
+                current_facet = current_edge["intersection"]
 
-            for neighbor in list(self.graph[c0]):
+                for neighbor in list(self.graph[c0]):
 
-                if neighbor == c1: continue
+                    if neighbor == c1: continue
 
-                this_edge = self.graph[c0][neighbor]
-                this_facet = this_edge["intersection"]
-                facet_intersection = current_facet.intersection(this_facet)
+                    this_edge = self.graph[c0][neighbor]
+                    this_facet = this_edge["intersection"]
+                    facet_intersection = current_facet.intersection(this_facet)
 
-                # if not facet_intersection.is_empty():
-                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
-                    current_edge["vertices"]+=facet_intersection.vertices_list()
-                    this_edge["vertices"]+=facet_intersection.vertices_list()
+                    # if not facet_intersection.is_empty():
+                    if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
+                        current_edge["vertices"]+=facet_intersection.vertices_list()
+                        this_edge["vertices"]+=facet_intersection.vertices_list()
 
-            for neighbor in list(self.graph[c1]):
+                for neighbor in list(self.graph[c1]):
 
-                if neighbor == c0: continue
+                    if neighbor == c0: continue
 
-                this_edge = self.graph[c1][neighbor]
-                this_facet = this_edge["intersection"]
-                facet_intersection = current_facet.intersection(this_facet)
+                    this_edge = self.graph[c1][neighbor]
+                    this_facet = this_edge["intersection"]
+                    facet_intersection = current_facet.intersection(this_facet)
 
-                # if not facet_intersection.is_empty():
-                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
-                    current_edge["vertices"] += facet_intersection.vertices_list()
-                    this_edge["vertices"] += facet_intersection.vertices_list()
+                    # if not facet_intersection.is_empty():
+                    if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
+                        current_edge["vertices"] += facet_intersection.vertices_list()
+                        this_edge["vertices"] += facet_intersection.vertices_list()
 
 
 
@@ -672,17 +702,14 @@ class CellComplex:
 
         # TODO: i need a secomd ordering for when two planes have the same surface split score, take the one with the bigger area.
         # because randommly shuffling the planes before this function has a big influence on the result
-        # save the number how often a certain plane has been split, so when I export split / non-split planes in green and red, I can export
-        # green: non-split, blue: 1-split, red: 2-split and more
 
-
-        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
-        ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
 
         ### make a new planes array, to which planes that are split can be appanded
         planes = deepcopy(self.planes)
         halfspaces = deepcopy(self.halfspaces)
         point_groups = list(self.points)
+        plane_split_count =[0]*len(self.planes)
+        plane_colors = [[0,1,0],[1,0,0],[0,0,1],[139/255,0,139/255]]
 
         cell_count = 0
         self.split_count = 0
@@ -710,29 +737,27 @@ class CellComplex:
             best_plane = planes[current_ids[best_plane_id]]
             plane_count+=1
 
-            if current_ids[best_plane_id] >= len(self.planes):
-                a=5
+            ### split the planes
+            left_planes, right_planes, planes, plane_split_count, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,plane_split_count,halfspaces,point_groups, th)
 
             ### export best plane
             if export:
-                color = [1, 0, 0] if current_ids[best_plane_id] >= len(self.planes) else [0, 1, 0]  # split planes are red, unsplit planes are green
                 epoints = point_groups[current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
+                nsplits = plane_split_count[current_ids[best_plane_id]]
+                color = plane_colors[nsplits] if nsplits < 4 else plane_colors[3]
+                if nsplits > 0:
+                    a=5
                 if epoints.shape[0]>3:
                     self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
-            ### split the planes
-            left_planes, right_planes, planes, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,halfspaces,point_groups, th)
 
             ## create the new convexes
             current_cell = tree[child].data["convex"]
-            # hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-            #                                     self._inequalities(best_plane)]
             hspace_positive, hspace_negative = halfspaces[current_ids[best_plane_id],0], halfspaces[current_ids[best_plane_id],1]
 
             cell_negative = current_cell.intersection(hspace_negative)
             cell_positive = current_cell.intersection(hspace_positive)
-
 
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
@@ -802,6 +827,8 @@ class CellComplex:
         self.graph = graph
         if export:
             self.cellComplexExporter.write_graph(m,graph)
+
+
 
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
 
@@ -1218,103 +1245,6 @@ class CellComplex:
 
         else:
             raise ValueError('engine must be either "Qhull" or "Sage"')
-
-    def cell_representatives(self, location='center', num=1):
-        """
-        Return representatives of cells in the complex.
-
-        Parameters
-        ----------
-        location: str
-            'center' represents the average of the vertices of the polyhedron,
-            'centroid' represents the center of mass/volume,
-            'random' represents random point(s),
-            'star' represents star-like point(s)
-        num: int
-            number of samples per cell, only applies to 'random' and 'star'
-
-        Returns
-        -------
-        as_float: (n, 3) float for 'center' and 'centroid', or (m, n, 3) for 'random' and 'star'
-            Representatives of cells in the complex.
-        """
-        if location == 'center':
-            return [cell.center() for cell in self.cells]
-        elif location == 'centroid':
-            return [cell.centroid() for cell in self.cells]
-        elif location == 'random':
-            points = []
-            for cell in self.cells:
-                bbox = cell.bounding_box()
-                points_cell = []
-                while len(points_cell) < num:
-                    sample = (uniform(bbox[0][0], bbox[1][0]), uniform(bbox[0][1], bbox[1][1]),
-                              uniform(bbox[0][2], bbox[1][2]))
-                    if cell.contains(sample):
-                        points_cell.append(sample)
-                points.append(points_cell)
-            return points
-
-        elif location == 'star':
-            points = []
-            for cell in self.cells:
-                vertices = cell.vertices_list()
-                if num <= len(vertices):
-                    # vertices given high priority
-                    points.append(choices(vertices, k=num))
-                else:
-                    num_per_vertex = num // len(vertices)
-                    num_remainder = num % len(vertices)
-                    centroid = cell.centroid()
-                    points_cell = []
-                    for vertex in vertices[:-1]:
-                        points_cell.extend([vertex + (centroid - np.array(vertex)) / num_per_vertex * i
-                                           for i in range(num_per_vertex)])
-                    # last vertex consumes remainder points
-                    points_cell.extend([vertices[-1] + (centroid - np.array(vertices[-1])) / (num_remainder + num_per_vertex)
-                                       * i for i in range(num_remainder + num_per_vertex)])
-                    points.append(points_cell)
-            return points
-
-        else:
-            raise ValueError("expected 'center', 'centroid', 'random' or 'star' as mode, got {}".format(location))
-
-    def cells_in_mesh(self, filepath_mesh, engine='ray'):
-        """
-        Return indices of cells that are inside a reference mesh.
-
-        Parameters
-        ----------
-        filepath_mesh: str or Path
-            Filepath to reference mesh
-        engine: str
-            Engine to compute predicate, can be 'ray' for ray intersection, or 'distance' for signed distance
-
-        Returns
-        -------
-        as_int: (n, ) int
-            Indices of cells being inside the reference mesh
-        """
-        mesh = trimesh.load_mesh(filepath_mesh)
-        centers = self.cell_representatives(location='center')
-
-        if engine == 'ray':
-            # raytracing not stable for non-watertight mesh (incl. with inner structure)
-            try:
-                # https://trimsh.org/trimesh.ray.ray_pyembree.html
-                contains = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh).contains_points(centers)
-            except ModuleNotFoundError:
-                # https://trimsh.org/trimesh.ray.ray_triangle.html
-                logger.warning('pyembree installation not found; fall back to ray_triangle')
-                contains = mesh.contains(centers)
-            return contains.nonzero()[0]
-
-        elif engine == 'distance':
-            # https://trimsh.org/trimesh.proximity.html
-            distances = trimesh.proximity.signed_distance(mesh, centers)
-            return (distances >= 0).nonzero()[0]
-        else:
-            raise ValueError("expected 'ray' or 'distance' as engine, got {}".format(engine))
 
 
     def print_info(self):
