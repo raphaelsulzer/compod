@@ -658,29 +658,33 @@ class CellComplex:
 
         self.polygons_initialized = True
 
-
     def simplify(self):
+
+        def filter_edge(n0,n1):
+            # return not self.graph.edges[n0,n1]["processed"]
+            to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
+            return to_process
 
         k=0
         count = 0
         processed = list(nx.get_edge_attributes(self.graph,"processed").values())
         print(len(self.graph.edges))
-        while not np.array(processed).all():
-            count+=1
-            c0,c1 = list(self.graph.edges)[k]
+        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
+        deleted_nodes=[]
+        while len(edges):
 
-            if self.graph[c0][c1]["processed"]:
-                k = (k + 1) % len(list(self.graph.edges))
-                continue
+            for c0,c1 in edges:
 
-            if (self.graph.nodes[c0]["occupancy"] == 1 and self.graph.nodes[c1]["occupancy"] == 1) and self.graph[c0][c1]["convex_intersection"]:
+                if c0 in deleted_nodes or c1 in deleted_nodes: continue
+
                 nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
                 # self.graph.nodes[c0]["convex"] = self.graph.nodes[c0]["convex"].convex_hull(self.graph.nodes[c0]["contraction"][c1]["convex"])
                 parent = self.tree.parent(c0)
                 pp_id = self.tree.parent(parent.identifier).identifier
                 self.graph.nodes[c0]["convex"] = parent.data["convex"]
 
-                self.tree.remove_subtree(parent.identifier)
+                self.tree.remove_node(parent.identifier)
+                deleted_nodes.append(c1)
 
                 dd = {"convex": parent.data["convex"], "plane_ids": parent.data["plane_ids"]}
                 self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
@@ -690,19 +694,57 @@ class CellComplex:
                     self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
                     self.graph.edges[c0, sibling.identifier]["processed"] = False
 
-            else:
-                self.graph[c0][c1]["processed"] = True
-
-            k = (k+1)%len(list(self.graph.edges))
-            processed = list(nx.get_edge_attributes(self.graph,"processed").values())
-            a=5
-
-        print(count)
-        a=5
+            edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
         self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
         self._init_polygons()
 
+
+    # def simplify(self):
+    #
+    #     k=0
+    #     count = 0
+    #     processed = list(nx.get_edge_attributes(self.graph,"processed").values())
+    #     print(len(self.graph.edges))
+    #     while not np.array(processed).all():
+    #         count+=1
+    #         c0,c1 = list(self.graph.edges)[k]
+    #
+    #         if self.graph[c0][c1]["processed"]:
+    #             k = (k + 1) % len(list(self.graph.edges))
+    #             continue
+    #
+    #         if (self.graph.nodes[c0]["occupancy"] == 1 and self.graph.nodes[c1]["occupancy"] == 1) and self.graph[c0][c1]["convex_intersection"]:
+    #             nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+    #             # self.graph.nodes[c0]["convex"] = self.graph.nodes[c0]["convex"].convex_hull(self.graph.nodes[c0]["contraction"][c1]["convex"])
+    #             parent = self.tree.parent(c0)
+    #             pp_id = self.tree.parent(parent.identifier).identifier
+    #             self.graph.nodes[c0]["convex"] = parent.data["convex"]
+    #
+    #             #self.tree.remove_subtree(parent.identifier)
+    #             self.tree.remove_node(parent.identifier)
+    #
+    #             dd = {"convex": parent.data["convex"], "plane_ids": parent.data["plane_ids"]}
+    #             self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
+    #
+    #             sibling =  self.tree.siblings(c0)[0]
+    #             if sibling.is_leaf():
+    #                 self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
+    #                 self.graph.edges[c0, sibling.identifier]["processed"] = False
+    #
+    #         else:
+    #             self.graph[c0][c1]["processed"] = True
+    #
+    #         k = (k+1)%len(list(self.graph.edges))
+    #         processed = list(nx.get_edge_attributes(self.graph,"processed").values())
+    #         a=5
+    #
+    #     print(count)
+    #     a=5
+    #
+    #     self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+    #     self._init_polygons()
+    #
 
 
 
