@@ -46,13 +46,17 @@ class CellComplexExporter:
         f = open(filename,'w')
         all_nodes = np.array(graph.nodes())
         for i,node in enumerate(graph.nodes(data=True)):
-            centroid = np.array(node[1]["convex"].centroid())
+            centroid = np.array(node[1]["convex"].center())
             f.write("v {:.3f} {:.3f} {:.3f} {} {} {}\n".format(centroid[0],centroid[1],centroid[2],c[0],c[1],c[2]))
             edges = list(graph.edges(node[0]))
             for c1,c2 in edges:
-                nc1 = np.where(all_nodes==c1)[0][0]
-                nc2 = np.where(all_nodes==c2)[0][0]
-                edge_strings.append("l {} {}\n".format(nc1+1,nc2+1))
+                if not graph.edges[c1,c2]["convex_intersection"]:
+                    nc1 = np.where(all_nodes == c1)[0][0]
+                    nc2 = np.where(all_nodes == c2)[0][0]
+                    edge_strings.append("l {} {}\n".format(nc1 + 1, nc2 + 1))
+                # nc1 = np.where(all_nodes==c1)[0][0]
+                # nc2 = np.where(all_nodes==c2)[0][0]
+                # edge_strings.append("l {} {} {} {} {}\n".format(nc1+1,nc2+1,col[0],col[1],col[2]))
 
 
         for edge in edge_strings:

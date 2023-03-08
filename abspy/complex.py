@@ -136,8 +136,7 @@ class CellComplex:
 
         ### project inlier points to plane
         ## https://www.baeldung.com/cs/3d-point-2d-plane
-        k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / \
-            (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
+        k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
         pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]])
         ## make e1 and e2 (see bottom of page linked above)
         ## take a starting vector (e0) and take a component of this vector which is nonzero (see here: https://stackoverflow.com/a/33758795)
@@ -642,6 +641,11 @@ class CellComplex:
 
     def _init_polygons(self):
 
+        """
+        1. intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
+        2. init an empty vertices list needed for self.construct_polygons
+        """
+
         for e0,e1 in self.graph.edges:
 
             edge = self.graph.edges[e0,e1]
@@ -652,50 +656,91 @@ class CellComplex:
 
         self.polygons_initialized = True
 
+    def collapse_convex_intersections(self):
 
-    def make_polygons(self):
+        deleted_nodes = []
+        for c0, c1 in list(self.graph.edges):
+            if c0 in deleted_nodes or c1 in deleted_nodes: continue
+            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
+
+                if self.graph[c0][c1]["convex_intersection"]:
+
+                    # left_convex = self.graph.nodes[c0]["convex"]
+                    # right_convex = self.graph.nodes[c1]["convex"]
+                    # left_parent_convex = self.tree.parent(c0).data["convex"]
+                    # right_parent_convex = self.tree.parent(c1).data["convex"]
+                    #
+                    # # self.cellComplexExporter.write_cells(self.model, left_convex, count=str(count)+"left",subfolder="collapse")
+                    # # self.cellComplexExporter.write_cells(self.model, right_convex, count=str(count)+"right",subfolder="collapse")
+                    # # self.cellComplexExporter.write_cells(self.model, left_parent_convex, count=str(count)+"parent_left",subfolder="collapse")
+                    # # self.cellComplexExporter.write_cells(self.model, right_parent_convex, count=str(count)+"parent_right",subfolder="collapse")
+                    #
+
+                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                    self.graph.nodes[c0]["convex"] = self.graph.nodes[c0]["convex"].convex_hull(self.graph.nodes[c0]["contraction"][c1]["convex"])
+                    deleted_nodes.append(c1)
+
+
+                    # intersection = left_convex.intersection(right_convex)
+                    # if intersection.dim() > 2:
+                    #     self.cellComplexExporter.write_cells(self.model, left_convex, count="left")
+                    #     self.cellComplexExporter.write_cells(self.model, right_convex, count="right")
+                    #     self.cellComplexExporter.write_cells(self.model, intersection, count="intersection")
+                    #     a=5
+                    # for neighbor in self.graph[c0]:
+                    #     this_convex =  self.graph.nodes[c0]["convex"]
+                    #     n_convex = self.graph.nodes[neighbor]["convex"]
+                    #     intersection = this_convex.intersection(n_convex)
+                    #     if len(intersection.vertices_list()) < 3:
+                    #
+                    #         self.cellComplexExporter.write_cells(self.model,this_convex,count="union")
+                    #         self.cellComplexExporter.write_cells(self.model,left_convex,count="left")
+                    #         self.cellComplexExporter.write_cells(self.model,right_convex,count="right")
+                    #         self.cellComplexExporter.write_cells(self.model,n_convex,count="neighbor")
+                    #
+                    #         a=5
+
+        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+        self._init_polygons()
+
+    def construct_polygons(self):
 
         """adds missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors"""
 
         if not self.polygons_initialized:
             self._init_polygons()
 
-        for c0,c1 in self.graph.edges:
+        for c0,c1 in list(self.graph.edges):
 
             if self.graph.nodes[c0]["occupancy"] != self.graph.nodes[c1]["occupancy"]:
-
                 current_edge = self.graph[c0][c1]
                 current_facet = current_edge["intersection"]
 
                 for neighbor in list(self.graph[c0]):
-
                     if neighbor == c1: continue
 
                     this_edge = self.graph[c0][neighbor]
                     this_facet = this_edge["intersection"]
                     facet_intersection = current_facet.intersection(this_facet)
 
-                    # if not facet_intersection.is_empty():
                     if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                         current_edge["vertices"]+=facet_intersection.vertices_list()
                         this_edge["vertices"]+=facet_intersection.vertices_list()
 
                 for neighbor in list(self.graph[c1]):
-
                     if neighbor == c0: continue
 
                     this_edge = self.graph[c1][neighbor]
                     this_facet = this_edge["intersection"]
                     facet_intersection = current_facet.intersection(this_facet)
 
-                    # if not facet_intersection.is_empty():
                     if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                         current_edge["vertices"] += facet_intersection.vertices_list()
                         this_edge["vertices"] += facet_intersection.vertices_list()
 
 
 
-    def construct_adaptive(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
+    def construct_partition(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
 
 
         ## Tree.DEPTH seems slightly faster then Tree.WIDTH
@@ -714,6 +759,7 @@ class CellComplex:
         cell_count = 0
         self.split_count = 0
 
+
         ## init the graph
         graph = nx.Graph()
         graph.add_node(cell_count, convex=self.bounding_poly)
@@ -725,6 +771,7 @@ class CellComplex:
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0
         edge_id=0
+        convex_intersection=False
         for child in children:
 
             current_ids = tree[child].data["plane_ids"]
@@ -785,31 +832,36 @@ class CellComplex:
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
                 new_intersection = cell_negative.intersection(cell_positive)
                 graph.add_edge(cell_count-1, cell_count, intersection=new_intersection, vertices=[],
-                               supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int))
+                               supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int),
+                               convex_intersection=True)
                 if export:
                     self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors_of_old_cell = list(graph[child])
-            old_cell=child
-            for neighbor_of_old_cell in neighbors_of_old_cell:
+            old_cell_id=child
+            for neighbor_id_old_cell in neighbors_of_old_cell:
                 # get the neighboring convex
-                nconvex = graph.nodes[neighbor_of_old_cell]["convex"]
+                nconvex = graph.nodes[neighbor_id_old_cell]["convex"]
                 # intersect new cells with old neighbors to make the new facets
                 negative_intersection = nconvex.intersection(cell_negative)
                 positive_intersection = nconvex.intersection(cell_positive)
 
-                # n_nonempty = not negative_intersection.is_empty()
-                # p_nonempty = not positive_intersection.is_empty()
                 n_nonempty = negative_intersection.dim()==2
                 p_nonempty = positive_intersection.dim()==2
                 # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
                 if n_nonempty:
-                    graph.add_edge(neighbor_of_old_cell,neg_cell_count,intersection=negative_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_of_old_cell][old_cell]["supporting_plane"],id=edge_id,color=(np.random.rand(3)*255).astype(int))
+                    # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
+                    #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == negative_intersection))
+                    graph.add_edge(neighbor_id_old_cell,neg_cell_count,intersection=negative_intersection, vertices=[],
+                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"],
+                                   id=edge_id,color=(np.random.rand(3)*255).astype(int),convex_intersection=convex_intersection)
                 if p_nonempty:
-                    graph.add_edge(neighbor_of_old_cell, pos_cell_count, intersection=positive_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_of_old_cell][old_cell]["supporting_plane"],id=edge_id,color=(np.random.rand(3)*255).astype(int))
+                    # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
+                    #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == positive_intersection))
+                    graph.add_edge(neighbor_id_old_cell, pos_cell_count, intersection=positive_intersection, vertices=[],
+                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"],
+                                   id=edge_id,color=(np.random.rand(3)*255).astype(int),convex_intersection=convex_intersection)
 
 
             # nx.draw(graph,with_labels=True)  # networkx draw()
@@ -825,10 +877,9 @@ class CellComplex:
 
 
         self.graph = graph
+        self.tree = tree
         if export:
             self.cellComplexExporter.write_graph(m,graph)
-
-
 
         self.cells = list(nx.get_node_attributes(graph, "convex").values())
 
@@ -1074,7 +1125,7 @@ class CellComplex:
             # this neighbour must otherwise connect with the other child
             self.graph.add_edge(self.index_node + 2, n, supporting_plane=kwargs["supporting_plane"])
 
-    def construct(self, exhaustive=False, num_workers=0):
+    def construct_abspy(self, exhaustive=False, num_workers=0):
         """
         Construct cell complex.
 
