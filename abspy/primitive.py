@@ -10,7 +10,8 @@ can be used to generate such primitives from point clouds.
 Otherwise, one can refer to the vertex group file format specification
 attached to the README document.
 """
-
+import os.path
+import sys
 from random import random
 from pathlib import Path
 import struct
@@ -61,10 +62,15 @@ class VertexGroup:
         self.vg_oneline = vg_oneline
         self.merge_duplicates = merge_duplicates
 
-        self.process_npz()
-
-        # self.process()
-        # del self.lines # for closing the .vg file
+        ending = os.path.splitext(filepath)[1]
+        if ending == ".npz":
+            self.process_npz()
+        elif ending == ".vg":
+            self.process()
+            del self.lines # for closing the .vg file
+        else:
+            print("{} is not a valid file type for planes".format(ending))
+            sys.exit(1)
 
     def load_file(self):
         """
@@ -76,6 +82,8 @@ class VertexGroup:
                 # self.lines=np.array(fin.readlines())
                 self.lines = np.array(list(fin))
 
+        # TODO: make a vg2npz program for transforming the huge vg files from KSR42 dataset, to make them readable in python
+        #  Shouldn't be so hard, since I can already read plane .vg files and export plane .npz files in c++
 
         elif self.filepath.suffix == '.bvg':
             # define size constants
