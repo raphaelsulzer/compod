@@ -30,6 +30,7 @@ import trimesh
 from sage.all import polytopes, QQ, RR, Polyhedron, vector, PolyhedralComplex
 from treelib import Tree
 import open3d as o3d
+from tqdm import tqdm
 
 from .logger import attach_to_log
 logger = attach_to_log()
@@ -373,8 +374,6 @@ class CellComplex:
             self.cellComplexExporter.write_cells(self.model,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
 
 
-
-
     def extract_in_cells(self,filename,to_ply=True):
 
 
@@ -429,9 +428,6 @@ class CellComplex:
 
 
         f.close()
-
-
-
 
     @staticmethod
     def _obj_str(cells, use_mtl=False, filename_mtl='colours.mtl'):
@@ -501,7 +497,7 @@ class CellComplex:
         scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
 
         with open(filepath, 'w') as f:
-            f.writelines("# cells: {}\n".format(len(self.cells)))
+            f.writelines("# facets cells: {} {}\n".format(len(self.graph.edges),len(self.cells)))
             f.writelines(scene_str)
         if use_mtl:
             with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
@@ -555,8 +551,9 @@ class CellComplex:
             left = 0; right = 0
             for id2 in current_ids:
                 if id == id2: continue
-                which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2] + planes[id, 3]
-                which_side = (which_side < 0)
+                # which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2] + planes[id, 3]
+                which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2]
+                which_side = (which_side < -planes[id, 3])
                 left+=(which_side).all(axis=-1)
                 right+=(~which_side).all(axis=-1)
                 # left+= (which_side < 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the left of the current plane
@@ -595,10 +592,11 @@ class CellComplex:
             if id == current_ids[best_plane_id]:
                 continue
 
-            which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2] + best_plane[3]
+            # which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2] + best_plane[3]
+            which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2]
 
-            left_points = point_groups[id][which_side < 0, :]
-            right_points = point_groups[id][which_side > 0, :]
+            left_points = point_groups[id][which_side < -best_plane[3], :]
+            right_points = point_groups[id][which_side > -best_plane[3], :]
 
             assert (point_groups[id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
 
@@ -631,21 +629,12 @@ class CellComplex:
         return left_planes,right_planes, planes, plane_split_count, halfspaces, point_groups
 
 
-    def _which_side(self,points,plane):
-
-        points = np.array(points,dtype=float)
-
-        which_side = plane[0] * points[:, 0] + plane[1] * points[:, 1] + plane[2] * points[:, 2] + plane[3]
-        left = which_side <= 0
-        right = which_side >=0
-
-        return left,right
-
     def _init_polygons(self):
 
         """
-        1. intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
-        2. init an empty vertices list needed for self.construct_polygons
+        3. initialize the polygons
+        3a. intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
+        3b. init an empty vertices list needed for self.construct_polygons
         """
 
         for e0,e1 in self.graph.edges:
@@ -653,20 +642,29 @@ class CellComplex:
             edge = self.graph.edges[e0,e1]
             c0 = self.graph.nodes[e0]["convex"]
             c1 = self.graph.nodes[e1]["convex"]
+            # if not self.graph.edges[e0,e1]["intersection"]:
             edge["intersection"] = c0.intersection(c1)
             edge["vertices"] =  []
 
         self.polygons_initialized = True
 
+
+
     def simplify(self):
 
-        bb_vol = float(self.bounding_poly.volume())
+        """
+        2. simplify the partition
+        :return:
+        """
 
+        ## this function does not need the sibling polygons to be initialized, ie edges need to be there, but we do not need to know the intersection!! initalizing afterwards is sufficient!
+
+        bb_vol = float(self.bounding_poly.volume())
         perc = 0.0005
 
         def filter_edge(n0,n1):
             to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
-            # TODO: lqst thing I could try would be to sort planes without the 0 on one side stopping criterion in the hope that it leads
+            # TODO: lqst thing I could try for LOD reconstruction would be to sort planes without the 0 on one side stopping criterion in the hope that it leads
             #  to more symetric decomposition and thus more symmetric generalization
             # v1 = float(self.graph.nodes[n0]["convex"].volume())
             # v2 = float(self.graph.nodes[n1]["convex"].volume())
@@ -674,12 +672,12 @@ class CellComplex:
             # to_process = ((perc > v1/bb_vol or perc > v2/bb_vol) and self.graph.edges[n0,n1]["convex_intersection"])
             return to_process
 
-
+        collapse_count=0
         edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
         while len(edges):
 
             for c0,c1 in edges:
-
+                collapse_count+=1
                 nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
 
                 parent = self.tree.parent(c0)
@@ -691,39 +689,26 @@ class CellComplex:
                 dd = {"convex": parent.data["convex"], "plane_ids": parent.data["plane_ids"]}
                 self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
 
+                if len(self.tree.siblings(c0)) == 0:
+                    # TODO: maybe I can further simplify in this case by removing the alone sibling
+                    continue
+
                 sibling =  self.tree.siblings(c0)[0]
                 if sibling.is_leaf():
                     self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
-                    self.graph.edges[c0, sibling.identifier]["processed"] = False
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
         self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
-        self._init_polygons()
+        self.polygons_initialized = False
 
-
-    def collapse_convex_intersections(self):
-
-        """same as simplify but only one iteration, ie no processing of updated edges"""
-
-        deleted_nodes = []
-        for c0, c1 in list(self.graph.edges):
-            if c0 in deleted_nodes or c1 in deleted_nodes: continue
-            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
-
-                if self.graph[c0][c1]["convex_intersection"]:
-
-                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                    self.graph.nodes[c0]["convex"] = self.graph.nodes[c0]["convex"].convex_hull(self.graph.nodes[c0]["contraction"][c1]["convex"])
-                    # self.graph.nodes[c0]["convex"] = self.tree.parent(c0).data["convex"]
-                    deleted_nodes.append(c1)
-
-        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
-        self._init_polygons()
 
     def construct_polygons(self):
 
-        """adds missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors"""
+        """
+        4. add missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors
+        :return:
+        """
 
         if not self.polygons_initialized:
             self._init_polygons()
@@ -760,10 +745,20 @@ class CellComplex:
 
     def construct_partition(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
 
+        """
+        1. construct the partition
+        :param m:
+        :param mode:
+        :param th:
+        :param ordering:
+        :param export:
+        :return:
+        """
+
 
         ## Tree.DEPTH seems slightly faster then Tree.WIDTH
 
-        # TODO: i need a secomd ordering for when two planes have the same surface split score, take the one with the bigger area.
+        # TODO: i need a second ordering for when two planes have the same surface split score, take the one with the bigger area.
         # because randommly shuffling the planes before this function has a big influence on the result
 
         # The tag property of tree.node is what is shown when you call tree.show(). can be changed with tree.node(NODEid).tag = "some_text"
@@ -791,7 +786,10 @@ class CellComplex:
         plane_count = 0
         edge_id=0
         convex_intersection=False
+        pbar = tqdm()
         for child in children:
+
+            pbar.update(1)
 
             current_ids = tree[child].data["plane_ids"]
 
@@ -833,9 +831,11 @@ class CellComplex:
                     self.cellComplexExporter.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
-                neg_cell_count = cell_count
+                neg_cell_id = cell_count
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(neg_cell_count,convex=cell_negative)
+                graph.add_node(neg_cell_id,convex=cell_negative)
+            else:
+                logger.warning("Empty cell")
 
             if(cell_positive.dim() == 3):
             # if(not cell_positive.is_empty()):
@@ -843,16 +843,18 @@ class CellComplex:
                     self.cellComplexExporter.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
-                pos_cell_count = cell_count
+                pos_cell_id = cell_count
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(pos_cell_count,convex=cell_positive)
+                graph.add_node(pos_cell_id,convex=cell_positive)
+            else:
+                logger.warning("Empty cell")
+
 
             # if(not cell_positive.is_empty() and not cell_negative.is_empty()):
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
                 # if simplify is called, new
-                graph.add_edge(cell_count-1, cell_count, intersection=None, vertices=[],
-                               supporting_plane=best_plane,id=edge_id,color=(np.random.rand(3)*255).astype(int),
-                               convex_intersection=True, processed=False)
+                graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
+                               supporting_plane=best_plane, convex_intersection=True)
                 if export:
                     new_intersection = cell_negative.intersection(cell_positive)
                     self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
@@ -873,16 +875,13 @@ class CellComplex:
                 if n_nonempty:
                     # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
                     #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == negative_intersection))
-                    graph.add_edge(neighbor_id_old_cell,neg_cell_count,intersection=negative_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"],
-                                   id=edge_id,color=(np.random.rand(3)*255).astype(int),convex_intersection=False, processed=False)
+                    graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[],
+                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False)
                 if p_nonempty:
                     # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
                     #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == positive_intersection))
-                    graph.add_edge(neighbor_id_old_cell, pos_cell_count, intersection=positive_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"],
-                                   id=edge_id,color=(np.random.rand(3)*255).astype(int),convex_intersection=False, processed=False)
-
+                    graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
+                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False)
 
             # nx.draw(graph,with_labels=True)  # networkx draw()
             # plt.draw()
@@ -895,19 +894,14 @@ class CellComplex:
             ## remove the parent node
             graph.remove_node(child)
 
-
         self.graph = graph
         self.tree = tree
         if export:
             self.cellComplexExporter.write_graph(m,graph)
-
-        self.cells = list(nx.get_node_attributes(graph, "convex").values())
+        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
 
         self.constructed = True
-        self.polygons_initialized = True
-
-        # self.regularize_polygon_edges()
-
+        self.polygons_initialized = False # false because I do not initialize the sibling facets
 
 
         logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))

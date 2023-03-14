@@ -183,6 +183,7 @@ class VertexGroup:
             self.points_grouped.append(points[vert_group])
             last += npp
 
+        n_planes = self.planes.shape[0]
         # merge primitives that come from the same plane but are disconnected
         # this is disarable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
         if self.merge_duplicates:
@@ -201,6 +202,8 @@ class VertexGroup:
 
             self.planes = un[list(d.keys())]
             self.points_grouped = list(d.values())
+
+            logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
 
         # make the bounds and halfspace used in the cell complex construction
         self.bounds = []
