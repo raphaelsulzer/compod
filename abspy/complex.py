@@ -11,14 +11,9 @@ so will be the corresponding adjacency graph of the complex.
 """
 
 import os, sys
-import string
 from pathlib import Path
-import itertools
-import heapq
-from copy import  deepcopy
-from copy import copy
-from random import random, choices, uniform
-import pickle
+
+from random import random
 import time
 import multiprocessing
 from fractions import Fraction
@@ -26,10 +21,10 @@ from copy import deepcopy
 import numpy as np
 from tqdm import trange
 import networkx as nx
-import trimesh
-from sage.all import polytopes, QQ, RR, Polyhedron, vector, PolyhedralComplex
+from sage.all import QQ, RR, Polyhedron, vector
+
+
 from treelib import Tree
-import open3d as o3d
 from tqdm import tqdm
 
 from .logger import attach_to_log
@@ -37,19 +32,17 @@ logger = attach_to_log()
 
 from .export_complex import CellComplexExporter
 
-sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/PyLabeler")
+from init import *
 import libPyLabeler as PL
-
-PYTHONPATH="/home/rsulzer/python"
-sys.path.append(os.path.join(PYTHONPATH,"pyRANSAC-3D"))
 from export import PlaneExporter
+from pyplane import PyPlane
+
 
 class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, model, planes, halfspaces, bounds, points=None, initial_bound=None, initial_padding=0.1, additional_planes=None,
-                 build_graph=False, quiet=False):
+    def __init__(self, model, vertex_group, initial_padding=0.1):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -77,40 +70,51 @@ class CellComplex:
         self.cellComplexExporter = CellComplexExporter(self)
 
 
-        self.quiet = quiet
-        if self.quiet:
-            logger.disabled = True
-
         logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
-        self.bounds = bounds  # numpy.array over RDF
-        self.planes = planes  # numpy.array over RDF
-        self.halfspaces = halfspaces
-        self.points = points
+        vertex_group.planes, vertex_group.halfspaces, vertex_group.bounds, vertex_group.points_grouped,
+        self.bounds = vertex_group.bounds
+        self.planes = vertex_group.planes
+        self.plane_dict = vertex_group.plane_dict
+        self.plane_colors = vertex_group.plane_colors
+        self.merged_primitives_to_input_primitives = vertex_group.merged_primitives_to_input_primitives
+        self.halfspaces = vertex_group.halfspaces
+        self.points = vertex_group.points_grouped
+
 
         # missing planes due to occlusion or incapacity of RANSAC
-        self.additional_planes = additional_planes
+        self.additional_planes = None
 
-        if build_graph:
-            self.graph = nx.Graph()
-            self.graph.add_node(0)  # the initial cell
-            self.index_node = 0  # unique for every cell ever generated
-        else:
-            self.graph = None
 
         self.constructed = False
         self.polygons_initialized = False
-        self._init_bounding_box(model)
+
+        # init the bounding box
+        self.initial_padding = initial_padding
+        self.bounding_poly = self._init_bounding_box(model,padding=self.initial_padding)
 
 
-    def _init_bounding_box(self,m,scale=1.2):
+    def _init_bounding_box(self,m,padding=0.1):
 
         self.bounding_verts = []
         # points = np.load(m["pointcloud"])["points"]
-        points = np.load(m["occ"])["points"]
+        # pcd = o3d.geometry.PointCloud()
+        # pcd.points = o3d.utility.Vector3dVector(points)
+        # bb=pcd.get_axis_aligned_bounding_box()
+        # bb=bb.scale(center=bb.get_centroid(),scale=margin)
+        #
+        # a=5
+        #
+        #
+
+        points = np.load(m["pointcloud"])["points"]
 
         ppmin = points.min(axis=0)
         ppmax = points.max(axis=0)
+
+        d = (ppmax - ppmin)*padding
+        ppmin-=d
+        ppmax+=d
 
         # ppmin = [-40,-40,-40]
         # ppmax = [40,40,40]
@@ -131,28 +135,9 @@ class CellComplex:
         self.bounding_verts.append([pmax[0],pmax[1],pmin[2]])
         self.bounding_verts.append([pmax[0],pmin[1],pmin[2]])
 
-        self.bounding_poly = Polyhedron(vertices=self.bounding_verts)
+        return Polyhedron(vertices=self.bounding_verts)
 
-    def _project_points_to_plane(self,points,plane):
 
-        ### project inlier points to plane
-        ## https://www.baeldung.com/cs/3d-point-2d-plane
-        k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
-        pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]])
-        ## make e1 and e2 (see bottom of page linked above)
-        ## take a starting vector (e0) and take a component of this vector which is nonzero (see here: https://stackoverflow.com/a/33758795)
-        z = np.argmax(np.abs(plane[:3]))
-        y = (z+1)%3
-        x = (y+1)%3
-        e0 = np.array(plane[:3])
-        e0 = e0/np.linalg.norm(e0)
-        e1 = np.zeros(3)
-        ## reverse the non-zero component and put it on a different axis
-        e1[x], e1[y], e1[z] = e0[x], -e0[z], e0[y]
-        ## take the cross product of e0 and e1 to make e2
-        e2 = np.cross(e0,e1)
-        e12 = np.array([e1,e2])
-        return (e12@pp).transpose()
 
     def _sorted_vertex_indices(self,adjacency_matrix):
         """
@@ -185,10 +170,10 @@ class CellComplex:
         https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
         '''
         ## project to plane
-        pp=self._project_points_to_plane(points,plane)
+        pp=PyPlane(plane).project_points_to_plane_coordinate_system(points)
 
         center = np.mean(pp,axis=0)
-        vectors = pp[:,:2] - center[:2]
+        vectors = pp - center
         # vectors = vectors/np.linalg.norm(vectors)
         radians = np.arctan2(vectors[:,1],vectors[:,0])
 
@@ -332,7 +317,9 @@ class CellComplex:
                 intersection_points = self._get_intersection(e0,e1)
 
                 intersection_points_float = intersection_points.astype(float)
+
                 correct_order = self._sort_vertex_indices_by_angle(intersection_points_float,self.graph[e0][e1]["supporting_plane"])
+
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
@@ -371,7 +358,7 @@ class CellComplex:
     def extract_in_out_cells(self):
         for i,node in enumerate(self.graph.nodes(data=True)):
             col = [1,0,0] if node[1]["occupancy"] == 1 else [0,0,1]
-            self.cellComplexExporter.write_cells(self.model,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
+            self.cellComplexExporter.write_cell(self.model,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
 
 
     def extract_in_cells(self,filename,to_ply=True):
@@ -503,6 +490,111 @@ class CellComplex:
             with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
                 f.writelines(material_str)
 
+    def extract_partition_as_ply(self, filepath, rand_colors=True):
+        """
+        Save polygon soup of indexed convexes to an obj file.
+
+        Parameters
+        ----------
+        filepath: str or Path
+            Filepath to save obj file
+        indices_cells: (n,) int
+            Indices of cells to save to file
+        use_mtl: bool
+            Use mtl attribute in obj if set True
+        """
+        # create the dir if not exists
+        if not self.polygons_initialized:
+            self._init_polygons()
+
+
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        points = []
+        indices = []
+        primitive_ids = []
+        count = 0
+        supporting_planes = []
+        ecount = 0
+
+        colors = []
+        for c0,c1 in self.graph.edges:
+
+
+            ecount+=1
+            face = self.graph.edges[c0,c1]["intersection"]
+            correct_vertex_order = self._sorted_vertex_indices(face.adjacency_matrix())
+
+            points.append(np.array(face.vertices_list())[correct_vertex_order])
+            indices.append(list(np.arange(count,len(correct_vertex_order)+count)))
+
+            plane = self.graph.edges[c0,c1]["supporting_plane"]
+            supporting_planes.append(plane)
+            ## if plane_id is negative append negative primitive_id
+            plane_id = self.plane_dict[str(plane)]
+            if plane_id > -1:
+                colors.append(self.plane_colors[plane_id])
+                primitive_ids.append(self.merged_primitives_to_input_primitives[plane_id])
+            else:
+                colors.append(np.random.randint(0, 255, size=3))
+                primitive_ids.append([])
+
+
+            count+=len(correct_vertex_order)
+
+        if rand_colors:
+            colors = np.random.randint(0, 255, size=(len(self.graph.edges), 3))
+
+
+        points = np.concatenate(points)
+
+        f = open(str(filepath),"w")
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write("comment number_of_cells {}\n".format(len(self.cells)))
+        # f.write("comment number_of_faces {}\n".format(len(self.graph.edges)))
+        f.write("comment number_of_faces {}\n".format(ecount))
+        f.write("element vertex {}\n".format(len(points)))
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        # f.write("property uchar red\n")
+        # f.write("property uchar green\n")
+        # f.write("property uchar blue\n")
+        # f.write("element face {}\n".format(len(self.graph.edges)))
+        f.write("element face {}\n".format(ecount))
+        f.write("property list uchar int vertex_index\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("property list uchar int primitive_index\n")
+        # f.write("property float a\n")
+        # f.write("property float b\n")
+        # f.write("property float c\n")
+        # f.write("property float d\n")
+        f.write("end_header\n")
+        for v in points:
+            f.write("{:.3f} {:.3f} {:.3f}\n".format(v[0],v[1],v[2]))
+        for i,fa in enumerate(indices):
+            f.write("{} ".format(len(fa)))
+            for v in fa:
+                f.write("{} ".format(v))
+            c = colors[i]
+            f.write("{} {} {}".format(c[0],c[1],c[2]))
+            pi = primitive_ids[i]
+            f.write(" {} ".format(len(pi)))
+            for v in pi:
+                f.write("{} ".format(v))
+            # sp = supporting_planes[i]
+            # f.write("{} {} {} {}".format(sp[0],sp[1],sp[2],sp[3]))
+            f.write("\n")
+
+
+        f.close()
+
+
+
 
     def label_cells(self, m, n_test_points=50,export=False):
 
@@ -515,7 +607,7 @@ class CellComplex:
         #     cell = node[1]['convex']
         for i,cell in enumerate(self.cells):
             if export:
-                self.cellComplexExporter.write_cells(m,cell,count=i,subfolder="final_cells")
+                self.cellComplexExporter.write_cell(m,cell,count=i,subfolder="final_cells")
             pts = np.array(cell.vertices())
             points.append(pts)
             # print(pts)
@@ -533,7 +625,7 @@ class CellComplex:
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
 
-    def _get_best_plane(self,current_ids,planes,point_groups,export=False):
+    def _get_best_plane(self,current_ids,planes,point_groups):
 
         ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
@@ -564,11 +656,63 @@ class CellComplex:
             left_right.append([left, right])
 
         left_right = np.array(left_right)
-        # left_right = left_right.sum(axis=1)
-        left_right = np.product(left_right,axis=1)
+        left_right = left_right.sum(axis=1)
+        # left_right = np.product(left_right,axis=1)
         best_plane_id = np.argmax(left_right)
 
         return best_plane_id
+
+
+    def _get_best_plane_simple(self,current_ids,planes,point_groups):
+
+        """
+        Prioritise certain planes to favour building reconstruction.
+
+        First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
+        to avoid incomplete partitioning due to missing data about building facades.
+        Second, in the same priority class, planar primitives with larger areas are assigned higher priority
+        than smaller ones, to make the final cell complex as compact as possible.
+        Note that this priority setting is designed exclusively for building models.
+
+        Parameters
+        ----------
+        prioritise_verticals: bool
+            Prioritise vertical planes if set True
+        """
+
+        indices_sorted_planes = np.arange(len(self.planes))
+
+        if self.insertion_order == "random":
+            np.random.shuffle(current_ids)
+            return indices_sorted_planes
+        elif self.insertion_order == "vertical":
+            indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
+            bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
+            return np.append(indices_sorted_planes[bool_vertical_planes],
+                                         indices_sorted_planes[np.invert(bool_vertical_planes)])
+        elif self.insertion_order == "n_points":
+            npoints = []
+            for pg in self.points_grouped:
+                npoints.append(pg.shape[0])
+            npoints = np.array(npoints)
+            return np.argsort(npoints)[::-1]
+        elif self.insertion_order == 'volume':
+            volume = np.prod(self.bounds[:, 1, :] - self.bounds[:, 0, :], axis=1)
+            return np.argsort(volume)[::-1]
+        elif self.insertion_order == 'norm':
+            sizes = np.linalg.norm(self.bounds[:, 1, :] - self.bounds[:, 0, :], ord=2, axis=1)
+            return np.argsort(sizes)[::-1]
+        elif self.insertion_order == 'area':
+            areas = []
+            for i,plane in enumerate(self.planes):
+                mesh = PyPlane(plane).get_trimesh_of_projected_points(self.points_grouped[i])
+                areas.append(mesh.area)
+            return np.argsort(areas)[::-1]
+        else:
+            NotImplementedError
+
+
+
 
     def _split_planes(self,best_plane_id,current_ids,planes,plane_split_count,halfspaces,point_groups, th=1):
 
@@ -703,6 +847,67 @@ class CellComplex:
         self.polygons_initialized = False
 
 
+    def _inequalities(self, plane):
+        """
+        Inequalities from plane parameters.
+
+        Parameters
+        ----------
+        plane: (4,) float
+            Plane parameters
+
+        Returns
+        -------
+        positive: (4,) float
+            Inequality of the positive half-plane
+        negative: (4,) float
+            Inequality of the negative half-plane
+        """
+        positive = [QQ(plane[-1]), QQ(plane[0]), QQ(plane[1]), QQ(plane[2])]
+        negative = [QQ(-element) for element in positive]
+        return positive, negative
+
+
+    def add_bounding_box_planes(self):
+
+
+
+        outside_poly = self._init_bounding_box(self.model, padding=self.initial_padding*1.1)
+        bb_verts = np.array(self.bounding_poly.bounding_box())
+        bb_planes = []
+        bb_planes.append([-1,0,0,bb_verts[0,0]])
+        bb_planes.append([1,0,0,-bb_verts[1,0]])
+        bb_planes.append([0,-1,0,bb_verts[0,1]])
+        bb_planes.append([0,1,0,-bb_verts[1,1]])
+        bb_planes.append([0,0,-1,bb_verts[0,2]])
+        bb_planes.append([0,0,1,-bb_verts[1,2]])
+        bb_planes = np.array(bb_planes)
+
+        for i,plane in enumerate(bb_planes):
+
+            self.plane_dict[str(plane)] = -(i+1)
+
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
+
+            self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
+
+            self.graph.add_node(-(i+1), convex=op, occupancy=0.0)
+
+
+            for cell_id in list(self.graph.nodes):
+
+                cell = self.graph.nodes[cell_id]
+                intersection = op.intersection(cell["convex"])
+
+                if intersection.dim() == 2:
+                    self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
+                                   supporting_plane=plane, convex_intersection=False, bounding_box_edge=True)
+
+
+        # self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+
+
     def construct_polygons(self):
 
         """
@@ -778,6 +983,7 @@ class CellComplex:
         graph = nx.Graph()
         graph.add_node(cell_count, convex=self.bounding_poly)
 
+
         ## expand the tree as long as there is at least one plane in any of the subspaces
         tree = Tree()
         dd = {"convex": self.bounding_poly, "plane_ids": np.arange(self.planes.shape[0])}
@@ -786,10 +992,10 @@ class CellComplex:
         plane_count = 0
         edge_id=0
         convex_intersection=False
-        pbar = tqdm()
+        n_points_total = np.concatenate(self.points,dtype=object).shape[0]
+        pbar = tqdm(total=n_points_total,file=sys.stdout)
         for child in children:
 
-            pbar.update(1)
 
             current_ids = tree[child].data["plane_ids"]
 
@@ -800,6 +1006,7 @@ class CellComplex:
                 best_plane_id = 0
             best_plane = planes[current_ids[best_plane_id]]
             plane_count+=1
+            n_points_processed = len(point_groups[current_ids[best_plane_id]])
 
             ### split the planes
             left_planes, right_planes, planes, plane_split_count, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,plane_split_count,halfspaces,point_groups, th)
@@ -810,8 +1017,6 @@ class CellComplex:
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
                 nsplits = plane_split_count[current_ids[best_plane_id]]
                 color = plane_colors[nsplits] if nsplits < 4 else plane_colors[3]
-                if nsplits > 0:
-                    a=5
                 if epoints.shape[0]>3:
                     self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
@@ -828,33 +1033,33 @@ class CellComplex:
             if(cell_negative.dim() == 3):
             # if(not cell_negative.is_empty()):
                 if export:
-                    self.cellComplexExporter.write_cells(m,cell_negative,count=str(cell_count+1)+"n")
+                    self.cellComplexExporter.write_cell(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_id = cell_count
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
                 graph.add_node(neg_cell_id,convex=cell_negative)
-            else:
-                logger.warning("Empty cell")
+            # else:
+            #     logger.warning("Empty cell")
 
             if(cell_positive.dim() == 3):
             # if(not cell_positive.is_empty()):
                 if export:
-                    self.cellComplexExporter.write_cells(m,cell_positive,count=str(cell_count+1)+"p")
+                    self.cellComplexExporter.write_cell(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_id = cell_count
                 tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
                 graph.add_node(pos_cell_id,convex=cell_positive)
-            else:
-                logger.warning("Empty cell")
+            # else:
+            #     logger.warning("Empty cell")
 
 
             # if(not cell_positive.is_empty() and not cell_negative.is_empty()):
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
                 # if simplify is called, new
                 graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
-                               supporting_plane=best_plane, convex_intersection=True)
+                               supporting_plane=best_plane, convex_intersection=True, bounding_box_edge=False)
                 if export:
                     new_intersection = cell_negative.intersection(cell_positive)
                     self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
@@ -876,12 +1081,12 @@ class CellComplex:
                     # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
                     #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == negative_intersection))
                     graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False)
+                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
                 if p_nonempty:
                     # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
                     #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == positive_intersection))
                     graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False)
+                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
 
             # nx.draw(graph,with_labels=True)  # networkx draw()
             # plt.draw()
@@ -893,6 +1098,9 @@ class CellComplex:
 
             ## remove the parent node
             graph.remove_node(child)
+
+            pbar.update(n_points_processed)
+
 
         self.graph = graph
         self.tree = tree
@@ -909,98 +1117,6 @@ class CellComplex:
         return 0
 
 
-    def prioritise_planes(self, mode = ["vertical", "random", "norm"]):
-        """
-        Prioritise certain planes to favour building reconstruction.
-
-        First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
-        to avoid incomplete partitioning due to missing data about building facades.
-        Second, in the same priority class, planar primitives with larger areas are assigned higher priority
-        than smaller ones, to make the final cell complex as compact as possible.
-        Note that this priority setting is designed exclusively for building models.
-
-        Parameters
-        ----------
-        prioritise_verticals: bool
-            Prioritise vertical planes if set True
-        """
-        logger.info('prioritising planar primitives')
-
-
-
-        indices_sorted_planes = np.arange(len(self.planes))
-
-        if mode == "random":
-            np.random.shuffle(indices_sorted_planes)
-            indices_priority = indices_sorted_planes
-        elif mode == "vertical":
-            indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
-            bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
-            indices_priority = np.append(indices_sorted_planes[bool_vertical_planes],
-                                         indices_sorted_planes[np.invert(bool_vertical_planes)])
-        else:
-            # compute the priority
-            indices_sorted_planes = self._sort_planes(mode)
-
-        # reorder both the planes and their bounds
-        self.planes = self.planes[indices_priority]
-        self.bounds = self.bounds[indices_priority]
-        self.points = np.array(self.points)[indices_priority]
-
-        # append additional planes with highest priority
-        if self.additional_planes is not None:
-            self.planes = np.concatenate([self.additional_planes, self.planes], axis=0)
-            additional_bounds = [[[-np.inf, -np.inf, -np.inf], [np.inf, np.inf, np.inf]]] * len(self.additional_planes)
-            self.bounds = np.concatenate([additional_bounds, self.bounds], axis=0)  # never miss an intersection
-
-        logger.debug('ordered planes: {}'.format(self.planes))
-        logger.debug('ordered bounds: {}'.format(self.bounds))
-
-    def _vertical_planes(self, slope_threshold=0.9, epsilon=10e-5):
-        """
-        Return vertical planes.
-
-        Parameters
-        ----------
-        slope_threshold: float
-            Slope threshold, above which the planes are considered vertical
-        epsilon: float
-            Trivial term to avoid NaN
-
-        Returns
-        -------
-        as_int: (n,) int
-            Indices of the vertical planar primitives
-        """
-        slope_squared = (self.planes[:, 0] ** 2 + self.planes[:, 1] ** 2) / (self.planes[:, 2] ** 2 + epsilon)
-        return np.where(slope_squared > slope_threshold ** 2)[0]
-
-    def _sort_planes(self, mode='norm'):
-        """
-        Sort planes.
-
-        Parameters
-        ----------
-        mode: str
-            Mode for sorting, can be 'volume' or 'norm'
-
-        Returns
-        -------
-        as_int: (n,) int
-            Indices by which the planar primitives are sorted based on their bounding box volume
-        """
-        if mode == 'volume':
-            volume = np.prod(self.bounds[:, 1, :] - self.bounds[:, 0, :], axis=1)
-            return np.argsort(volume)[::-1]
-        elif mode == 'norm':
-            sizes = np.linalg.norm(self.bounds[:, 1, :] - self.bounds[:, 0, :], ord=2, axis=1)
-            return np.argsort(sizes)[::-1]
-        elif mode == 'area':
-            # project the points supporting each plane onto the plane
-            # https://stackoverflow.com/questions/9605556/how-to-project-a-point-onto-a-plane-in-3d
-            raise NotImplementedError
-        else:
-            raise ValueError('mode has to be "volume" or "norm"')
 
     @staticmethod
     def _pad_bound(bound, padding=0.00):
@@ -1160,6 +1276,10 @@ class CellComplex:
             Number of workers for multi-processing, disabled if set 0
         """
 
+        self.graph = nx.Graph()
+        self.graph.add_node(0)  # the initial cell
+        self.index_node = 0  # unique for every cell ever generated
+
         self.cells_bounds = [self.bounding_poly.bounding_box()]
         self.cells = [self.bounding_poly]
 
@@ -1174,7 +1294,7 @@ class CellComplex:
         if num_workers > 0:
             pool = multiprocessing.Pool(processes=num_workers)
 
-        pbar = range(len(self.bounds)) if self.quiet else trange(len(self.bounds))
+        pbar = trange(len(self.bounds))
         for i in pbar:  # kinetic for each primitive
             # bounding box intersection test
             # indices of existing cells with potential intersections

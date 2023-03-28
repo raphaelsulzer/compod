@@ -18,6 +18,7 @@ from pathlib import Path
 import networkx as nx
 import numpy as np
 from sage.all import RR
+
 from scipy.spatial import ConvexHull
 
 from .logger import attach_to_log

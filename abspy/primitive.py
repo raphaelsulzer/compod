@@ -1,37 +1,24 @@
-"""
-primitive.py
-----------
-
-Process detected planar primitives.
-
-Primitives are supported in vertex group format (.vg, .bvg).
-Mapple as in [Easy3D](https://github.com/LiangliangNan/Easy3D)
-can be used to generate such primitives from point clouds.
-Otherwise, one can refer to the vertex group file format specification
-attached to the README document.
-"""
-import os.path
-import sys
-from random import random
+import os, sys, struct
 from pathlib import Path
-import struct
 import numpy as np
-import copy
+from sage.all import polytopes, QQ, RR, Polyhedron
+from collections import defaultdict
 
-from sklearn.decomposition import PCA
+PYTHONPATH="/home/rsulzer/python"
+sys.path.append(os.path.join(PYTHONPATH,"pyplane"))
+from pyplane import PyPlane
 
 from .logger import attach_to_log
 
 logger = attach_to_log()
 
-from sage.all import polytopes, QQ, RR, Polyhedron
 
 class VertexGroup:
     """
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, merge_duplicates=False, quiet=False, vg_oneline=True):
+    def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None, points_type="inliers", sample_count_per_area=2):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -40,13 +27,7 @@ class VertexGroup:
         ----------
         filepath: str or Path
             Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
-        process: bool 
-            Immediate processing if set True
-        quiet: bool
-            Disable logging if set True
         """
-        if quiet:
-            logger.disabled = True
 
         if isinstance(filepath, str):
             self.filepath = Path(filepath)
@@ -59,20 +40,25 @@ class VertexGroup:
         self.bounds = None
         self.points_grouped = None
         self.points_ungrouped = None
-        self.vg_oneline = vg_oneline
         self.merge_duplicates = merge_duplicates
+        self.prioritise_planes = prioritise_planes
+        self.sample_count_per_area = sample_count_per_area
+
+        self.points_type = points_type
 
         ending = os.path.splitext(filepath)[1]
         if ending == ".npz":
-            self.process_npz()
+            self._process_npz()
         elif ending == ".vg":
-            self.process()
+            self._process()
             del self.lines # for closing the .vg file
         else:
             print("{} is not a valid file type for planes".format(ending))
             sys.exit(1)
 
-    def load_file(self):
+
+
+    def _load_vg_file(self):
         """
         Load (ascii / binary) vertex group file.
         """
@@ -82,8 +68,6 @@ class VertexGroup:
                 # self.lines=np.array(fin.readlines())
                 self.lines = np.array(list(fin))
 
-        # TODO: make a vg2npz program for transforming the huge vg files from KSR42 dataset, to make them readable in python
-        #  Shouldn't be so hard, since I can already read plane .vg files and export plane .npz files in c++
 
         elif self.filepath.suffix == '.bvg':
             # define size constants
@@ -144,26 +128,102 @@ class VertexGroup:
         else:
             raise ValueError(f'unable to load {self.filepath}, expected *.vg or .bvg.')
 
-    def process(self):
+    def _process(self):
         """
         Start processing vertex group.
         """
         logger.debug('processing {}'.format(self.filepath))
-        self.load_file()
-        if(self.vg_oneline):
-            # self.points = self.get_points()
-            print('DEPRECATED')
-            return 1
-        else:
-            self.points = self.my_get_points()
-        self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self.get_primitives()
+        self._load_vg_file()
+        self.points = self._get_points()
+        self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self._get_primitives()
         self.processed = True
 
+    def _sample_polygons(self,planes,points,n_points_per_area=2):
+
+        ## project inliers to plane and get the convex hull
+        all_sampled_points = []
+        for i,plane in enumerate(planes):
+
+            pl = PyPlane(plane)
+            mesh=pl.get_trimesh_of_projected_points(points[i])
+            sampled_points = mesh.sample(2+int(n_points_per_area*mesh.area))
+            all_sampled_points.append(sampled_points)
+
+        return np.array(all_sampled_points,dtype=object)
+
+
+    def _prioritise_planes(self, mode):
+        """
+        Prioritise certain planes to favour building reconstruction.
+
+        First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
+        to avoid incomplete partitioning due to missing data about building facades.
+        Second, in the same priority class, planar primitives with larger areas are assigned higher priority
+        than smaller ones, to make the final cell complex as compact as possible.
+        Note that this priority setting is designed exclusively for building models.
+
+        Parameters
+        ----------
+        prioritise_verticals: bool
+            Prioritise vertical planes if set True
+        """
+        logger.info('Prioritise planar primitive with mode {}'.format(mode))
+
+        indices_sorted_planes = np.arange(len(self.planes))
+
+        if mode == "random":
+            np.random.shuffle(indices_sorted_planes)
+            return indices_sorted_planes
+        elif mode == "vertical":
+            indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
+            bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
+            return np.append(indices_sorted_planes[bool_vertical_planes],
+                                         indices_sorted_planes[np.invert(bool_vertical_planes)])
+        elif mode == "n_points":
+            npoints = []
+            for pg in self.points_grouped:
+                npoints.append(pg.shape[0])
+            npoints = np.array(npoints)
+            return np.argsort(npoints)[::-1]
+        elif mode == 'volume':
+            volume = np.prod(self.bounds[:, 1, :] - self.bounds[:, 0, :], axis=1)
+            return np.argsort(volume)[::-1]
+        elif mode == 'norm':
+            sizes = np.linalg.norm(self.bounds[:, 1, :] - self.bounds[:, 0, :], ord=2, axis=1)
+            return np.argsort(sizes)[::-1]
+        elif mode == 'area':
+            areas = []
+            for i,plane in enumerate(self.planes):
+                mesh = PyPlane(plane).get_trimesh_of_projected_points(self.points_grouped[i])
+                areas.append(mesh.area)
+            return np.argsort(areas)[::-1]
+        else:
+            NotImplementedError
 
 
 
+    def _vertical_planes(self, slope_threshold=0.9, epsilon=10e-5):
+        """
+        Return vertical planes.
 
-    def process_npz(self):
+        Parameters
+        ----------
+        slope_threshold: float
+            Slope threshold, above which the planes are considered vertical
+        epsilon: float
+            Trivial term to avoid NaN
+
+        Returns
+        -------
+        as_int: (n,) int
+            Indices of the vertical planar primitives
+        """
+        slope_squared = (self.planes[:, 0] ** 2 + self.planes[:, 1] ** 2) / (self.planes[:, 2] ** 2 + epsilon)
+        return np.where(slope_squared > slope_threshold ** 2)[0]
+
+
+
+    def _process_npz(self):
         """
         Start processing vertex group.
         """
@@ -176,6 +236,7 @@ class VertexGroup:
         points = data["points"]
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
+        colors = data["group_colors"]
         self.points_grouped = []
         last = 0
         for npp in npoints:
@@ -183,38 +244,72 @@ class VertexGroup:
             self.points_grouped.append(points[vert_group])
             last += npp
 
+        if self.points_type == "samples":
+            self.points_grouped = self._sample_polygons(self.planes,self.points_grouped,self.sample_count_per_area)
+            self.merge_duplicates = True
+        elif self.points_type == "inliers":
+            pass
+        else:
+            print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
+            NotImplementedError
+
+
+
+
         n_planes = self.planes.shape[0]
-        # merge primitives that come from the same plane but are disconnected
-        # this is disarable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
+        # merge input polygons that come from the same plane but are disconnected
+        # this is desirable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
         if self.merge_duplicates:
             self.bounds = []
-            from collections import defaultdict
             # d = defaultdict(list)
-            d = defaultdict(int)
+            pts = defaultdict(int)
+            ids = defaultdict(list)
+            cols = defaultdict(list)
             un, inv = np.unique(self.planes, return_inverse=True, axis=0)
             for i in range(len(self.planes)):
-                # d[inv[i]].append(self.points_grouped[i])
-                # d[inv[i]]+=self.points_grouped[i]
-                if isinstance(d[inv[i]],int):
-                    d[inv[i]] = self.points_grouped[i]
+                if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
+                    pts[inv[i]] = self.points_grouped[i]
                 else:
-                    d[inv[i]] = np.concatenate((d[inv[i]],self.points_grouped[i]))
+                    pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
 
-            self.planes = un[list(d.keys())]
-            self.points_grouped = list(d.values())
+                cols[inv[i]] = colors[i]
+                ids[inv[i]]+=[i]
+
+            self.plane_colors = list(cols.values())
+            self.planes = un[list(pts.keys())]
+            self.points_grouped = list(pts.values())
+            # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
+            self.merged_primitives_to_input_primitives = list(ids.values())
 
             logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
+        else:
+            self.plane_colors = colors
+            self.merged_primitives_to_input_primitives = []
+            for i in range(len(self.planes)):
+                self.merged_primitives_to_input_primitives.append([i])
+
+        self.bounds = []
+        for pg in self.points_grouped:
+            self.bounds.append(self._points_bound(pg))
+        self.bounds = np.array(self.bounds)
+
+        if self.prioritise_planes:
+            order = self._prioritise_planes(self.prioritise_planes)
+            self.planes = self.planes[order]
+            self.points_grouped = list(np.array(self.points_grouped,dtype=object)[order])
+            self.merged_primitives_to_input_primitives = list(np.array(self.merged_primitives_to_input_primitives,dtype=object)[order])
+            self.plane_colors = np.array(self.plane_colors)[order]
+            self.bounds = self.bounds[order]
+        else:
+            logger.info("No plane prioritisation applied")
 
         # make the bounds and halfspace used in the cell complex construction
-        self.bounds = []
+        self.halfspaces = []
+        self.plane_dict = dict()
         for i,p in enumerate(self.planes):
+            self.plane_dict[str(p)] = i
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
-            self.bounds.append(self._points_bound(self.points_grouped[i]))
-
         self.halfspaces = np.array(self.halfspaces)
-        self.bounds = np.array(self.bounds)
-        # self.points_grouped = np.array(self.points_grouped, dtype=object)
-
 
         self.points_ungrouped = np.zeros(points.shape[0])
         self.points_ungrouped[verts] = 1
@@ -223,8 +318,7 @@ class VertexGroup:
 
         self.processed = True
 
-
-    def my_get_points(self):
+    def _get_points(self):
 
         npoints = int(self.lines[0].split(':')[1])
         return np.genfromtxt(self.lines[1:npoints+1])
@@ -249,7 +343,7 @@ class VertexGroup:
         negative = [QQ(-element) for element in positive]
         return positive, negative
 
-    def get_primitives(self):
+    def _get_primitives(self):
         """
         Get primitives from vertex group.
 
@@ -308,325 +402,3 @@ class VertexGroup:
             Bounds (AABB) of the points
         """
         return np.array([np.amin(points, axis=0), np.amax(points, axis=0)])
-
-    def normalise_from_centroid_and_scale(self, centroid, scale, num=None):
-        """
-        Normalising points.
-
-        Centroid and scale are provided to be mitigated, which are identical with the return of
-        scale_and_offset() such that the normalised points align with the corresponding mesh.
-        Notice the difference with normalise_points_to_centroid_and_scale().
-
-        Parameters
-        ----------
-        centroid: (3,) float
-            Centroid of the points to be mitigated
-        scale: float
-            Scale of the points to be mitigated
-        num: None or int
-            If specified, random sampling is performed to ensure the identical number of points
-
-        Returns
-        ----------
-        None: NoneType
-            Normalised (and possibly sampled) self.points
-        """
-        # mesh_to_sdf.utils.scale_to_unit_sphere()
-        self.points = (self.points - centroid) / scale
-
-        # update planes and bounds as point coordinates has changed
-        self.planes, self.bounds, self.points_grouped, _ = self.get_primitives()
-
-        # safely sample points after planes are extracted
-        if num:
-            choice = np.random.choice(self.points.shape[0], num, replace=True)
-            self.points = self.points[choice, :]
-
-    def normalise_to_centroid_and_scale(self, centroid=(0, 0, 0), scale=1.0, num=None):
-        """
-        Normalising points to the provided centroid and scale. Notice
-        the difference with normalise_points_from_centroid_and_scale().
-
-        Parameters
-        ----------
-        centroid: (3,) float
-            Desired centroid of the points
-        scale: float
-            Desired scale of the points
-        num: None or int
-            If specified, random sampling is performed to ensure the identical number of points
-
-        Returns
-        ----------
-        None: NoneType
-            Normalised (and possibly sampled) self.points
-        """
-        ######################################################
-        # this does not lock the scale
-        # offset = np.mean(points, axis=0)
-        # denominator = np.max(np.ptp(points, axis=0)) / scale
-        ######################################################
-        bounds = np.ptp(self.points, axis=0)
-        center = np.min(self.points, axis=0) + bounds / 2
-        offset = center
-        self.points = (self.points - offset) / (bounds.max() * scale) + centroid
-
-        # update planes and bounds as point coordinates has changed
-        self.planes, self.bounds, self.points_grouped, _ = self.get_primitives()
-
-        # safely sample points after planes are extracted
-        if num:
-            choice = np.random.choice(self.points.shape[0], num, replace=True)
-            self.points = self.points[choice, :]
-
-    @staticmethod
-    def fit_plane(points, mode='PCA'):
-        """
-        Fit plane parameters for a point set.
-
-        Parameters
-        ----------
-        points: (n, 3) float
-            Points to be fit
-        mode: str
-            Mode of plane fitting,
-            'PCA' (recommended) or 'LSA' (may introduce distortions)
-
-        Returns
-        ----------
-        param: (4,) float
-            Plane parameters, (a, b, c, d) as in a * x + b * y + c * z = -d
-        """
-        assert mode == 'PCA' or mode == 'LSA'
-        if len(points) < 3:
-            logger.warning('plane fitting skipped given #points={}'.format(len(points)))
-            return None
-        if mode == 'LSA':
-            # AX = B
-            logger.warning('LSA introduces distortions when the plane crosses the origin')
-            param = np.linalg.lstsq(points, np.expand_dims(np.ones(len(points)), 1))
-            param = np.append(param[0], -1)
-        else:
-            # PCA followed by shift
-            pca = PCA(n_components=3)
-            pca.fit(points)
-            eig_vec = pca.components_
-            logger.debug('explained_variance_ratio: {}'.format(pca.explained_variance_ratio_))
-
-            # normal vector of minimum variance
-            normal = eig_vec[2, :]  # (a, b, c)
-            centroid = np.mean(points, axis=0)
-
-            # every point (x, y, z) on the plane satisfies a * x + b * y + c * z = -d
-            # taking centroid as a point on the plane
-            d = -centroid.dot(normal)
-            param = np.append(normal, d)
-
-        return param
-
-    def append_planes(self, additional_planes, additional_points=None):
-        """
-        Append planes to vertex group. The provided planes can be accompanied by optional supporting points.
-        Notice these additional planes differ from `additional_planes` in `complex.py`: the former apply to
-        the VertexGroup data structure thus is generic to applications, while the latter apply to only the
-        CellComplex data structure.
-
-        Parameters
-        ----------
-        additional_planes: (m, 4) float
-            Plane parameters
-        additional_points: None or (m, n, 3) float
-            Points that support planes
-        """
-        if additional_points is None:
-            # this may still find use cases where plane parameters are provided as-is
-            logger.warning('no supporting points provided. only appending plane parameters')
-        else:
-            assert len(additional_planes) == len(additional_points)
-            # direct appending would not work
-            combined = np.zeros(len(self.points_grouped) + len(additional_points), dtype=object)
-            combined[:len(self.points_grouped)] = self.points_grouped
-            combined[len(self.points_grouped):] = [np.array(g) for g in additional_points]
-            self.points_grouped = combined
-        self.planes = np.append(self.planes, additional_planes, axis=0)
-
-    def save_vg(self, filepath):
-        """
-        Save vertex group into a vg file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save vg file
-        """
-        logger.info('writing vertex group into {}'.format(filepath))
-
-        if isinstance(filepath, str):
-            assert filepath.endswith('.vg')
-        elif isinstance(filepath, Path):
-            assert filepath.suffix == '.vg'
-        assert self.planes is not None and self.points_grouped is not None
-
-        points_grouped = np.concatenate(self.points_grouped)
-        points_ungrouped = self.points_ungrouped
-
-        # points
-        out = ''
-        out += 'num_points: {}\n'.format(len(points_grouped) + len(points_ungrouped))
-        for i in points_grouped.flatten():
-            # https://stackoverflow.com/questions/54367816/numpy-np-fromstring-not-working-as-hoped
-            out += ' ' + str(i)
-        for i in points_ungrouped.flatten():
-            out += ' ' + str(i)
-
-        # colors (no color needed)
-        out += '\nnum_colors: {}'.format(0)
-
-        # normals
-        out += '\nnum_normals: {}\n'.format(len(points_grouped) + len(points_ungrouped))
-        for i, group in enumerate(self.points_grouped):
-            for _ in group:
-                out += '{} {} {} '.format(*self.planes[i][:3])
-        for i in range(len(points_ungrouped)):
-            out += '{} {} {} '.format(0, 0, 0)
-
-        # groups
-        num_groups = len(self.points_grouped)
-        out += '\nnum_groups: {}\n'.format(num_groups)
-        j_base = 0
-        for i in range(num_groups):
-            out += 'group_type: {}\n'.format(0)
-            out += 'num_group_parameters: {}\n'.format(4)
-            out += 'group_parameters: {} {} {} {}\n'.format(*self.planes[i])
-            out += 'group_label: group_{}\n'.format(i)
-            out += 'group_color: {} {} {}\n'.format(random(), random(), random())
-            out += 'group_num_point: {}\n'.format(len(self.points_grouped[i]))
-            for j in range(j_base, j_base + len(self.points_grouped[i])):
-                out += '{} '.format(j)
-            j_base += len(self.points_grouped[i])
-            out += '\nnum_children: {}\n'.format(0)
-
-        # additional groups without supporting points
-        num_planes = len(self.planes)  # num_planes >= num_groups
-        for i in range(num_groups, num_planes):
-            out += 'group_type: {}\n'.format(0)
-            out += 'num_group_parameters: {}\n'.format(4)
-            out += 'group_parameters: {} {} {} {}\n'.format(*self.planes[i])
-            out += 'group_label: group_{}\n'.format(i)
-            out += 'group_color: {} {} {}\n'.format(random(), random(), random())
-            out += 'group_num_point: {}\n'.format(0)
-            out += 'num_children: {}\n'.format(0)
-
-        with open(filepath, 'w') as fout:
-            fout.writelines(out)
-
-    def save_bvg(self, filepath):
-        """
-        Save vertex group into a bvg file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save vg file
-        """
-        logger.info('writing vertex group into {}'.format(filepath))
-
-        if isinstance(filepath, str):
-            assert filepath.endswith('.bvg')
-        elif isinstance(filepath, Path):
-            assert filepath.suffix == '.bvg'
-        assert self.planes is not None and self.points_grouped is not None
-
-        points_grouped = np.concatenate(self.points_grouped)
-        points_ungrouped = self.points_ungrouped
-
-        # points
-        out = [struct.pack('i', len(points_grouped) + len(points_ungrouped))]
-        for i in points_grouped.flatten():
-            # https://stackoverflow.com/questions/54367816/numpy-np-fromstring-not-working-as-hoped
-            out.append(struct.pack('f', i))
-        for i in points_ungrouped.flatten():
-            out.append(struct.pack('f', i))
-
-        # colors (no color needed)
-        out.append(struct.pack('i', 0))
-
-        # normals
-        out.append(struct.pack('i', len(points_grouped) + len(points_ungrouped)))
-        for i, group in enumerate(self.points_grouped):
-            for _ in group:
-                out.append(struct.pack('fff', *self.planes[i][:3]))
-        for i in range(len(points_ungrouped)):
-            out.append(struct.pack('fff', 0, 0, 0))
-
-        # groups
-        num_groups = len(self.points_grouped)
-        out.append(struct.pack('i', num_groups))
-        j_base = 0
-        for i in range(num_groups):
-            out.append(struct.pack('i', 0))
-            out.append(struct.pack('i', 4))
-            out.append(struct.pack('ffff', *self.planes[i]))
-            out.append(struct.pack('i', 6 + len(str(i))))
-            out.append(struct.pack(f'{(6 + len(str(i)))}s', bytes('group_{}'.format(i), encoding='ascii')))
-            out.append(struct.pack('fff', random(), random(), random()))
-            out.append(struct.pack('i', len(self.points_grouped[i])))
-
-            for j in range(j_base, j_base + len(self.points_grouped[i])):
-                out.append(struct.pack('i', j))
-
-            j_base += len(self.points_grouped[i])
-            out.append(struct.pack('i', 0))
-
-        # additional groups without supporting points
-        num_planes = len(self.planes)  # num_planes >= num_groups
-        for i in range(num_groups, num_planes):
-            out.append(struct.pack('i', 0))
-            out.append(struct.pack('i', 4))
-            out.append(struct.pack('ffff', *self.planes[i]))
-            out.append(struct.pack('i', 6 + len(str(i))))
-            out.append(struct.pack(f'{(6 + len(str(i)))}s', bytes('group_{}'.format(i), encoding='ascii')))
-            out.append(struct.pack('fff', random(), random(), random()))
-            out.append(struct.pack('i', 0))
-            out.append(struct.pack('i', 0))
-
-        with open(filepath, 'wb') as fout:
-            fout.writelines(out)
-
-    def save_planes_txt(self, filepath):
-        """
-        Save plane parameters into a txt file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save txt file
-        """
-        with open(filepath, 'w') as fout:
-            logger.info('writing plane parameters into {}'.format(filepath))
-            out = [''.join(str(n) + ' ' for n in line.tolist()) + '\n' for line in self.planes]
-            fout.writelines(out)
-
-    def save_planes_npy(self, filepath):
-        """
-        Save plane params into an npy file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save npy file
-        """
-        logger.info('writing plane parameters into {}'.format(filepath))
-        np.save(filepath, self.planes)
-
-    def save_bounds_npy(self, filepath):
-        """
-        Save plane bounds into an npy file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save npy file
-        """
-        logger.info('writing plane bounds into {}'.format(filepath))
-        np.save(filepath, self.bounds)

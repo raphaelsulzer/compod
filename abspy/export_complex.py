@@ -67,7 +67,7 @@ class CellComplexExporter:
 
 
 
-    def write_cells(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0, to_ply=False):
+    def write_cell(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0, to_ply=False):
 
         c = color if color is not None else np.random.random(size=3)
         c = (c*255).astype(int)
