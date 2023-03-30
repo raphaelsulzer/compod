@@ -21,7 +21,7 @@ from copy import deepcopy
 import numpy as np
 from tqdm import trange
 import networkx as nx
-from sage.all import QQ, RR, Polyhedron, vector
+from sage.all import QQ, RR, Polyhedron, vector, arctan2
 
 
 from treelib import Tree
@@ -35,8 +35,9 @@ from .export_complex import CellComplexExporter
 from init import *
 import libPyLabeler as PL
 from export import PlaneExporter
-from pyplane import PyPlane
+from pyplane import PyPlane, SagePlane
 
+import open3d as o3d
 
 class CellComplex:
     """
@@ -69,7 +70,6 @@ class CellComplex:
         self.planeExporter = PlaneExporter()
         self.cellComplexExporter = CellComplexExporter(self)
 
-
         logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
         vertex_group.planes, vertex_group.halfspaces, vertex_group.bounds, vertex_group.points_grouped,
@@ -91,33 +91,24 @@ class CellComplex:
 
         # init the bounding box
         self.initial_padding = initial_padding
-        self.bounding_poly = self._init_bounding_box(model,padding=self.initial_padding)
+        self.bounding_poly = self._init_bounding_box(padding=self.initial_padding)
 
 
-    def _init_bounding_box(self,m,padding=0.1):
+    def _init_bounding_box(self,padding):
 
         self.bounding_verts = []
-        # points = np.load(m["pointcloud"])["points"]
-        # pcd = o3d.geometry.PointCloud()
-        # pcd.points = o3d.utility.Vector3dVector(points)
-        # bb=pcd.get_axis_aligned_bounding_box()
-        # bb=bb.scale(center=bb.get_centroid(),scale=margin)
-        #
-        # a=5
-        #
-        #
 
-        points = np.load(m["pointcloud"])["points"]
+        points = np.concatenate(self.points)
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        aabb = pcd.get_axis_aligned_bounding_box()
+        aabb.scale(padding,aabb.get_center())
+        ppmin = aabb.min_bound.astype(points.dtype)
+        ppmax = aabb.max_bound.astype(points.dtype)
 
-        ppmin = points.min(axis=0)
-        ppmax = points.max(axis=0)
-
-        d = (ppmax - ppmin)*padding
-        ppmin-=d
-        ppmax+=d
-
-        # ppmin = [-40,-40,-40]
-        # ppmax = [40,40,40]
+        ### very important to have the same types, otherwise the bounding planes will not be correctly inserted
+        assert(points.dtype == np.float32)
+        assert(ppmin.dtype == np.float32)
 
         pmin=[]
         for p in ppmin:
@@ -165,22 +156,57 @@ class CellComplex:
                 sorted_.append(connected[1])
         return sorted_
 
+
+    def _sort_vertex_indices_by_angle_exact(self,points,plane):
+        '''order vertices of a convex polygon:
+        https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
+        '''
+        ## project to plane
+        # pp=PyPlane(plane).project_points_to_plane_coordinate_system(points)
+
+        max_coord=PyPlane(plane).max_coord
+
+        pp = np.delete(points,max_coord,axis=1)
+
+
+        center = np.mean(pp,axis=0)
+        vectors = pp - center
+        # vectors = vectors/np.linalg.norm(vectors)
+        radians = []
+        for v in vectors:
+            radians.append(float(arctan2(v[1],v[0])))
+        radians = np.array(radians)
+        if (np.unique(radians,return_counts=True)[1]>1).any():
+            a=5
+
+        # same_rads = radians[np.unique(radians,return_counts=True)[1]>1]
+        # if same_rads.shape[0]:
+        #     print("WARNING: same angle")
+        #     return None
+
+        return np.argsort(radians)
+
     def _sort_vertex_indices_by_angle(self,points,plane):
         '''order vertices of a convex polygon:
         https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
         '''
         ## project to plane
-        pp=PyPlane(plane).project_points_to_plane_coordinate_system(points)
+        # pp=PyPlane(plane).project_points_to_plane_coordinate_system(points)
+        pp=PyPlane(plane).to_2d(points)
 
         center = np.mean(pp,axis=0)
         vectors = pp - center
         # vectors = vectors/np.linalg.norm(vectors)
         radians = np.arctan2(vectors[:,1],vectors[:,0])
 
-        same_rads = radians[np.unique(radians,return_counts=True)[1]>1]
-        if same_rads.shape[0]:
-            print("WARNING: same angle")
-            return None
+        if (np.unique(radians,return_counts=True)[1]>1).any():
+            a=5
+
+
+        # same_rads = radians[np.unique(radians,return_counts=True)[1]>1]
+        # if same_rads.shape[0]:
+        #     print("WARNING: same angle")
+        #     return None
 
         return np.argsort(radians)
 
@@ -190,13 +216,17 @@ class CellComplex:
 
         i = 0
         cross=0
-        while np.sum(cross) == 0:
-            a = vector(points[i+1] - points[i])
-            # a = a/a.norm()
-            b = vector(points[i+2] - points[i])
-            # b = b/b.norm()
-            cross = a.cross_product(b)
-            i+=1
+        while np.sum(cross*cross) == 0:
+            try:
+                a = vector(points[i+1] - points[i])
+                # a = a/a.norm()
+                b = vector(points[i+2] - points[i])
+                # b = b/b.norm()
+                cross = a.cross_product(b)
+                i+=1
+            except:
+                return 0
+
 
         c = vector(np.array(outside,dtype=object) - points[i])
         # c = c/c.norm()
@@ -266,16 +296,15 @@ class CellComplex:
 
                 intersection_points = self._get_intersection(e0,e1)
 
-                correct_order = self._sort_vertex_indices_by_angle(intersection_points.astype(float),self.graph[e0][e1]["supporting_plane"])
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,self.graph[e0][e1]["supporting_plane"])
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
-                if(len(intersection_points)<3):
-                    continue
 
                 ## orient polygon
                 outside = c0["convex"].center() if c1["occupancy"] else c1["convex"].center()
-                if self._orient_inexact_polygon(intersection_points,outside):
+                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
+                if self._orient_exact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 for i in range(intersection_points.shape[0]):
@@ -285,21 +314,24 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
 
-        # sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/Soup2Mesh")
-        # import libSoup2Mesh as s2m
-        # sm = s2m.Soup2Mesh()
-        # sm.loadSoup(np.array(all_points,dtype=float), np.array(facet_lens,dtype=int), np.concatenate(faces,dtype=int))
-        # triangulate = False
-        # sm.makeMesh(triangulate)
-        # sm.saveMesh(filename)
+        sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/Soup2Mesh")
+        import libSoup2Mesh as s2m
+        sm = s2m.Soup2Mesh()
+        sm.loadSoup(np.array(all_points,dtype=float), np.array(facet_lens,dtype=int), np.concatenate(faces,dtype=int))
+        triangulate = True
+        sm.makeMesh(triangulate)
+        sm.saveMesh(filename)
 
-        logger.debug('Save polygon mesh to {}'.format(filename))
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.cellComplexExporter.write_off(filename,points=np.array(all_points,dtype=float),facets=faces)
+        # logger.debug('Save polygon mesh to {}'.format(filename))
+        # os.makedirs(os.path.dirname(filename), exist_ok=True)
+        # self.cellComplexExporter.write_off(filename,points=np.array(all_points,dtype=np.float32),facets=faces)
 
 
 
     def extract_surface(self, filename):
+
+        logger.info('Extract surface...')
+
 
         tris = []
         all_points = []
@@ -316,9 +348,7 @@ class CellComplex:
 
                 intersection_points = self._get_intersection(e0,e1)
 
-                intersection_points_float = intersection_points.astype(float)
-
-                correct_order = self._sort_vertex_indices_by_angle(intersection_points_float,self.graph[e0][e1]["supporting_plane"])
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,self.graph[e0][e1]["supporting_plane"])
 
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
@@ -353,7 +383,7 @@ class CellComplex:
 
         logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.cellComplexExporter.write_off(filename,points=np.array(pset,dtype=float),facets=facets)
+        self.cellComplexExporter.write_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
 
     def extract_in_out_cells(self):
         for i,node in enumerate(self.graph.nodes(data=True)):
@@ -363,6 +393,7 @@ class CellComplex:
 
     def extract_in_cells(self,filename,to_ply=True):
 
+        logger.info('Extract inside cells...')
 
         os.makedirs(os.path.dirname(filename),exist_ok=True)
         f = open(filename,'w')
@@ -463,7 +494,10 @@ class CellComplex:
             scene_str += '\n'.join(scene_obj[o][3]) + '\n'  # contents[o][4] are the interior facets
         return scene_str, material_str
 
+
     def extract_partition(self, filepath, indices_cells=None, use_mtl=False):
+        logger.info('Extract partition...')
+
         """
         Save polygon soup of indexed convexes to an obj file.
 
@@ -491,6 +525,8 @@ class CellComplex:
                 f.writelines(material_str)
 
     def extract_partition_as_ply(self, filepath, rand_colors=True):
+        logger.info('Extract partition...')
+
         """
         Save polygon soup of indexed convexes to an obj file.
 
@@ -625,7 +661,7 @@ class CellComplex:
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
 
-    def _get_best_plane(self,current_ids,planes,point_groups):
+    def _get_best_split(self,current_ids,planes,point_groups,insertion_order="product-earlystop"):
 
         ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
@@ -636,6 +672,10 @@ class CellComplex:
         # pgs = np.repeat(point_groups[np.newaxis,current_ids,:,:],current_ids.shape[0],axis=0)
         #
         # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
+
+        earlystop = False
+        if "earlystop" in insertion_order:
+            earlystop = True
 
         ### find the plane which seperates all other planes without splitting them
         left_right = []
@@ -650,20 +690,25 @@ class CellComplex:
                 right+=(~which_side).all(axis=-1)
                 # left+= (which_side < 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the left of the current plane
                 # right+= (which_side > 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the right of the current plane
-            if left == current_ids.shape[0]-1 or right == current_ids.shape[0]-1:
-                return i
+            if earlystop:
+                if left == current_ids.shape[0]-1 or right == current_ids.shape[0]-1:
+                    return i
 
             left_right.append([left, right])
 
         left_right = np.array(left_right)
-        left_right = left_right.sum(axis=1)
-        # left_right = np.product(left_right,axis=1)
+        if "sum" in insertion_order:
+            left_right = left_right.sum(axis=1)
+        elif "product" in insertion_order:
+            left_right = np.product(left_right,axis=1)
+        else:
+            raise NotImplementedError
         best_plane_id = np.argmax(left_right)
 
         return best_plane_id
 
 
-    def _get_best_plane_simple(self,current_ids,planes,point_groups):
+    def _get_best_plane(self,current_ids,planes,point_groups,insertion_order="product-earlystop"):
 
         """
         Prioritise certain planes to favour building reconstruction.
@@ -680,36 +725,39 @@ class CellComplex:
             Prioritise vertical planes if set True
         """
 
-        indices_sorted_planes = np.arange(len(self.planes))
+        pgs = np.array(point_groups, dtype=object)[current_ids]
 
-        if self.insertion_order == "random":
-            np.random.shuffle(current_ids)
-            return indices_sorted_planes
-        elif self.insertion_order == "vertical":
-            indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
-            bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
-            return np.append(indices_sorted_planes[bool_vertical_planes],
-                                         indices_sorted_planes[np.invert(bool_vertical_planes)])
-        elif self.insertion_order == "n_points":
+        if insertion_order == "random":
+            return np.random.choice(len(current_ids),size=1)[0]
+        elif insertion_order == "product" or insertion_order == "product-earlystop" or insertion_order == "sum" or insertion_order == "sum-earlystop":
+            return self._get_best_split(current_ids,planes,point_groups,insertion_order)
+        elif insertion_order == "n_points":
             npoints = []
-            for pg in self.points_grouped:
+            for pg in pgs:
                 npoints.append(pg.shape[0])
             npoints = np.array(npoints)
-            return np.argsort(npoints)[::-1]
-        elif self.insertion_order == 'volume':
-            volume = np.prod(self.bounds[:, 1, :] - self.bounds[:, 0, :], axis=1)
-            return np.argsort(volume)[::-1]
-        elif self.insertion_order == 'norm':
-            sizes = np.linalg.norm(self.bounds[:, 1, :] - self.bounds[:, 0, :], ord=2, axis=1)
-            return np.argsort(sizes)[::-1]
-        elif self.insertion_order == 'area':
+            return np.argmax(npoints)
+        elif insertion_order == 'volume':
+            volumes = []
+            for pg in pgs:
+                volumes.append(np.prod(np.max(pg,axis=0)-np.min(pg,axis=0)))
+            return np.argmax(volumes)
+        elif insertion_order == 'norm':
+            norms = []
+            for pg in pgs:
+                norms.append(np.linalg.norm(np.max(pg, axis=0) - np.min(pg, axis=0), ord=2, axis=0))
+            return np.argmax(norms)
+        elif insertion_order == 'area':
             areas = []
-            for i,plane in enumerate(self.planes):
-                mesh = PyPlane(plane).get_trimesh_of_projected_points(self.points_grouped[i])
-                areas.append(mesh.area)
-            return np.argsort(areas)[::-1]
+            for i,plane in enumerate(planes[current_ids]):
+                if pgs[i].shape[0] > 2:
+                    mesh = PyPlane(plane).get_trimesh_of_projected_points(pgs[i])
+                    areas.append(mesh.area)
+                else:
+                    areas.append(0)
+            return np.argmax(areas)
         else:
-            NotImplementedError
+            raise NotImplementedError
 
 
 
@@ -803,8 +851,7 @@ class CellComplex:
 
         ## this function does not need the sibling polygons to be initialized, ie edges need to be there, but we do not need to know the intersection!! initalizing afterwards is sufficient!
 
-        bb_vol = float(self.bounding_poly.volume())
-        perc = 0.0005
+
 
         def filter_edge(n0,n1):
             to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
@@ -872,7 +919,10 @@ class CellComplex:
 
 
 
-        outside_poly = self._init_bounding_box(self.model, padding=self.initial_padding*1.1)
+        outside_poly = self._init_bounding_box(padding=self.initial_padding**2)
+        # bigger_bb_box = self._init_bounding_box(padding=self.initial_padding)
+        # bb_verts = np.array(bigger_bb_box.bounding_box())
+        # TODO: again there is a mix here between float and double; I need to take the planes from the BB box instead of remqking them
         bb_verts = np.array(self.bounding_poly.bounding_box())
         bb_planes = []
         bb_planes.append([-1,0,0,bb_verts[0,0]])
@@ -890,6 +940,8 @@ class CellComplex:
             hspace_neg, hspace_pos = self._inequalities(plane)
             op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
 
+            # if export:
+
             self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
 
             self.graph.add_node(-(i+1), convex=op, occupancy=0.0)
@@ -899,6 +951,9 @@ class CellComplex:
 
                 cell = self.graph.nodes[cell_id]
                 intersection = op.intersection(cell["convex"])
+
+                if not intersection.is_empty():
+                    a=5
 
                 if intersection.dim() == 2:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
@@ -920,42 +975,47 @@ class CellComplex:
 
         for c0,c1 in list(self.graph.edges):
 
-            if self.graph.nodes[c0]["occupancy"] != self.graph.nodes[c1]["occupancy"]:
-                current_edge = self.graph[c0][c1]
-                current_facet = current_edge["intersection"]
+            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
+                continue
 
-                for neighbor in list(self.graph[c0]):
-                    if neighbor == c1: continue
+            current_edge = self.graph[c0][c1]
+            current_facet = current_edge["intersection"]
 
-                    this_edge = self.graph[c0][neighbor]
-                    this_facet = this_edge["intersection"]
-                    facet_intersection = current_facet.intersection(this_facet)
+            for neighbor in list(self.graph[c0]):
+                if neighbor == c1: continue
 
-                    if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
-                        current_edge["vertices"]+=facet_intersection.vertices_list()
-                        this_edge["vertices"]+=facet_intersection.vertices_list()
+                this_edge = self.graph[c0][neighbor]
+                this_facet = this_edge["intersection"]
+                facet_intersection = current_facet.intersection(this_facet)
 
-                for neighbor in list(self.graph[c1]):
-                    if neighbor == c0: continue
+                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
+                    current_edge["vertices"]+=facet_intersection.vertices_list()
+                    this_edge["vertices"]+=facet_intersection.vertices_list()
 
-                    this_edge = self.graph[c1][neighbor]
-                    this_facet = this_edge["intersection"]
-                    facet_intersection = current_facet.intersection(this_facet)
+            for neighbor in list(self.graph[c1]):
+                if neighbor == c0: continue
 
-                    if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
-                        current_edge["vertices"] += facet_intersection.vertices_list()
-                        this_edge["vertices"] += facet_intersection.vertices_list()
+                this_edge = self.graph[c1][neighbor]
+                this_facet = this_edge["intersection"]
+                facet_intersection = current_facet.intersection(this_facet)
+
+                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
+                    current_edge["vertices"] += facet_intersection.vertices_list()
+                    this_edge["vertices"] += facet_intersection.vertices_list()
 
 
 
-    def construct_partition(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False):
+    def construct_partition(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False, insertion_order="product-earlystop"):
+
+        logger.info('Construct partition with mode {}'.format(insertion_order))
+
 
         """
         1. construct the partition
         :param m:
         :param mode:
         :param th:
-        :param ordering:
+        :param ordering:                                                                                                                                                                                                                              
         :param export:
         :return:
         """
@@ -963,8 +1023,6 @@ class CellComplex:
 
         ## Tree.DEPTH seems slightly faster then Tree.WIDTH
 
-        # TODO: i need a second ordering for when two planes have the same surface split score, take the one with the bigger area.
-        # because randommly shuffling the planes before this function has a big influence on the result
 
         # The tag property of tree.node is what is shown when you call tree.show(). can be changed with tree.node(NODEid).tag = "some_text"
 
@@ -990,8 +1048,6 @@ class CellComplex:
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0
-        edge_id=0
-        convex_intersection=False
         n_points_total = np.concatenate(self.points,dtype=object).shape[0]
         pbar = tqdm(total=n_points_total,file=sys.stdout)
         for child in children:
@@ -1000,8 +1056,8 @@ class CellComplex:
             current_ids = tree[child].data["plane_ids"]
 
             ### get the best plane
-            if ordering == "optimal":
-                best_plane_id = self._get_best_plane(current_ids,planes,point_groups)
+            if insertion_order:
+                best_plane_id = self._get_best_plane(current_ids,planes,point_groups, insertion_order)
             else:
                 best_plane_id = 0
             best_plane = planes[current_ids[best_plane_id]]
@@ -1031,7 +1087,6 @@ class CellComplex:
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
             if(cell_negative.dim() == 3):
-            # if(not cell_negative.is_empty()):
                 if export:
                     self.cellComplexExporter.write_cell(m,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
@@ -1043,7 +1098,6 @@ class CellComplex:
             #     logger.warning("Empty cell")
 
             if(cell_positive.dim() == 3):
-            # if(not cell_positive.is_empty()):
                 if export:
                     self.cellComplexExporter.write_cell(m,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}

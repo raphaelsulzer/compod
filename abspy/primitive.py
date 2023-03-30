@@ -7,6 +7,7 @@ from collections import defaultdict
 PYTHONPATH="/home/rsulzer/python"
 sys.path.append(os.path.join(PYTHONPATH,"pyplane"))
 from pyplane import PyPlane
+from export import PlaneExporter
 
 from .logger import attach_to_log
 
@@ -18,7 +19,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None, points_type="inliers", sample_count_per_area=2):
+    def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None, points_type="inliers", sample_count_per_area=2, fixed_sample_count=10, export=False):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -43,8 +44,11 @@ class VertexGroup:
         self.merge_duplicates = merge_duplicates
         self.prioritise_planes = prioritise_planes
         self.sample_count_per_area = sample_count_per_area
+        self.fixed_sample_count = fixed_sample_count
 
         self.points_type = points_type
+
+        self.export = export
 
         ending = os.path.splitext(filepath)[1]
         if ending == ".npz":
@@ -138,7 +142,7 @@ class VertexGroup:
         self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self._get_primitives()
         self.processed = True
 
-    def _sample_polygons(self,planes,points,n_points_per_area=2):
+    def _sample_polygons(self,planes,points,n_points=None):
 
         ## project inliers to plane and get the convex hull
         all_sampled_points = []
@@ -146,7 +150,11 @@ class VertexGroup:
 
             pl = PyPlane(plane)
             mesh=pl.get_trimesh_of_projected_points(points[i])
-            sampled_points = mesh.sample(2+int(n_points_per_area*mesh.area))
+            if n_points is None:
+                n = 3+int(self.sample_count_per_area*mesh.area)
+            sampled_points = mesh.sample(n)
+            sampled_points = np.concatenate((sampled_points,mesh.vertices),axis=0,dtype=np.float32)
+            sampled_points = np.unique(sampled_points,axis=0)
             all_sampled_points.append(sampled_points)
 
         return np.array(all_sampled_points,dtype=object)
@@ -194,11 +202,16 @@ class VertexGroup:
         elif mode == 'area':
             areas = []
             for i,plane in enumerate(self.planes):
-                mesh = PyPlane(plane).get_trimesh_of_projected_points(self.points_grouped[i])
-                areas.append(mesh.area)
+                if self.points_grouped[i].shape[0] > 2:
+                    mesh = PyPlane(plane).get_trimesh_of_projected_points(self.points_grouped[i])
+                    areas.append(mesh.area)
+                else:
+                    areas.append(0)
             return np.argsort(areas)[::-1]
+        elif mode == "product" or mode == "product-earlystop" or mode == "sum" or mode == "sum-earlystop":
+            return indices_sorted_planes
         else:
-            NotImplementedError
+            raise NotImplementedError
 
 
 
@@ -232,8 +245,8 @@ class VertexGroup:
         data = np.load(fn)
 
         # read the data and make the point groups
-        self.planes = data["group_parameters"]
-        points = data["points"]
+        self.planes = data["group_parameters"].astype(np.float32)
+        points = data["points"].astype(np.float32)
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
         colors = data["group_colors"]
@@ -244,9 +257,20 @@ class VertexGroup:
             self.points_grouped.append(points[vert_group])
             last += npp
 
+        ## get AABB of all points to compute AABB diagonal for scaling the n_sample_points_per_area value
+        ppmin = points.min(axis=0)
+        ppmax = points.max(axis=0)
+        diag = np.linalg.norm(ppmax - ppmin, ord=2, axis=0)
+        self.sample_count_per_area = self.sample_count_per_area/diag
+
+
         if self.points_type == "samples":
-            self.points_grouped = self._sample_polygons(self.planes,self.points_grouped,self.sample_count_per_area)
-            self.merge_duplicates = True
+            if self.fixed_sample_count:
+                n_points = self.fixed_sample_count
+            else:
+                n_points = None
+            self.points_grouped = self._sample_polygons(self.planes,self.points_grouped, n_points=n_points)
+            # self.merge_duplicates = True
         elif self.points_type == "inliers":
             pass
         else:
@@ -317,6 +341,20 @@ class VertexGroup:
         self.points_ungrouped = points[self.points_ungrouped.astype(int)]
 
         self.processed = True
+
+        if self.export:
+            pe = PlaneExporter()
+            pt_file = os.path.join(os.path.dirname(str(self.filepath)),"samples.ply")
+            plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
+            pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes)
+
+        a=5
+
+
+
+
+
+
 
     def _get_points(self):
 
