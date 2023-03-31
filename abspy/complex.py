@@ -10,34 +10,29 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 
-import os, sys
+from .setup import *
+import os, sys, time, multiprocessing
 from pathlib import Path
-
 from random import random
-import time
-import multiprocessing
 from fractions import Fraction
 from copy import deepcopy
 import numpy as np
 from tqdm import trange
 import networkx as nx
 from sage.all import QQ, RR, Polyhedron, vector, arctan2
-
-
 from treelib import Tree
 from tqdm import tqdm
+import open3d as o3d
 
 from .logger import attach_to_log
 logger = attach_to_log()
 
 from .export_complex import CellComplexExporter
-
-from init import *
 import libPyLabeler as PL
+import libSoup2Mesh as s2m
 from export import PlaneExporter
 from pyplane import PyPlane, SagePlane
 
-import open3d as o3d
 
 class CellComplex:
     """
@@ -314,8 +309,7 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
 
-        sys.path.append("/home/rsulzer/cpp/compact_mesh_reconstruction/build/release/Benchmark/Soup2Mesh")
-        import libSoup2Mesh as s2m
+
         sm = s2m.Soup2Mesh()
         sm.loadSoup(np.array(all_points,dtype=float), np.array(facet_lens,dtype=int), np.concatenate(faces,dtype=int))
         triangulate = True
