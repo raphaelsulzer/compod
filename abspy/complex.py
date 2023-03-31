@@ -560,8 +560,10 @@ class CellComplex:
 
             ecount+=1
             face = self.graph.edges[c0,c1]["intersection"]
-            correct_vertex_order = self._sorted_vertex_indices(face.adjacency_matrix())
-
+            try:
+                correct_vertex_order = self._sorted_vertex_indices(face.adjacency_matrix())
+            except:
+                print("\nsomething wrong")
             points.append(np.array(face.vertices_list())[correct_vertex_order])
             indices.append(list(np.arange(count,len(correct_vertex_order)+count)))
 
@@ -762,7 +764,7 @@ class CellComplex:
 
 
 
-    def _split_planes(self,best_plane_id,current_ids,planes,plane_split_count,halfspaces,point_groups, th=1):
+    def _split_support_points(self,best_plane_id,current_ids,primitive_dict, th=1):
 
         '''
         :param best_plane_id:
@@ -773,7 +775,7 @@ class CellComplex:
         :return: left and right planes
         '''
 
-        best_plane = planes[current_ids[best_plane_id]]
+        best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
 
         ### now put the planes into the left and right subspace of the best_plane split
         ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
@@ -785,40 +787,40 @@ class CellComplex:
                 continue
 
             # which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2] + best_plane[3]
-            which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2]
+            which_side = best_plane[0] * primitive_dict["point_groups"][id][:, 0] + best_plane[1] * primitive_dict["point_groups"][id][:, 1] + best_plane[2] * primitive_dict["point_groups"][id][:, 2]
 
-            left_points = point_groups[id][which_side < -best_plane[3], :]
-            right_points = point_groups[id][which_side > -best_plane[3], :]
+            left_points = primitive_dict["point_groups"][id][which_side < -best_plane[3], :]
+            right_points = primitive_dict["point_groups"][id][which_side > -best_plane[3], :]
 
-            assert (point_groups[id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
+            assert (primitive_dict["point_groups"][id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
 
-            if (point_groups[id].shape[0] - left_points.shape[0]) < th:
+            if (primitive_dict["point_groups"][id].shape[0] - left_points.shape[0]) < th:
                 left_planes.append(id)
-                point_groups[id] = left_points  # update the point group, in case some points got dropped according to threshold
-            elif(point_groups[id].shape[0] - right_points.shape[0]) < th:
+                primitive_dict["point_groups"][id] = left_points  # update the point group, in case some points got dropped according to threshold
+            elif(primitive_dict["point_groups"][id].shape[0] - right_points.shape[0]) < th:
                 right_planes.append(id)
-                point_groups[id] = right_points # update the point group, in case some points got dropped according to threshold
+                primitive_dict["point_groups"][id] = right_points # update the point group, in case some points got dropped according to threshold
             else:
                 # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
                 if (left_points.shape[0] > th):
-                    left_planes.append(planes.shape[0])
-                    point_groups.append(left_points)
-                    planes = np.vstack((planes, planes[id]))
-                    halfspaces = np.vstack((halfspaces,halfspaces[id]))
-                    plane_split_count.append(plane_split_count[id]+1)
+                    left_planes.append(primitive_dict["planes"].shape[0])
+                    primitive_dict["point_groups"].append(left_points)
+                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
+                    primitive_dict["halfspaces"] = np.vstack((primitive_dict["halfspaces"],primitive_dict["halfspaces"][id]))
+                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
                 if (right_points.shape[0] > th):
-                    right_planes.append(planes.shape[0])
-                    point_groups.append(right_points)
-                    planes = np.vstack((planes, planes[id]))
-                    halfspaces = np.vstack((halfspaces,halfspaces[id]))
-                    plane_split_count.append(plane_split_count[id]+1)
+                    right_planes.append(primitive_dict["planes"].shape[0])
+                    primitive_dict["point_groups"].append(right_points)
+                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
+                    primitive_dict["halfspaces"] = np.vstack((primitive_dict["halfspaces"],primitive_dict["halfspaces"][id]))
+                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
 
                 self.split_count+=1
 
                 # planes[id, :] = np.nan
                 # point_groups[id][:, :] = np.nan
 
-        return left_planes,right_planes, planes, plane_split_count, halfspaces, point_groups
+        return left_planes,right_planes
 
 
     def _init_polygons(self):
@@ -834,9 +836,17 @@ class CellComplex:
             edge = self.graph.edges[e0,e1]
             c0 = self.graph.nodes[e0]["convex"]
             c1 = self.graph.nodes[e1]["convex"]
+            ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
+            ### I could just say if self.simplified or something like that, but for now will just recaculate all the intersections here
             # if not self.graph.edges[e0,e1]["intersection"]:
-            edge["intersection"] = c0.intersection(c1)
-            edge["vertices"] =  []
+            intersection = c0.intersection(c1)
+            if intersection.dim() == 2:
+                edge["intersection"] = c0.intersection(c1)
+                edge["vertices"] =  []
+            else:
+                self.graph.remove_edge(e0,e1)
+
+            # edge["vertices"] = edge["intersection"].vertices_list()
 
         self.polygons_initialized = True
 
@@ -952,9 +962,6 @@ class CellComplex:
                 cell = self.graph.nodes[cell_id]
                 intersection = op.intersection(cell["convex"])
 
-                if not intersection.is_empty():
-                    a=5
-
                 if intersection.dim() == 2:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
                                    supporting_plane=plane, convex_intersection=False, bounding_box_edge=True)
@@ -983,22 +990,16 @@ class CellComplex:
 
             for neighbor in list(self.graph[c0]):
                 if neighbor == c1: continue
-
                 this_edge = self.graph[c0][neighbor]
-                this_facet = this_edge["intersection"]
-                facet_intersection = current_facet.intersection(this_facet)
-
+                facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"]+=facet_intersection.vertices_list()
                     this_edge["vertices"]+=facet_intersection.vertices_list()
 
             for neighbor in list(self.graph[c1]):
                 if neighbor == c0: continue
-
                 this_edge = self.graph[c1][neighbor]
-                this_facet = this_edge["intersection"]
-                facet_intersection = current_facet.intersection(this_facet)
-
+                facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
                     this_edge["vertices"] += facet_intersection.vertices_list()
@@ -1026,12 +1027,12 @@ class CellComplex:
 
         # The tag property of tree.node is what is shown when you call tree.show(). can be changed with tree.node(NODEid).tag = "some_text"
 
-        ### make a new planes array, to which planes that are split can be appanded
-        planes = deepcopy(self.planes)
-        halfspaces = deepcopy(self.halfspaces)
-        point_groups = list(self.points)
-        plane_split_count =[0]*len(self.planes)
-        plane_colors = [[0,1,0],[1,0,0],[0,0,1],[139/255,0,139/255]]
+        primitive_dict = dict()
+        primitive_dict["planes"] = deepcopy(self.planes)
+        primitive_dict["halfspaces"] = deepcopy(self.halfspaces)
+        primitive_dict["point_groups"] = list(self.points)
+        primitive_dict["split_count"] = [0]*len(self.planes)
+        split_colors = [[0,1,0],[1,0,0],[0,0,1],[139/255,0,139/255]]
 
         cell_count = 0
         self.split_count = 0
@@ -1042,44 +1043,40 @@ class CellComplex:
         graph.add_node(cell_count, convex=self.bounding_poly)
 
 
-        ## expand the tree as long as there is at least one plane in any of the subspaces
+        ## expand the tree as long as there is at least one plane inside any of the subspaces
         tree = Tree()
-        dd = {"convex": self.bounding_poly, "plane_ids": np.arange(self.planes.shape[0])}
+        dd = {"convex": self.bounding_poly, "plane_ids": np.arange(primitive_dict["planes"].shape[0])}
         tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0
-        n_points_total = np.concatenate(self.points,dtype=object).shape[0]
+        n_points_total = np.concatenate(primitive_dict["point_groups"],dtype=object).shape[0]
         pbar = tqdm(total=n_points_total,file=sys.stdout)
         for child in children:
 
-
             current_ids = tree[child].data["plane_ids"]
+            current_cell = tree[child].data["convex"]
+            plane_count+=1  # only used for debugging exports
 
             ### get the best plane
-            if insertion_order:
-                best_plane_id = self._get_best_plane(current_ids,planes,point_groups, insertion_order)
-            else:
-                best_plane_id = 0
-            best_plane = planes[current_ids[best_plane_id]]
-            plane_count+=1
-            n_points_processed = len(point_groups[current_ids[best_plane_id]])
+            best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids,primitive_dict["planes"],primitive_dict["point_groups"], insertion_order)
+            best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
+            n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
 
-            ### split the planes
-            left_planes, right_planes, planes, plane_split_count, halfspaces, point_groups, = self._split_planes(best_plane_id,current_ids,planes,plane_split_count,halfspaces,point_groups, th)
+            ### split the primitives with the best_plane, and append them to the plane array
+            left_planes, right_planes = self._split_support_points(best_plane_id,current_ids,primitive_dict, th)
 
             ### export best plane
             if export:
-                epoints = point_groups[current_ids[best_plane_id]]
+                epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
-                nsplits = plane_split_count[current_ids[best_plane_id]]
-                color = plane_colors[nsplits] if nsplits < 4 else plane_colors[3]
+                nsplits = primitive_dict["split_count"][current_ids[best_plane_id]]
+                color = split_colors[nsplits] if nsplits < 4 else split_colors[3]
                 if epoints.shape[0]>3:
                     self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
 
             ## create the new convexes
-            current_cell = tree[child].data["convex"]
-            hspace_positive, hspace_negative = halfspaces[current_ids[best_plane_id],0], halfspaces[current_ids[best_plane_id],1]
+            hspace_positive, hspace_negative = primitive_dict["halfspaces"][current_ids[best_plane_id],0], primitive_dict["halfspaces"][current_ids[best_plane_id],1]
 
             cell_negative = current_cell.intersection(hspace_negative)
             cell_positive = current_cell.intersection(hspace_positive)

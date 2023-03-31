@@ -6,7 +6,7 @@ from collections import defaultdict
 
 PYTHONPATH="/home/rsulzer/python"
 sys.path.append(os.path.join(PYTHONPATH,"pyplane"))
-from pyplane import PyPlane
+from pyplane import PyPlane, SagePlane
 from export import PlaneExporter
 
 from .logger import attach_to_log
@@ -241,6 +241,7 @@ class VertexGroup:
         Start processing vertex group.
         """
 
+
         fn = self.filepath.with_suffix(".npz")
         data = np.load(fn)
 
@@ -251,10 +252,20 @@ class VertexGroup:
         verts = data["group_points"].flatten()
         colors = data["group_colors"]
         self.points_grouped = []
+        self.polygons = []
         last = 0
-        for npp in npoints:
+        for i,npp in enumerate(npoints):
+            ## make the point groups
             vert_group = verts[last:(npp+last)]
-            self.points_grouped.append(points[vert_group])
+            pts = points[vert_group]
+            self.points_grouped.append(pts)
+            # ## make the polys
+            # pp = PyPlane(self.planes[i]).get_hull_points_of_projected_points(pts,dim=3)
+            # pp = SagePlane(self.planes[i]).project_points_to_plane(pp)
+            # try:
+            #     self.polygons.append(Polyhedron(vertices=pp))
+            # except:
+            #     a=5
             last += npp
 
         ## get AABB of all points to compute AABB diagonal for scaling the n_sample_points_per_area value
@@ -284,26 +295,29 @@ class VertexGroup:
         # merge input polygons that come from the same plane but are disconnected
         # this is desirable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
         if self.merge_duplicates:
-            self.bounds = []
-            # d = defaultdict(list)
             pts = defaultdict(int)
-            ids = defaultdict(list)
+            primitive_ids = defaultdict(list)
+            polygons = defaultdict(list)
             cols = defaultdict(list)
             un, inv = np.unique(self.planes, return_inverse=True, axis=0)
             for i in range(len(self.planes)):
                 if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
                     pts[inv[i]] = self.points_grouped[i]
+                    polygons[inv[i]] = self.polygons[i]
                 else:
                     pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
+                    pp = polygons[inv[i]].vertices_list() + self.polygons[i].vertices_list()
+                    polygons[inv[i]] = Polyhedron(vertices=pp)
 
                 cols[inv[i]] = colors[i]
-                ids[inv[i]]+=[i]
+                primitive_ids[inv[i]]+=[i]
 
             self.plane_colors = list(cols.values())
             self.planes = un[list(pts.keys())]
             self.points_grouped = list(pts.values())
+            self.polygons = polygons
             # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
-            self.merged_primitives_to_input_primitives = list(ids.values())
+            self.merged_primitives_to_input_primitives = list(primitive_ids.values())
 
             logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
         else:
