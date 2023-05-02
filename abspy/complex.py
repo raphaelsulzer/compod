@@ -11,11 +11,10 @@ so will be the corresponding adjacency graph of the complex.
 """
 
 from .setup import *
-import os, sys, time, multiprocessing
+import os, sys, time, multiprocessing, pickle, torch
 from pathlib import Path
 from random import random
 from fractions import Fraction
-from copy import deepcopy
 import numpy as np
 from tqdm import trange
 import networkx as nx
@@ -23,6 +22,7 @@ from sage.all import QQ, RR, Polyhedron, vector, arctan2
 from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
+import trimesh
 
 from .logger import attach_to_log
 logger = attach_to_log()
@@ -31,14 +31,14 @@ from .export_complex import CellComplexExporter
 import libPyLabeler as PL
 import libSoup2Mesh as s2m
 from export import PlaneExporter
-from pyplane import PyPlane, SagePlane
+from pyplane import PyPlane, SagePlane, ProjectedConvexHull
 
 
 class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, model, vertex_group, initial_padding=0.1):
+    def __init__(self, model, vertex_group, initial_padding=0.1, export=False, backend='cpu'):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -75,18 +75,28 @@ class CellComplex:
         self.merged_primitives_to_input_primitives = vertex_group.merged_primitives_to_input_primitives
         self.halfspaces = vertex_group.halfspaces
         self.points = vertex_group.points_grouped
+        self.hull_vertices = vertex_group.hull_vertices
+        self.convex_hulls = vertex_group.convex_hulls
+        self.vertex_group_n_fill = vertex_group.n_fill
+
+        self.cells = dict()
+
+        del vertex_group
+
+        self.backend = backend
+
 
 
         # missing planes due to occlusion or incapacity of RANSAC
         self.additional_planes = None
 
-
-        self.constructed = False
         self.polygons_initialized = False
 
         # init the bounding box
         self.initial_padding = initial_padding
         self.bounding_poly = self._init_bounding_box(padding=self.initial_padding)
+
+        self.export = export
 
 
     def _init_bounding_box(self,padding):
@@ -151,7 +161,6 @@ class CellComplex:
                 sorted_.append(connected[1])
         return sorted_
 
-
     def _sort_vertex_indices_by_angle_exact(self,points,plane):
         '''order vertices of a convex polygon:
         https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
@@ -171,13 +180,9 @@ class CellComplex:
         for v in vectors:
             radians.append(float(arctan2(v[1],v[0])))
         radians = np.array(radians)
-        if (np.unique(radians,return_counts=True)[1]>1).any():
-            a=5
+        # if (np.unique(radians,return_counts=True)[1]>1).any():
+        #     print("WARNING: same exact radians in _sort_vertex_indices_by_angle_exact")
 
-        # same_rads = radians[np.unique(radians,return_counts=True)[1]>1]
-        # if same_rads.shape[0]:
-        #     print("WARNING: same angle")
-        #     return None
 
         return np.argsort(radians)
 
@@ -276,8 +281,7 @@ class CellComplex:
         faces = []
         all_points = []
         n_points=0
-
-        facet_lens = []
+        face_lens = []
 
         for ec, (e0, e1) in enumerate(self.graph.edges):
 
@@ -305,13 +309,13 @@ class CellComplex:
                 for i in range(intersection_points.shape[0]):
                     all_points.append(tuple(intersection_points[i,:]))
                 faces.append(np.arange(len(intersection_points))+n_points)
-                facet_lens.append(len(intersection_points))
+                face_lens.append(len(intersection_points))
                 n_points+=len(intersection_points)
 
 
 
         sm = s2m.Soup2Mesh()
-        sm.loadSoup(np.array(all_points,dtype=float), np.array(facet_lens,dtype=int), np.concatenate(faces,dtype=int))
+        sm.loadSoup(np.array(all_points,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
         triangulate = True
         sm.makeMesh(triangulate)
         sm.saveMesh(filename)
@@ -321,14 +325,18 @@ class CellComplex:
         # self.cellComplexExporter.write_off(filename,points=np.array(all_points,dtype=np.float32),facets=faces)
 
 
-
-    def extract_surface(self, filename):
+    # @profile
+    def extract_surface(self, filename, backend = "python"):
 
         logger.info('Extract surface...')
 
 
         tris = []
         all_points = []
+        # for cgal export
+        faces = []
+        face_lens = []
+        n_points = 0
         for e0, e1 in self.graph.edges:
 
             # if e0 > e1:
@@ -352,7 +360,7 @@ class CellComplex:
                     sys.exit(1)
 
                 ## orient polygon
-                outside = c0["convex"].center() if c1["occupancy"] else c1["convex"].center()
+                outside = self.tree.nodes[e0].data["convex"].center() if c1["occupancy"] else self.tree.nodes[e1].data["convex"].center()
                 # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
                 if self._orient_exact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
@@ -360,32 +368,114 @@ class CellComplex:
                 for i in range(intersection_points.shape[0]):
                     all_points.append(tuple(intersection_points[i,:]))
                 tris.append(intersection_points)
+                # for cgal export
+                faces.append(np.arange(len(intersection_points))+n_points)
+                face_lens.append(len(intersection_points))
+                n_points+=len(intersection_points)
 
-        pset = set(all_points)
-        pset = np.array(list(pset),dtype=object)
-        facets = []
-        for tri in tris:
-            face = []
-            for pt in tri:
-                # face.append(np.argwhere((pset == p).all(-1))[0][0])
-                face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
-
-                # face.append(np.argwhere(np.isin(pset, p).all(-1))[0][0])
-                # face.append(np.argwhere(np.isclose(pset, p,atol=tol*1.01).all(-1))[0][0])
-            facets.append(face)
-
-
-        logger.debug('Save polygon mesh to {}'.format(filename))
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.cellComplexExporter.write_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
+        logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
 
-    def extract_in_out_cells(self):
-        for i,node in enumerate(self.graph.nodes(data=True)):
-            col = [1,0,0] if node[1]["occupancy"] == 1 else [0,0,1]
-            self.cellComplexExporter.write_cell(self.model,node[1]['convex'],count=i,subfolder="in_out_cells",color=np.array(col))
+        if backend == "cgal":
+            sm = s2m.Soup2Mesh()
+            sm.loadSoup(np.array(all_points,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
+            triangulate = False
+            sm.makeMesh(triangulate)
+            sm.saveMesh(filename)
+        elif backend == "python":
+            pset = set(all_points)
+            pset = np.array(list(pset),dtype=object)
+            facets = []
+            for tri in tris:
+                face = []
+                for pt in tri:
+                    face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
+                facets.append(face)
+
+            self.cellComplexExporter.write_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
+        else:
+            raise NotImplementedError
 
 
-    def extract_in_cells(self,filename,to_ply=True):
+    def extract_in_cells_explode(self,filename):
+
+        logger.info('Extract inside cells...')
+
+        os.makedirs(os.path.dirname(filename),exist_ok=True)
+        f = open(filename,'w')
+
+        def filter_node(node_id):
+            return self.graph.nodes[node_id]["occupancy"]
+
+        outverts = []
+        facets = []
+        vert_count = 0
+        view = nx.subgraph_view(self.graph,filter_node=filter_node)
+        # for node in enumerate(self.graph.nodes(data=True)):
+            # if node[1]["occupancy"] == 1:
+
+        # get total volume
+        cell_volumes = []
+        for node in view.nodes():
+            vol = self.tree.nodes[node].data["convex"].volume()
+            cell_volumes.append(vol)
+        cell_volumes = np.array(cell_volumes)
+        # cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.80))
+        cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.95))
+
+        for i,node in enumerate(view.nodes()):
+            c = np.random.randint(low=100,high=255,size=3)
+            polyhedron = self.tree.nodes[node].data["convex"]
+            ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
+            verts = []
+            for v in ss[2]:
+                v = v.split(' ')
+                verts.append(np.array(v[1:],dtype=float))
+
+            verts = np.vstack(verts)
+            centroid = np.mean(verts,axis=0)
+
+            vector = (verts - centroid)*cell_volumes[i]
+            verts = centroid + vector
+
+            for v in verts:
+                outverts.append([v[0], v[1], v[2], c[0], c[1], c[2]])
+
+
+            # verts.append([v[1], v[2], v[3], str(c[0]), str(c[1]), str(c[2])])
+
+            for fa in ss[3]:
+                tf = []
+                for ffa in fa[2:].split(' '):
+                    tf.append(str(int(ffa) + vert_count -1) + " ")
+                facets.append(tf)
+            vert_count+=len(ss[2])
+
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write("comment : in_cells:{}\n".format(len(view.nodes)))
+        f.write("element vertex {}\n".format(len(outverts)))
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("element face {}\n".format(len(facets)))
+        f.write("property list uchar int vertex_index\n")
+        f.write("end_header\n")
+        for v in outverts:
+            f.write("{} {} {} {} {} {}\n".format(v[0],v[1],v[2],v[3],v[4],v[5]))
+        for fa in facets:
+            f.write("{} ".format(len(fa)))
+            for v in fa:
+                f.write("{}".format(v))
+            f.write("\n")
+
+        f.close()
+
+
+    def extract_in_cells(self,filename):
 
         logger.info('Extract inside cells...')
 
@@ -402,9 +492,8 @@ class CellComplex:
         # for node in enumerate(self.graph.nodes(data=True)):
             # if node[1]["occupancy"] == 1:
         for node in view.nodes():
-            c = np.random.random(size=3)
-            c = (c * 255).astype(int)
-            polyhedron = self.graph.nodes[node]["convex"]
+            c = np.random.randint(low=100,high=255,size=3)
+            polyhedron = self.tree.nodes[node].data["convex"]
             ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
             for v in ss[2]:
                 v = v.split(' ')
@@ -440,6 +529,7 @@ class CellComplex:
 
 
         f.close()
+
 
     @staticmethod
     def _obj_str(cells, use_mtl=False, filename_mtl='colours.mtl'):
@@ -518,7 +608,8 @@ class CellComplex:
             with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
                 f.writelines(material_str)
 
-    def extract_partition_as_ply(self, filepath, rand_colors=True):
+
+    def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True):
         logger.info('Extract partition...')
 
         """
@@ -552,31 +643,44 @@ class CellComplex:
         for c0,c1 in self.graph.edges:
 
 
+            if not export_boundary:
+                bbe = self.graph.edges[c0,c1].get("bounding_box_edge",False)
+                if bbe:
+                    continue
+
+
             ecount+=1
             face = self.graph.edges[c0,c1]["intersection"]
-            try:
-                correct_vertex_order = self._sorted_vertex_indices(face.adjacency_matrix())
-            except:
-                print("\nsomething wrong")
+            correct_vertex_order = self._sorted_vertex_indices(face.adjacency_matrix())
             points.append(np.array(face.vertices_list())[correct_vertex_order])
             indices.append(list(np.arange(count,len(correct_vertex_order)+count)))
 
             plane = self.graph.edges[c0,c1]["supporting_plane"]
             supporting_planes.append(plane)
             ## if plane_id is negative append negative primitive_id
-            plane_id = self.plane_dict[str(plane)]
+
+
+            if str(plane) in self.plane_dict.keys():
+                plane_id = self.plane_dict[str(plane)]
+            elif str(-plane) in self.plane_dict.keys():
+                plane_id = self.plane_dict[str(-plane)]
+            else:
+                plane_id = -1
+
+
+
             if plane_id > -1:
                 colors.append(self.plane_colors[plane_id])
                 primitive_ids.append(self.merged_primitives_to_input_primitives[plane_id])
             else:
-                colors.append(np.random.randint(0, 255, size=3))
+                colors.append(np.random.randint(100, 255, size=3))
                 primitive_ids.append([])
 
 
             count+=len(correct_vertex_order)
 
         if rand_colors:
-            colors = np.random.randint(0, 255, size=(len(self.graph.edges), 3))
+            colors = np.random.randint(100, 255, size=(len(self.graph.edges), 3))
 
 
         points = np.concatenate(points)
@@ -626,17 +730,63 @@ class CellComplex:
         f.close()
 
 
+    def graph_cut(self):
+
+        logger.info("Apply label regularization with graph-cut...")
+
+        dtype = np.int64
+        # Internally, in the pyGCO code datatype is always converted to np.int32
+        # I would need to use my own version of GCO (or modify the one used by pyGCO) to change that
+        # Should probably be done at some point to avoid int32 overflow for larger scenes.
 
 
-    def label_cells(self, m, n_test_points=50,export=False):
+
+        gc = gco.GCO()
+        gc.create_general_graph(len(self.graph.nodes) + 1, 2, energy_is_float=False)
+        # data_cost = F.softmax(prediction, dim=-1)
+        prediction[:, [0, 1]] = prediction[:, [1, 0]]
+        data_cost = (prediction * clf.graph_cut.unary_weight).round()
+        # data_cost = prediction
+        data_cost = np.array(data_cost, dtype=dtype)
+        ### append high cost for inside for infinite cell
+        # data_cost = np.append(data_cost, np.array([[-10000, 10000]]), axis=0)
+        gc.set_data_cost(data_cost)
+        smooth = (1 - np.eye(2)).astype(dtype)
+        gc.set_smooth_cost(smooth)
+        if (not clf.graph_cut.binary_type):
+            edge_weight = np.ones(edges.shape[0], dtype=dtype)
+        else:
+            # TODO: retrieve the beta-skeleton and area value from the features to weight the binaries
+            edge_weight = np.ones(edges.shape[0], dtype=dtype)
+
+        gc.set_all_neighbors(edges[:, 0], edges[:, 1], edge_weight * clf.graph_cut.binary_weight)
+
+        for i, l in enumerate(labels):
+            gc.init_label_at_site(i, l)
+
+        # print("before smooth: ",gc.compute_smooth_energy())
+        # print("before data: ", gc.compute_data_energy())
+        # print("before: ", gc.compute_smooth_energy()+gc.compute_data_energy())
+
+        gc.expansion()
+
+        # print("after: ", gc.compute_smooth_energy()+gc.compute_data_energy())
+
+        # print("after smooth: ",gc.compute_smooth_energy())
+        # print("after data: ", gc.compute_data_energy())
+
+        labels = gc.get_labels()
+
+        return labels
+
+
+    def label_cells(self, m, n_test_points=50,graph_cut=True,export=False):
 
         pl=PL.PyLabeler(n_test_points)
         if pl.loadMesh(m["mesh"]):
             return 1
         points = []
         points_len = []
-        # for i,node in enumerate(self.graph.nodes(data=True)):
-        #     cell = node[1]['convex']
         for i,cell in enumerate(self.cells):
             if export:
                 self.cellComplexExporter.write_cell(m,cell,count=i,subfolder="final_cells")
@@ -653,11 +803,85 @@ class CellComplex:
         foccs = dict(zip(self.graph.nodes, occs))
         nx.set_node_attributes(self.graph,occs,"float_occupancy")
 
-        occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+        if graph_cut:
+            # occs = self.graph_cut(occs)
+            occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+        else:
+            occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
 
-    def _get_best_split(self,current_ids,planes,point_groups,insertion_order="product-earlystop"):
+
+    @profile
+    def _get_best_split(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+
+        ## sum calls the get_best_plane function less often than product, but with more planes
+        ## since get_best_planes is O(n^2), it is better to call it more often with smaller n than less often with bigger n
+
+        earlystop = False
+        if "earlystop" in insertion_order:
+            earlystop = True
+
+        planes = primitive_dict["planes"][current_ids]
+        point_groups = np.array(primitive_dict["point_groups"],dtype=object)[current_ids]
+
+
+        ### find the plane which seperates all other planes without splitting them
+        left_right = []
+        for i,id in enumerate(current_ids):
+            left = 0; right = 0; intersect = 0
+            pls = planes[i]
+            for j,id2 in enumerate(current_ids):
+                if i == j: continue
+                which_side = np.dot(pls[:3],point_groups[j].transpose())
+                which_side = (which_side < -pls[3])
+                tleft = (which_side).all(axis=-1)
+                if tleft:
+                    left+=1
+                    continue
+                tright = (~which_side).all(axis=-1)
+                if tright:
+                    right+=1
+                else:
+                    intersect+=1
+
+            # assert(left + right + intersect == current_ids.shape[0]-1)
+            if earlystop:
+                # if left == current_ids.shape[0]-1 or right == current_ids.shape[0]-1:
+                if intersect == 0:
+                    return i
+
+            left_right.append([left, right, intersect])
+
+        left_right = np.array(left_right)
+        if "sum" in insertion_order:
+            left_right = np.sum(left_right[:,:2],axis=1)
+            best_plane_id = np.argmax(left_right)
+        elif "product" in insertion_order:
+            left_right = np.product(left_right[:,:2],axis=1)
+            best_plane_id = np.argmax(left_right)
+        elif "intersect" in insertion_order:
+            left_right = np.abs(left_right[:,0]-left_right[:,1])+left_right[:,2]
+            best_plane_id = np.argmin(left_right)
+        elif "equal" in insertion_order:
+            left_right = np.abs(left_right[:,0]-left_right[:,1])
+            best_plane_id = np.argmin(left_right)
+        else:
+            raise NotImplementedError
+
+        return best_plane_id
+
+    @profile
+    def _get_best_split_gpu2(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+
+        # TODO: in fact left_right has to be computed only one single time per plane and can be stored throughout the algorithm
+        # a simple first try could be to store it for each primitve and simply make a function which sorts it at each insertion according to the current available cell ids
+
+
+        ## sum calls the get_best_plane function less often than product, but with more planes
+        ## since get_best_planes is O(n^2), it is better to call it more often with smaller n than less often with bigger n
+
 
         ### pad the point groups with NaNs to make a numpy array from the variable lenght list
         ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
@@ -673,38 +897,107 @@ class CellComplex:
         if "earlystop" in insertion_order:
             earlystop = True
 
+        planes = primitive_dict["planes"][current_ids]
+        point_groups = primitive_dict['polygon_vertices'][current_ids]
+        planes = torch.from_numpy(planes).type(torch.float16).to('cuda')
+        # planes = planes[:33,:]
+
+        ### find the plane which seperates all other planes without splitting them
+
+        pg = point_groups.transpose(2,0)
+
+        which_side = torch.tensordot(planes[:,:3], pg, 1).transpose(2,0)
+
+        left = (which_side < -planes[:,3]).all(axis=1)
+        right = (which_side >= -planes[:,3]).all(axis=1)
+
+        left = left.sum(dim=0)
+        right = right.sum(dim=0)
+
+        return torch.argmax(left*right)
+
+
+
+
+
+
+    @profile
+    def _get_best_split_gpu(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+
+        # TODO: in fact left_right has to be computed only one single time per plane and can be stored throughout the algorithm
+        # a simple first try could be to store it for each primitve and simply make a function which sorts it at each insertion according to the current available cell ids
+
+
+        ## sum calls the get_best_plane function less often than product, but with more planes
+        ## since get_best_planes is O(n^2), it is better to call it more often with smaller n than less often with bigger n
+
+
+
+        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
+        ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
+
+        ### the whole thing vectorized. doesn't really work for some reason
+        # UPDATE: should work, first tries where with wrong condition
+        # planes = np.repeat(vertex_group.planes[np.newaxis,current_ids,:],current_ids.shape[0],axis=0)
+        # pgs = np.repeat(point_groups[np.newaxis,current_ids,:,:],current_ids.shape[0],axis=0)
+        #
+        # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
+
+        earlystop = False
+        if "earlystop" in insertion_order:
+            earlystop = True
+
+        planes = primitive_dict["planes"][current_ids]
+        hull_verts = primitive_dict['hull_vertices'][current_ids]
+        planes = torch.from_numpy(planes).type(torch.float16).to('cuda')
+
         ### find the plane which seperates all other planes without splitting them
         left_right = []
         for i,id in enumerate(current_ids):
-            left = 0; right = 0
-            for id2 in current_ids:
-                if id == id2: continue
-                # which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2] + planes[id, 3]
-                which_side = planes[id, 0] * point_groups[id2][:, 0] + planes[id, 1] * point_groups[id2][:,1] + planes[id, 2] * point_groups[id2][:, 2]
-                which_side = (which_side < -planes[id, 3])
-                left+=(which_side).all(axis=-1)
-                right+=(~which_side).all(axis=-1)
-                # left+= (which_side < 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the left of the current plane
-                # right+= (which_side > 0).all(axis=-1)  ### check for how many planes all points of these planes fall on the right of the current plane
-            if earlystop:
-                if left == current_ids.shape[0]-1 or right == current_ids.shape[0]-1:
-                    return i
+            pls = planes[i]
 
-            left_right.append([left, right])
+
+            pv = hull_verts.transpose(2,0)
+            pv = torch.cat((pv[:,:,0:i],pv[:,:,i:-1]),axis=2)
+
+            which_side = torch.tensordot(pls[:3], pv, 1)
+
+            left = (which_side < -pls[3]).all(axis=0)
+            right = (which_side > -pls[3]).all(axis=0)
+
+            lr = torch.logical_or(left,right)
+
+
+
+            if lr.all():
+                return i
+            else:
+                left = left.sum().item()
+                right = right.sum().item()
+                intersect = which_side.shape[1] - left - right
+
+            left_right.append([left, right, intersect])
 
         left_right = np.array(left_right)
         if "sum" in insertion_order:
-            left_right = left_right.sum(axis=1)
+            left_right = np.sum(left_right[:,:2],axis=1)
+            best_plane_id = np.argmax(left_right)
         elif "product" in insertion_order:
-            left_right = np.product(left_right,axis=1)
+            left_right = np.product(left_right[:,:2],axis=1)
+            best_plane_id = np.argmax(left_right)
+        elif "intersect" in insertion_order:
+            left_right = np.abs(left_right[:,0]-left_right[:,1])+left_right[:,2]
+            best_plane_id = np.argmin(left_right)
+        elif "equal" in insertion_order:
+            left_right = np.abs(left_right[:,0]-left_right[:,1])
+            best_plane_id = np.argmin(left_right)
         else:
             raise NotImplementedError
-        best_plane_id = np.argmax(left_right)
 
         return best_plane_id
 
 
-    def _get_best_plane(self,current_ids,planes,point_groups,insertion_order="product-earlystop"):
+    def _get_best_plane(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
 
         """
         Prioritise certain planes to favour building reconstruction.
@@ -721,13 +1014,19 @@ class CellComplex:
             Prioritise vertical planes if set True
         """
 
-        pgs = np.array(point_groups, dtype=object)[current_ids]
+        # pgs = np.array(primitive_dict["point_groups"], dtype=object)[current_ids]
+        pgs = None
 
         if insertion_order == "random":
             return np.random.choice(len(current_ids),size=1)[0]
-        elif insertion_order == "product" or insertion_order == "product-earlystop" or insertion_order == "sum" or insertion_order == "sum-earlystop":
-            return self._get_best_split(current_ids,planes,point_groups,insertion_order)
-        elif insertion_order == "n_points":
+        elif insertion_order in ["product", "product-earlystop", "sum", "sum-earlystop", "equal", "equal-earlystop", "intersect", "intersect-earlystop"]:
+            if self.backend == "gpu":
+                return self._get_best_split_gpu(current_ids,primitive_dict,insertion_order)
+            elif self.backend == "cpu":
+                return self._get_best_split(current_ids,primitive_dict,insertion_order)
+            else:
+                raise NotImplementedError
+        elif insertion_order == "n-points":
             npoints = []
             for pg in pgs:
                 npoints.append(pg.shape[0])
@@ -745,7 +1044,7 @@ class CellComplex:
             return np.argmax(norms)
         elif insertion_order == 'area':
             areas = []
-            for i,plane in enumerate(planes[current_ids]):
+            for i,plane in enumerate(primitive_dict["planes"][current_ids]):
                 if pgs[i].shape[0] > 2:
                     mesh = PyPlane(plane).get_trimesh_of_projected_points(pgs[i])
                     areas.append(mesh.area)
@@ -754,6 +1053,117 @@ class CellComplex:
             return np.argmax(areas)
         else:
             raise NotImplementedError
+
+    @profile
+    def _split_support_points_gpu(self,best_plane_id,current_ids,primitive_dict, th=1):
+
+        '''
+        :param best_plane_id:
+        :param current_ids:
+        :param planes:
+        :param point_groups: padded 2d array of point groups with NaNs
+        :param n_points_per_plane: real number of points per group (ie plane)
+        :return: left and right planes
+        '''
+
+        assert th >= 0,"Threshold must be >= 0"
+
+        best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
+
+
+
+        ### now put the planes into the left and right subspace of the best_plane split
+        ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
+        left_plane_ids = []
+        right_plane_ids = []
+        for id in current_ids:
+
+            if id == current_ids[best_plane_id]:
+                continue
+
+            # polygon_points = primitive_dict["point_groups"][id]
+            polygon_points = primitive_dict["convex_hulls"][id].all_points
+
+            which_side = np.dot(best_plane[:3],polygon_points.transpose())
+            left_points = polygon_points[which_side < -best_plane[3], :]
+            right_points = polygon_points[which_side > -best_plane[3], :]
+
+            if (polygon_points.shape[0] - left_points.shape[0]) < th:
+                left_plane_ids.append(id)
+            elif(polygon_points.shape[0] - right_points.shape[0]) < th:
+                right_plane_ids.append(id)
+            else:
+                # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
+                if (left_points.shape[0] > th):
+                    left_plane_ids.append(primitive_dict["planes"].shape[0])
+                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
+                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
+                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
+                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
+                    primitive_dict["point_groups"].append(left_points)
+                    
+                    # if not enough points for making a convex hull we simply keep the points 
+                    
+                    # get all hull points and  make a new hull on the left side
+                    if left_points.shape[0] > 2:
+                        new_hull = ProjectedConvexHull(primitive_dict["convex_hulls"][id].plane_params,left_points)
+                    else:
+                        new_hull = primitive_dict["convex_hulls"][id]
+                        new_hull.hull = None
+                        new_hull.hull_points = left_points
+                        new_hull.all_points = left_points
+                    primitive_dict["convex_hulls"].append(new_hull)
+                    hull_points = new_hull.hull_points
+
+                    if hull_points.shape[0] <= self.vertex_group_n_fill:
+                        fill = self.vertex_group_n_fill - hull_points.shape[0]
+                        fill = hull_points[np.random.choice(hull_points.shape[0],fill)]
+                        hull_points=np.concatenate((hull_points,fill))
+                    else:
+                        logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
+                        hull_points = hull_points[:self.vertex_group_n_fill]
+                    primitive_dict["hull_vertices"] = torch.cat(
+                        (primitive_dict["hull_vertices"], torch.HalfTensor(np.array(hull_points)).to('cuda')[None, :, :]))
+
+                if (right_points.shape[0] > th):
+                    right_plane_ids.append(primitive_dict["planes"].shape[0])
+                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
+                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
+                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
+                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
+                    primitive_dict["point_groups"].append(right_points)
+
+
+                    # get all hull points and  make a new hull on the left side
+                    if right_points.shape[0] > 2:
+                        new_hull = ProjectedConvexHull(primitive_dict["convex_hulls"][id].plane_params, right_points)
+                    else:
+                        new_hull = primitive_dict["convex_hulls"][id]
+                        new_hull.hull = None
+                        new_hull.hull_points = right_points
+                        new_hull.all_points = right_points
+                    primitive_dict["convex_hulls"].append(new_hull)
+                    hull_points = new_hull.hull_points
+
+                    if hull_points.shape[0] <= self.vertex_group_n_fill:
+                        fill = self.vertex_group_n_fill - hull_points.shape[0]
+                        fill = hull_points[np.random.choice(hull_points.shape[0],fill)]
+                        hull_points=np.concatenate((hull_points,fill))
+                    else:
+                        logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
+                        hull_points = hull_points[:self.vertex_group_n_fill]
+                    primitive_dict["hull_vertices"] = torch.cat(
+                        (primitive_dict["hull_vertices"],
+                         torch.HalfTensor(np.array(hull_points)).to('cuda')[None, :, :]))
+
+
+                self.split_count+=1
+
+                # planes[id, :] = np.nan
+                # point_groups[id][:, :] = np.nan
+
+        return left_plane_ids,right_plane_ids
+
 
 
 
@@ -773,8 +1183,8 @@ class CellComplex:
 
         ### now put the planes into the left and right subspace of the best_plane split
         ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
-        left_planes = []
-        right_planes = []
+        left_plane_ids = []
+        right_plane_ids = []
         for id in current_ids:
 
             if id == current_ids[best_plane_id]:
@@ -782,31 +1192,33 @@ class CellComplex:
 
             # which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2] + best_plane[3]
             which_side = best_plane[0] * primitive_dict["point_groups"][id][:, 0] + best_plane[1] * primitive_dict["point_groups"][id][:, 1] + best_plane[2] * primitive_dict["point_groups"][id][:, 2]
-
             left_points = primitive_dict["point_groups"][id][which_side < -best_plane[3], :]
             right_points = primitive_dict["point_groups"][id][which_side > -best_plane[3], :]
-
             assert (primitive_dict["point_groups"][id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
 
             if (primitive_dict["point_groups"][id].shape[0] - left_points.shape[0]) < th:
-                left_planes.append(id)
+                # if left_points.shape[0] > th:
+                left_plane_ids.append(id)
                 primitive_dict["point_groups"][id] = left_points  # update the point group, in case some points got dropped according to threshold
             elif(primitive_dict["point_groups"][id].shape[0] - right_points.shape[0]) < th:
-                right_planes.append(id)
+                # if right_points.shape[0] > th:
+                right_plane_ids.append(id)
                 primitive_dict["point_groups"][id] = right_points # update the point group, in case some points got dropped according to threshold
             else:
                 # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
                 if (left_points.shape[0] > th):
-                    left_planes.append(primitive_dict["planes"].shape[0])
+                    left_plane_ids.append(primitive_dict["planes"].shape[0])
                     primitive_dict["point_groups"].append(left_points)
                     primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
-                    primitive_dict["halfspaces"] = np.vstack((primitive_dict["halfspaces"],primitive_dict["halfspaces"][id]))
+                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
+                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
                     primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
                 if (right_points.shape[0] > th):
-                    right_planes.append(primitive_dict["planes"].shape[0])
+                    right_plane_ids.append(primitive_dict["planes"].shape[0])
                     primitive_dict["point_groups"].append(right_points)
                     primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
-                    primitive_dict["halfspaces"] = np.vstack((primitive_dict["halfspaces"],primitive_dict["halfspaces"][id]))
+                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
+                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
                     primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
 
                 self.split_count+=1
@@ -814,7 +1226,7 @@ class CellComplex:
                 # planes[id, :] = np.nan
                 # point_groups[id][:, :] = np.nan
 
-        return left_planes,right_planes
+        return left_plane_ids,right_plane_ids
 
 
     def _init_polygons(self):
@@ -828,8 +1240,8 @@ class CellComplex:
         for e0,e1 in self.graph.edges:
 
             edge = self.graph.edges[e0,e1]
-            c0 = self.graph.nodes[e0]["convex"]
-            c1 = self.graph.nodes[e1]["convex"]
+            c0 = self.tree.nodes.get(e0).data["convex"]
+            c1 = self.tree.nodes.get(e1).data["convex"]
             ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
             ### I could just say if self.simplified or something like that, but for now will just recaculate all the intersections here
             # if not self.graph.edges[e0,e1]["intersection"]:
@@ -848,6 +1260,8 @@ class CellComplex:
 
     def simplify(self):
 
+        # TODO: try a simplify version from top to botton
+
         """
         2. simplify the partition
         :return:
@@ -859,12 +1273,6 @@ class CellComplex:
 
         def filter_edge(n0,n1):
             to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
-            # TODO: lqst thing I could try for LOD reconstruction would be to sort planes without the 0 on one side stopping criterion in the hope that it leads
-            #  to more symetric decomposition and thus more symmetric generalization
-            # v1 = float(self.graph.nodes[n0]["convex"].volume())
-            # v2 = float(self.graph.nodes[n1]["convex"].volume())
-            #
-            # to_process = ((perc > v1/bb_vol or perc > v2/bb_vol) and self.graph.edges[n0,n1]["convex_intersection"])
             return to_process
 
         collapse_count=0
@@ -877,7 +1285,7 @@ class CellComplex:
 
                 parent = self.tree.parent(c0)
                 pp_id = self.tree.parent(parent.identifier).identifier
-                self.graph.nodes[c0]["convex"] = parent.data["convex"]
+                # self.graph.nodes[c0]["convex"] = parent.data["convex"]
 
                 self.tree.remove_node(parent.identifier)
 
@@ -894,7 +1302,8 @@ class CellComplex:
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
-        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+        # self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+
         self.polygons_initialized = False
 
 
@@ -921,7 +1330,7 @@ class CellComplex:
 
     def add_bounding_box_planes(self):
 
-
+        logger.info("Add bounding planes...")
 
         outside_poly = self._init_bounding_box(padding=self.initial_padding**2)
         # bigger_bb_box = self._init_bounding_box(padding=self.initial_padding)
@@ -944,25 +1353,19 @@ class CellComplex:
             hspace_neg, hspace_pos = self._inequalities(plane)
             op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
 
-            # if export:
-
-            self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
+            if self.export:
+                self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
 
             self.graph.add_node(-(i+1), convex=op, occupancy=0.0)
 
 
             for cell_id in list(self.graph.nodes):
 
-                cell = self.graph.nodes[cell_id]
-                intersection = op.intersection(cell["convex"])
+                intersection = op.intersection(self.tree.nodes.get(cell_id).data["convex"])
 
                 if intersection.dim() == 2:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
                                    supporting_plane=plane, convex_intersection=False, bounding_box_edge=True)
-
-
-        # self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
-
 
     def construct_polygons(self):
 
@@ -999,10 +1402,64 @@ class CellComplex:
                     this_edge["vertices"] += facet_intersection.vertices_list()
 
 
+    def build_tree(self, model):
 
-    def construct_partition(self, m, mode=Tree.DEPTH, th=1, ordering="optimal", export=False, insertion_order="product-earlystop"):
+        # TODO: make a version where the tree is build without any intersection computations.
+        #  Here the tree nodes are planes, and only the leaf nodes are (not yet) constructed cells (see Murali et al. Figure 3 for such a tree).
+        # To construct the cells, (after the tree has been constructed) one simply has to walk up the tree from the leaf node to the root and collect the planes along it.
+        # Planes are oriented depending on which side of the tree one is coming from e.g. each child could have a label positive or negative.
+        # Stop walking once the collected planes form a bounded region -> the cell.
+        # Now the cells can be labelled and simplified (siblings are known from the tree) and a convex decomposition can be extracted.
+        # For surface reconstruction, i.e. to get the interface facets, a graph adjacency has to be recovered.
+        # This could maybe be done by analysing from which supporting planes the cells come, i.e. if two cells share one supporting plane they are probably heighbors.
 
-        logger.info('Construct partition with mode {}'.format(insertion_order))
+        pass
+
+
+    def _plane_from_points(self,points):
+
+        points = np.array(points)
+
+        a = points[1,:]-points[0,:]
+        b = points[2,:]-points[0,:]
+        n = np.cross(a,b)
+        d = np.dot(points[0,:],n)
+        plane= np.array([n[0],n[1],n[2],-d])
+        return plane/np.linalg.norm(plane)
+
+
+
+    # @profile
+    def _build_graph(self):
+
+        graph = nx.Graph()
+
+
+        for cells in self.cells_along_planes.values():
+            for i in cells:
+                if not self.tree.nodes[i].is_leaf(): continue
+                for j in cells:
+                    if i >= j: continue
+                    if not self.tree.nodes[j].is_leaf(): continue
+
+                    intersection = self.tree.nodes[i].data["convex"].intersection(self.tree.nodes[j].data["convex"])
+
+                    if intersection.dim()==2:
+                        graph.add_edge(i, j, intersection=intersection, vertices=[],
+                                            supporting_plane=self._plane_from_points(intersection.vertices_list()),
+                                            convex_intersection=False, bounding_box_edge=False)
+
+
+        self.graph = graph
+        a=4
+
+
+
+
+    @profile
+    def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", backend='cpu'):
+
+        logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.backend))
 
 
         """
@@ -1022,42 +1479,66 @@ class CellComplex:
         # The tag property of tree.node is what is shown when you call tree.show(). can be changed with tree.node(NODEid).tag = "some_text"
 
         primitive_dict = dict()
-        primitive_dict["planes"] = deepcopy(self.planes)
-        primitive_dict["halfspaces"] = deepcopy(self.halfspaces)
+        primitive_dict["planes"] = self.planes
+        primitive_dict["halfspaces"] = list(self.halfspaces)
         primitive_dict["point_groups"] = list(self.points)
+        primitive_dict["hull_vertices"] = self.hull_vertices
+        primitive_dict["convex_hulls"] = list(self.convex_hulls)
         primitive_dict["split_count"] = [0]*len(self.planes)
+        primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
+        self.cells_along_planes = dict()
+        for i in range(len(self.planes)):
+            self.cells_along_planes[i]=[]
+        if self.backend == 'gpu':
+            primitive_dict["point_groups"] = []
+            for ch in self.convex_hulls:
+                primitive_dict["point_groups"].append(ch.all_points)
+
+
         split_colors = [[0,1,0],[1,0,0],[0,0,1],[139/255,0,139/255]]
 
         cell_count = 0
         self.split_count = 0
-
+        self.sphere_breaker_count = 0
 
         ## init the graph
-        graph = nx.Graph()
-        graph.add_node(cell_count, convex=self.bounding_poly)
-
+        self.graph = nx.Graph()
+        self.graph.add_node(cell_count, convex=self.bounding_poly)
 
         ## expand the tree as long as there is at least one plane inside any of the subspaces
-        tree = Tree()
-        dd = {"convex": self.bounding_poly, "plane_ids": np.arange(primitive_dict["planes"].shape[0])}
-        tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
-        children = tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
+        self.tree = Tree()
+        dd = {"convex": self.bounding_p"plane_ids": np.arange(primitive_dict["planes"].shape[0])}
+        self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0
         n_points_total = np.concatenate(primitive_dict["point_groups"],dtype=object).shape[0]
         pbar = tqdm(total=n_points_total,file=sys.stdout)
         for child in children:
 
-            current_ids = tree[child].data["plane_ids"]
-            current_cell = tree[child].data["convex"]
+
+            current_ids = self.tree[child].data["plane_ids"]
+            current_cell = self.tree[child].data["convex"]
             plane_count+=1  # only used for debugging exports
 
-            ### get the best plane
-            best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids,primitive_dict["planes"],primitive_dict["point_groups"], insertion_order)
-            best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
-            n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
 
-            ### split the primitives with the best_plane, and append them to the plane array
-            left_planes, right_planes = self._split_support_points(best_plane_id,current_ids,primitive_dict, th)
+            if len(current_ids) == 1:
+                best_plane_id = 0
+                left_planes = []; right_planes = []
+            else:
+                best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids,primitive_dict, insertion_order)
+                best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
+                ### split the primitives with the best_plane, and append them to the plane array
+                if self.backend == 'cpu':
+                    left_planes, right_planes = self._split_support_points(best_plane_id,current_ids,primitive_dict, th)
+                elif self.backend == 'gpu':
+                    left_planes, right_planes = self._split_support_points_gpu(best_plane_id,current_ids,primitive_dict, th)
+                else:
+                    raise NotImplementedError
+            
+            
+            ### progress bar update
+            n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
+            current_original_plane_id = primitive_dict["plane_ids"][current_ids[best_plane_id]]
 
             ### export best plane
             if export:
@@ -1070,7 +1551,8 @@ class CellComplex:
 
 
             ## create the new convexes
-            hspace_positive, hspace_negative = primitive_dict["halfspaces"][current_ids[best_plane_id],0], primitive_dict["halfspaces"][current_ids[best_plane_id],1]
+            # hspace_positive, hspace_negative = primitive_dict["halfspaces"][current_ids[best_plane_id],0], primitive_dict["halfspaces"][current_ids[best_plane_id],1]
+            hspace_positive, hspace_negative = primitive_dict["halfspaces"][current_ids[best_plane_id]][0], primitive_dict["halfspaces"][current_ids[best_plane_id]][1]
 
             cell_negative = current_cell.intersection(hspace_negative)
             cell_positive = current_cell.intersection(hspace_positive)
@@ -1083,10 +1565,8 @@ class CellComplex:
                 dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_id = cell_count
-                tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(neg_cell_id,convex=cell_negative)
-            # else:
-            #     logger.warning("Empty cell")
+                self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=child)
+                self.graph.add_node(neg_cell_id,convex=cell_negative)
 
             if(cell_positive.dim() == 3):
                 if export:
@@ -1094,73 +1574,93 @@ class CellComplex:
                 dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_id = cell_count
-                tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=tree[child].identifier)
-                graph.add_node(pos_cell_id,convex=cell_positive)
-            # else:
-            #     logger.warning("Empty cell")
+                self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=child)
+                self.graph.add_node(pos_cell_id,convex=cell_positive)
+                # TODO: remove the convex from the tree and the graph to save memory, simply store a list of convex and a pointer to it
 
-
-            # if(not cell_positive.is_empty() and not cell_negative.is_empty()):
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
-                # if simplify is called, new
-                graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
+                self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
                                supporting_plane=best_plane, convex_intersection=True, bounding_box_edge=False)
                 if export:
                     new_intersection = cell_negative.intersection(cell_positive)
                     self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
-            neighbors_of_old_cell = list(graph[child])
+            neighbors_of_old_cell = list(self.graph[child])
             old_cell_id=child
             for neighbor_id_old_cell in neighbors_of_old_cell:
-                # get the neighboring convex
-                nconvex = graph.nodes[neighbor_id_old_cell]["convex"]
-                # intersect new cells with old neighbors to make the new facets
-                negative_intersection = nconvex.intersection(cell_negative)
-                positive_intersection = nconvex.intersection(cell_positive)
 
-                n_nonempty = negative_intersection.dim()==2
-                p_nonempty = positive_intersection.dim()==2
+                # get the neighboring convex
+                # nconvex = self.graph.nodes[neighbor_id_old_cell]["convex"]
+                nconvex = self.tree.nodes.get(neighbor_id_old_cell).data["convex"]
+                # intersect new cells with old neighbors to make the new facets
+                n_nonempty = False; p_nonempty = False
+                if cell_negative.dim()==3:
+                    negative_intersection = nconvex.intersection(cell_negative)
+                    n_nonempty = negative_intersection.dim()==2
+                if cell_positive.dim()==3:
+                    positive_intersection = nconvex.intersection(cell_positive)
+                    p_nonempty = positive_intersection.dim()==2
                 # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
                 if n_nonempty:
-                    # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
-                    #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == negative_intersection))
-                    graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
+                    self.graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[],
+                                   supporting_plane=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
                 if p_nonempty:
-                    # convex_intersection = (graph[old_cell_id][neighbor_id_old_cell]["convex_intersection"] \
-                    #     and (graph[old_cell_id][neighbor_id_old_cell]["intersection"] == positive_intersection))
-                    graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
-                                   supporting_plane=graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
+                    self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
+                                   supporting_plane=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
 
-            # nx.draw(graph,with_labels=True)  # networkx draw()
-            # plt.draw()
-            # plt.show()
-            # #
-            # self.cellComplexExporter.write_graph(m,graph)
-            # self.cells = list(nx.get_node_attributes(graph, "convex").values())
-            # self.save_obj(os.path.join(m["abspy"]["partition"]))
-
-            ## remove the parent node
-            graph.remove_node(child)
-
+            self.graph.remove_node(child)
             pbar.update(n_points_processed)
+            
+            # clean:
+            # primitive_dict["planes"] = self.planes
+            # primitive_dict["halfspaces"] = self.halfspaces
+            # primitive_dict["point_groups"] = list(self.points)
+            # primitive_dict["hull_vertices"] = self.hull_vertices
+            # primitive_dict["convex_hulls"] = list(self.convex_hulls)
+            # primitive_dict["split_count"] = [0] * len(self.planes)
+            # primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
 
+            if self.backend == 'gpu':
+                primitive_dict["halfspaces"][current_ids[best_plane_id]] = None
+                primitive_dict["point_groups"][current_ids[best_plane_id]] = None
+                primitive_dict["convex_hulls"][current_ids[best_plane_id]] = None
+            
+            
 
-        self.graph = graph
-        self.tree = tree
+        pbar.close()
+
+        # self._build_graph()
+
         if export:
-            self.cellComplexExporter.write_graph(m,graph)
+            self.cellComplexExporter.write_graph(m,self.graph)
         self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+        assert(len(self.cells) == len(list(self.graph.nodes))) ## this makes sure that every graph node has a convex attached
 
-        self.constructed = True
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
-
-        logger.info("Out of {} planes {} were split, making a total of {} planes now".format(len(self.planes),self.split_count,len(self.planes)+self.split_count))
+        logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))
 
         return 0
 
+
+    def save_partition(self,infile):
+
+        os.makedirs(infile,exist_ok=True)
+
+        pickle.dump(self.tree,open(os.path.join(infile,'tree.pickle'),'wb'))
+        pickle.dump(self.graph,open(os.path.join(infile,'graph.pickle'),'wb'))
+
+
+    def load_partition(self,infile):
+
+        self.tree=pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
+        self.graph=pickle.load(open(os.path.join(infile,'graph.pickle'),'rb'))
+
+        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
+        assert(len(self.cells) == len(list(self.graph.nodes))) ## this makes sure that every graph node has a convex attached
+
+        self.polygons_initialized = False # false because I do not initialize the sibling facets
 
 
     @staticmethod
@@ -1275,6 +1775,7 @@ class CellComplex:
             Query index in the cell list
         """
         return list(self.graph.nodes).index(query)
+
 
     def _intersect_neighbour(self, kwargs):
         """
@@ -1425,66 +1926,7 @@ class CellComplex:
                 if self.graph is not None:
                     self.graph.remove_node(list(self.graph.nodes)[index_parent])
 
-        self.constructed = True
         logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
-
-
-    @property
-    def num_cells(self):
-        """
-        Number of cells in the complex.
-        """
-        return len(self.cells)
-
-    @property
-    def num_planes(self):
-        """
-        Number of planes in the complex, excluding the initial bounding box.
-        """
-        return len(self.planes)
-
-    def volumes(self, multiplier=1.0, engine='Qhull'):
-        """
-        list of cell volumes.
-
-        Parameters
-        ----------
-        multiplier: float
-            Multiplier to the volume
-        engine: str
-            Engine to compute volumes, can be 'Qhull' or 'Sage' with native SageMath
-
-        Returns
-        -------
-        as_float: list of float
-            Volumes of cells
-        """
-        if engine == 'Qhull':
-            from scipy.spatial import ConvexHull
-            volumes = [None for _ in range(len(self.cells))]
-            for i, cell in enumerate(self.cells):
-                try:
-                    volumes[i] = ConvexHull(cell.vertices_list()).volume * multiplier
-                except:
-                    # degenerate floating-point
-                    volumes[i] = RR(cell.volume()) * multiplier
-            return volumes
-
-        elif engine == 'Sage':
-            return [RR(cell.volume()) * multiplier for cell in self.cells]
-
-        else:
-            raise ValueError('engine must be either "Qhull" or "Sage"')
-
-
-    def print_info(self):
-        """
-        Print info to console.
-        """
-        logger.info('number of planes: {}'.format(self.num_planes))
-        logger.info('number of cells: {}'.format(self.num_cells))
-
-
 
 
 

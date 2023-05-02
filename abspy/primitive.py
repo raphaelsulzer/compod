@@ -1,12 +1,12 @@
 import os, sys, struct
 from pathlib import Path
 import numpy as np
+import torch
 from sage.all import polytopes, QQ, RR, Polyhedron
-from collections import defaultdict
-
+# from torchrec import sparse
 PYTHONPATH="/home/rsulzer/python"
 sys.path.append(os.path.join(PYTHONPATH,"pyplane"))
-from pyplane import PyPlane, SagePlane
+from pyplane import PyPlane, SagePlane, ProjectedConvexHull
 from export import PlaneExporter
 
 from .logger import attach_to_log
@@ -19,7 +19,9 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None, points_type="inliers", sample_count_per_area=2, fixed_sample_count=10, export=False):
+    def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None,
+                 points_type="inliers", sample_count_per_area=2, fixed_sample_count=10, export=False,
+                 backend='gpu'):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -49,6 +51,7 @@ class VertexGroup:
         self.points_type = points_type
 
         self.export = export
+        self.backend = backend
 
         ending = os.path.splitext(filepath)[1]
         if ending == ".npz":
@@ -142,23 +145,6 @@ class VertexGroup:
         self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self._get_primitives()
         self.processed = True
 
-    def _sample_polygons(self,planes,points,n_points=None):
-
-        ## project inliers to plane and get the convex hull
-        all_sampled_points = []
-        for i,plane in enumerate(planes):
-
-            pl = PyPlane(plane)
-            mesh=pl.get_trimesh_of_projected_points(points[i])
-            if n_points is None:
-                n = 3+int(self.sample_count_per_area*mesh.area)
-            sampled_points = mesh.sample(n)
-            sampled_points = np.concatenate((sampled_points,mesh.vertices),axis=0,dtype=np.float32)
-            sampled_points = np.unique(sampled_points,axis=0)
-            all_sampled_points.append(sampled_points)
-
-        return np.array(all_sampled_points,dtype=object)
-
 
     def _prioritise_planes(self, mode):
         """
@@ -187,7 +173,7 @@ class VertexGroup:
             bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
             return np.append(indices_sorted_planes[bool_vertical_planes],
                                          indices_sorted_planes[np.invert(bool_vertical_planes)])
-        elif mode == "n_points":
+        elif mode == "n-points":
             npoints = []
             for pg in self.points_grouped:
                 npoints.append(pg.shape[0])
@@ -236,6 +222,37 @@ class VertexGroup:
 
 
 
+    def _sample_polygons(self,polygons,n_points=None):
+
+        ## project inliers to plane and get the convex hull
+        all_sampled_points = []
+        hull_vertices = []
+        for i,poly in enumerate(polygons):
+            # the old way
+            np.random.seed(42)
+            if n_points is None:
+                n = 3+int(self.sample_count_per_area*poly.area)
+            sampled_points = poly.sample(n)
+            sampled_points = np.concatenate((sampled_points,poly.vertices),axis=0,dtype=np.float32)
+            all_sampled_points.append(sampled_points)
+
+            # the new way
+            hp = np.array(self.convex_hulls[i].hull_points)
+            fill_vertices = hp[np.random.choice(hp.shape[0],self.n_fill-hp.shape[0])]
+            hp = np.concatenate((hp,fill_vertices))
+            hull_vertices.append(hp)
+
+        if self.backend == 'gpu':
+            hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
+        elif self.backend == 'cpu':
+            hull_vertices = np.array(hull_vertices)
+        else:
+            raise NotImplementedError
+
+        return np.array(all_sampled_points,dtype=object), hull_vertices
+
+
+
     def _process_npz(self):
         """
         Start processing vertex group.
@@ -247,12 +264,15 @@ class VertexGroup:
 
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(np.float32)
+        self.polygons = []
+        total_area = 0
         points = data["points"].astype(np.float32)
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
         colors = data["group_colors"]
         self.points_grouped = []
-        self.polygons = []
+        self.n_hull_points = []
+        self.convex_hulls = []
         last = 0
         for i,npp in enumerate(npoints):
             ## make the point groups
@@ -266,13 +286,25 @@ class VertexGroup:
             #     self.polygons.append(Polyhedron(vertices=pp))
             # except:
             #     a=5
+            ## make a trimesh of each input polygon
+            pl = PyPlane(self.planes[i])
+            mesh = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
+            total_area+=mesh.area
+            self.polygons.append(mesh)
+
+            pch = ProjectedConvexHull(self.planes[i],pts)
+            self.convex_hulls.append(pch)
+            self.n_hull_points.append(len(pch.hull.vertices))
+
             last += npp
 
-        ## get AABB of all points to compute AABB diagonal for scaling the n_sample_points_per_area value
-        ppmin = points.min(axis=0)
-        ppmax = points.max(axis=0)
-        diag = np.linalg.norm(ppmax - ppmin, ord=2, axis=0)
-        self.sample_count_per_area = self.sample_count_per_area/diag
+        self.convex_hulls = np.array(self.convex_hulls)
+        self.n_hull_points = np.array(self.n_hull_points)
+        self.n_fill = self.n_hull_points.max()*2
+
+
+        ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
+        self.sample_count_per_area = self.sample_count_per_area/total_area
 
 
         if self.points_type == "samples":
@@ -280,7 +312,7 @@ class VertexGroup:
                 n_points = self.fixed_sample_count
             else:
                 n_points = None
-            self.points_grouped = self._sample_polygons(self.planes,self.points_grouped, n_points=n_points)
+            self.points_grouped, self.hull_vertices = self._sample_polygons(self.polygons, n_points=n_points)
             # self.merge_duplicates = True
         elif self.points_type == "inliers":
             pass
@@ -289,37 +321,48 @@ class VertexGroup:
             NotImplementedError
 
 
+        ## export planes and samples
+        pe = PlaneExporter()
+        # pt_file = os.path.join(os.path.dirname(str(self.filepath)),"polygon_samples.ply")
+        # plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
+        pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
+        plane_file =  self.filepath.with_suffix('.ply')
+        pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=colors)
+
+
 
 
         n_planes = self.planes.shape[0]
         # merge input polygons that come from the same plane but are disconnected
         # this is desirable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
         if self.merge_duplicates:
-            pts = defaultdict(int)
-            primitive_ids = defaultdict(list)
-            polygons = defaultdict(list)
-            cols = defaultdict(list)
-            un, inv = np.unique(self.planes, return_inverse=True, axis=0)
-            for i in range(len(self.planes)):
-                if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
-                    pts[inv[i]] = self.points_grouped[i]
-                    polygons[inv[i]] = self.polygons[i]
-                else:
-                    pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
-                    pp = polygons[inv[i]].vertices_list() + self.polygons[i].vertices_list()
-                    polygons[inv[i]] = Polyhedron(vertices=pp)
-
-                cols[inv[i]] = colors[i]
-                primitive_ids[inv[i]]+=[i]
-
-            self.plane_colors = list(cols.values())
-            self.planes = un[list(pts.keys())]
-            self.points_grouped = list(pts.values())
-            self.polygons = polygons
-            # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
-            self.merged_primitives_to_input_primitives = list(primitive_ids.values())
-
-            logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
+            raise NotImplementedError # need to add the polygons tensor to this first
+            # pts = defaultdict(int)
+            # primitive_ids = defaultdict(list)
+            # polygons = defaultdict(list)
+            # cols = defaultdict(list)
+            # un, inv = np.unique(self.planes, return_inverse=True, axis=0)
+            # for i in range(len(self.planes)):
+            #     if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
+            #         pts[inv[i]] = self.points_grouped[i]
+            #         polygons[inv[i]] = self.polygons[i]
+            #     else:
+            #         pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
+            #         polygons[inv[i]]+=self.polygons[i]
+            #         # pp = polygons[inv[i]].vertices_list() + self.polygons[i].vertices_list()
+            #         # polygons[inv[i]] = Polyhedron(vertices=pp)
+            #
+            #     cols[inv[i]] = colors[i]
+            #     primitive_ids[inv[i]]+=[i]
+            #
+            # self.plane_colors = list(cols.values())
+            # self.planes = un[list(pts.keys())]
+            # self.points_grouped = list(pts.values())
+            # self.polygons = polygons
+            # # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
+            # self.merged_primitives_to_input_primitives = list(primitive_ids.values())
+            #
+            # logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
         else:
             self.plane_colors = colors
             self.merged_primitives_to_input_primitives = []
@@ -335,9 +378,12 @@ class VertexGroup:
             order = self._prioritise_planes(self.prioritise_planes)
             self.planes = self.planes[order]
             self.points_grouped = list(np.array(self.points_grouped,dtype=object)[order])
+            self.hull_vertices = self.hull_vertices[order.copy(),:,:]
+            self.convex_hulls = self.convex_hulls[order]
             self.merged_primitives_to_input_primitives = list(np.array(self.merged_primitives_to_input_primitives,dtype=object)[order])
             self.plane_colors = np.array(self.plane_colors)[order]
             self.bounds = self.bounds[order]
+            self.polygons = np.array(self.polygons)[order]
         else:
             logger.info("No plane prioritisation applied")
 
@@ -345,6 +391,10 @@ class VertexGroup:
         self.halfspaces = []
         self.plane_dict = dict()
         for i,p in enumerate(self.planes):
+            p = p/np.linalg.norm(p)
+
+            # could do sth like this: str(['{:.3f}'.format(d) for d in p])
+
             self.plane_dict[str(p)] = i
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
         self.halfspaces = np.array(self.halfspaces)
@@ -355,12 +405,6 @@ class VertexGroup:
         self.points_ungrouped = points[self.points_ungrouped.astype(int)]
 
         self.processed = True
-
-        if self.export:
-            pe = PlaneExporter()
-            pt_file = os.path.join(os.path.dirname(str(self.filepath)),"samples.ply")
-            plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
-            pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes)
 
         a=5
 

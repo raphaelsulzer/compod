@@ -199,16 +199,16 @@ class CellComplexExporter:
             f.write("{:.3f} {:.3f} {:.3f}\n".format(p[0],p[1],p[2]))
         f.close()
 
-    def write_off(self,filename,points,facets,color=None):
+    def write_off(self,filename,points,facets):
 
-        c = color if color is not None else (np.random.random(size=3)*255).astype(int)
+        # c = color if color is not None else (np.random.random(size=3)*255).astype(int)
 
 
         f = open(filename[:-3]+"off",'w')
-        f.write("COFF\n")
+        f.write("OFF\n")
         f.write("{} {} 0\n".format(points.shape[0],len(facets)))
         for p in points:
-            f.write("{:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
+            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
         for face in facets:
             f.write("{}".format(len(face)))
             for v in face:
