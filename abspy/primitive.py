@@ -234,7 +234,8 @@ class VertexGroup:
 
 
         if self.backend == 'gpu':
-            self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
+            # self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
+            self.hull_vertices = torch.Tensor(np.array(hull_vertices)).to('cuda')
         elif self.backend == 'cpu':
             self.hull_vertices = np.array(hull_vertices)
         else:

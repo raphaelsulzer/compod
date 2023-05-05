@@ -823,7 +823,7 @@ class CellComplex:
 
         planes = primitive_dict["planes"][current_ids]
         hull_verts = primitive_dict['hull_vertices'][current_ids]
-        planes = torch.from_numpy(planes).type(torch.float16).to('cuda')
+        planes = torch.from_numpy(planes).type(torch.float32).to('cuda')
 
         ### find the plane which seperates all other planes without splitting them
         left_right = []
@@ -835,9 +835,12 @@ class CellComplex:
             pv = torch.cat((pv[:,:,:i],pv[:,:,i+1:]),axis=2)
 
             which_side = torch.tensordot(pls[:3], pv, 1)
+            which_side = which_side < -pls[3]
+            left = which_side.all(axis=0)
+            right = (~which_side).all(axis=0)
 
-            left = (which_side < -pls[3]).all(axis=0)
-            right = (which_side > -pls[3]).all(axis=0)
+            # left = (which_side < -pls[3]).all(axis=0)
+            # right = (which_side > -pls[3]).all(axis=0)
 
             lr = torch.logical_or(left,right)
 
@@ -997,7 +1000,8 @@ class CellComplex:
                         logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
                         hull_points = hull_points[:self.vertex_group_n_fill]
                     primitive_dict["hull_vertices"] = torch.cat(
-                        (primitive_dict["hull_vertices"], torch.HalfTensor(np.array(hull_points)).to('cuda')[None, :, :]))
+                        (primitive_dict["hull_vertices"],
+                         torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
 
                 if (right_points.shape[0] > th):
                     right_plane_ids.append(primitive_dict["planes"].shape[0])
@@ -1028,7 +1032,7 @@ class CellComplex:
                         hull_points = hull_points[:self.vertex_group_n_fill]
                     primitive_dict["hull_vertices"] = torch.cat(
                         (primitive_dict["hull_vertices"],
-                         torch.HalfTensor(np.array(hull_points)).to('cuda')[None, :, :]))
+                         torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
 
 
                 self.split_count+=1
