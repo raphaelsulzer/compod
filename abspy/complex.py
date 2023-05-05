@@ -529,84 +529,6 @@ class CellComplex:
         f.close()
 
 
-    @staticmethod
-    def _obj_str(cells, use_mtl=False, filename_mtl='colours.mtl'):
-        """
-        Convert a list of cells into a string of obj format.
-
-        Parameters
-        ----------
-        cells: list of Polyhedra objects
-            Polyhedra cells
-        use_mtl: bool
-            Use mtl attribute in obj if set True
-        filename_mtl: None or str
-            Material filename
-
-        Returns
-        -------
-        scene_str: str
-            String representation of the object
-        material_str: str
-            String representation of the material
-        """
-        scene = None
-        for cell in cells:
-            scene += cell.render_solid()
-
-        # directly save the obj string from scene.obj() will bring the inverted facets
-        scene_obj = scene.obj_repr(scene.default_render_params())
-        if len(cells) == 1:
-            scene_obj = [scene_obj]
-        scene_str = ''
-        material_str = ''
-
-        if use_mtl:
-            scene_str += f'mtllib {filename_mtl}\n'
-
-        for o in range(len(cells)):
-            scene_str += scene_obj[o][0] + '\n'
-
-            if use_mtl:
-                scene_str += scene_obj[o][1] + '\n'
-                material_str += 'newmtl ' + scene_obj[o][1].split()[1] + '\n'
-                material_str += 'Kd {:.3f} {:.3f} {:.3f}\n'.format(random(), random(), random())  # diffuse colour
-
-            scene_str += '\n'.join(scene_obj[o][2]) + '\n'
-            scene_str += '\n'.join(scene_obj[o][3]) + '\n'  # contents[o][4] are the interior facets
-        return scene_str, material_str
-
-
-    def extract_partition(self, filepath, indices_cells=None, use_mtl=False):
-        logger.info('Extract partition...')
-
-        """
-        Save polygon soup of indexed convexes to an obj file.
-
-        Parameters
-        ----------
-        filepath: str or Path
-            Filepath to save obj file
-        indices_cells: (n,) int
-            Indices of cells to save to file
-        use_mtl: bool
-            Use mtl attribute in obj if set True
-        """
-        # create the dir if not exists
-        filepath = Path(filepath)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-
-        cells = [self.cells[i] for i in indices_cells] if indices_cells is not None else self.cells
-        scene_str, material_str = self._obj_str(cells, use_mtl=use_mtl, filename_mtl=f'{filepath.stem}.mtl')
-
-        with open(filepath, 'w') as f:
-            f.writelines("# facets cells: {} {}\n".format(len(self.graph.edges),len(self.cells)))
-            f.writelines(scene_str)
-        if use_mtl:
-            with open(filepath.with_name(f'{filepath.stem}.mtl'), 'w') as f:
-                f.writelines(material_str)
-
-
     def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True):
         logger.info('Extract partition...')
 
@@ -686,7 +608,7 @@ class CellComplex:
         f = open(str(filepath),"w")
         f.write("ply\n")
         f.write("format ascii 1.0\n")
-        f.write("comment number_of_cells {}\n".format(len(self.cells)))
+        f.write("comment number_of_cells {}\n".format(len(self.graph.nodes)))
         # f.write("comment number_of_faces {}\n".format(len(self.graph.edges)))
         f.write("comment number_of_faces {}\n".format(ecount))
         f.write("element vertex {}\n".format(len(points)))
