@@ -267,9 +267,7 @@ class CellComplex:
         elif "intersection" in self.graph[e0][e1] and self.graph[e0][e1] is not None:
             intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
         else:
-            c0 = self.graph.nodes[e0]["convex"]
-            c1 = self.graph.nodes[e1]["convex"]
-            intersection = c0.intersection(c1)
+            intersection = self.cells.get(e0).intersection(self.cells.get(e1))
             assert(intersection.dim()==2)
             intersection_points = np.array(intersection.vertices_list(), dtype=object)
 
@@ -301,7 +299,7 @@ class CellComplex:
 
 
                 ## orient polygon
-                outside = c0["convex"].center() if c1["occupancy"] else c1["convex"].center()
+                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
                 # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
                 if self._orient_exact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
@@ -360,7 +358,7 @@ class CellComplex:
                     sys.exit(1)
 
                 ## orient polygon
-                outside = self.tree.nodes[e0].data["convex"].center() if c1["occupancy"] else self.tree.nodes[e1].data["convex"].center()
+                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
                 # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
                 if self._orient_exact_polygon(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
@@ -417,7 +415,7 @@ class CellComplex:
         # get total volume
         cell_volumes = []
         for node in view.nodes():
-            vol = self.tree.nodes[node].data["convex"].volume()
+            vol = self.cells.get(node).volume()
             cell_volumes.append(vol)
         cell_volumes = np.array(cell_volumes)
         # cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.80))
@@ -425,7 +423,7 @@ class CellComplex:
 
         for i,node in enumerate(view.nodes()):
             c = np.random.randint(low=100,high=255,size=3)
-            polyhedron = self.tree.nodes[node].data["convex"]
+            polyhedron = self.cells.get(node)
             ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
             verts = []
             for v in ss[2]:
@@ -493,7 +491,7 @@ class CellComplex:
             # if node[1]["occupancy"] == 1:
         for node in view.nodes():
             c = np.random.randint(low=100,high=255,size=3)
-            polyhedron = self.tree.nodes[node].data["convex"]
+            polyhedron = self.cells.get(node)
             ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
             for v in ss[2]:
                 v = v.split(' ')
@@ -787,7 +785,9 @@ class CellComplex:
             return 1
         points = []
         points_len = []
-        for i,cell in enumerate(self.cells):
+        for i,id in enumerate(list(self.graph.nodes)):
+            if id < 0:  continue # skip the bounding box cells
+            cell = self.cells.get(id)
             if export:
                 self.cellComplexExporter.write_cell(m,cell,count=i,subfolder="final_cells")
             pts = np.array(cell.vertices())
@@ -1240,8 +1240,8 @@ class CellComplex:
         for e0,e1 in self.graph.edges:
 
             edge = self.graph.edges[e0,e1]
-            c0 = self.tree.nodes.get(e0).data["convex"]
-            c1 = self.tree.nodes.get(e1).data["convex"]
+            c0 = self.cells.get(e0)
+            c1 = self.cells.get(e1)
             ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
             ### I could just say if self.simplified or something like that, but for now will just recaculate all the intersections here
             # if not self.graph.edges[e0,e1]["intersection"]:
@@ -1285,11 +1285,11 @@ class CellComplex:
 
                 parent = self.tree.parent(c0)
                 pp_id = self.tree.parent(parent.identifier).identifier
-                # self.graph.nodes[c0]["convex"] = parent.data["convex"]
 
                 self.tree.remove_node(parent.identifier)
 
-                dd = {"convex": parent.data["convex"], "plane_ids": parent.data["plane_ids"]}
+                dd = {"plane_ids": parent.data["plane_ids"]}
+                self.cells[c0] = self.cells[parent.identifier]
                 self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
 
                 if len(self.tree.siblings(c0)) == 0:
@@ -1301,8 +1301,6 @@ class CellComplex:
                     self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
-
-        # self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
 
         self.polygons_initialized = False
 
@@ -1356,12 +1354,13 @@ class CellComplex:
             if self.export:
                 self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
 
-            self.graph.add_node(-(i+1), convex=op, occupancy=0.0)
+            self.cells[-(i+1)] = op
+            self.graph.add_node(-(i+1), occupancy=0.0)
 
 
             for cell_id in list(self.graph.nodes):
 
-                intersection = op.intersection(self.tree.nodes.get(cell_id).data["convex"])
+                intersection = op.intersection(self.cells.get(cell_id))
 
                 if intersection.dim() == 2:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
@@ -1429,33 +1428,6 @@ class CellComplex:
 
 
 
-    # @profile
-    def _build_graph(self):
-
-        graph = nx.Graph()
-
-
-        for cells in self.cells_along_planes.values():
-            for i in cells:
-                if not self.tree.nodes[i].is_leaf(): continue
-                for j in cells:
-                    if i >= j: continue
-                    if not self.tree.nodes[j].is_leaf(): continue
-
-                    intersection = self.tree.nodes[i].data["convex"].intersection(self.tree.nodes[j].data["convex"])
-
-                    if intersection.dim()==2:
-                        graph.add_edge(i, j, intersection=intersection, vertices=[],
-                                            supporting_plane=self._plane_from_points(intersection.vertices_list()),
-                                            convex_intersection=False, bounding_box_edge=False)
-
-
-        self.graph = graph
-        a=4
-
-
-
-
     @profile
     def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", backend='cpu'):
 
@@ -1486,9 +1458,6 @@ class CellComplex:
         primitive_dict["convex_hulls"] = list(self.convex_hulls)
         primitive_dict["split_count"] = [0]*len(self.planes)
         primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
-        self.cells_along_planes = dict()
-        for i in range(len(self.planes)):
-            self.cells_along_planes[i]=[]
         if self.backend == 'gpu':
             primitive_dict["point_groups"] = []
             for ch in self.convex_hulls:
@@ -1507,8 +1476,9 @@ class CellComplex:
 
         ## expand the tree as long as there is at least one plane inside any of the subspaces
         self.tree = Tree()
-        dd = {"convex": self.bounding_p"plane_ids": np.arange(primitive_dict["planes"].shape[0])}
+        dd = {"plane_ids": np.arange(primitive_dict["planes"].shape[0])}
         self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
+        self.cells[cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0
         n_points_total = np.concatenate(primitive_dict["point_groups"],dtype=object).shape[0]
@@ -1517,7 +1487,7 @@ class CellComplex:
 
 
             current_ids = self.tree[child].data["plane_ids"]
-            current_cell = self.tree[child].data["convex"]
+            current_cell = self.cells.get(child)
             plane_count+=1  # only used for debugging exports
 
 
@@ -1562,21 +1532,22 @@ class CellComplex:
             if(cell_negative.dim() == 3):
                 if export:
                     self.cellComplexExporter.write_cell(m,cell_negative,count=str(cell_count+1)+"n")
-                dd = {"convex": cell_negative,"plane_ids": np.array(left_planes)}
+                dd = {"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_id = cell_count
-                self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=child)
-                self.graph.add_node(neg_cell_id,convex=cell_negative)
+                self.tree.create_node(tag=neg_cell_id, identifier=neg_cell_id, data=dd, parent=child)
+                self.graph.add_node(neg_cell_id)
+                self.cells[neg_cell_id] = cell_negative
 
             if(cell_positive.dim() == 3):
                 if export:
                     self.cellComplexExporter.write_cell(m,cell_positive,count=str(cell_count+1)+"p")
-                dd = {"convex": cell_positive,"plane_ids": np.array(right_planes)}
+                dd = {"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_id = cell_count
-                self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd, parent=child)
-                self.graph.add_node(pos_cell_id,convex=cell_positive)
-                # TODO: remove the convex from the tree and the graph to save memory, simply store a list of convex and a pointer to it
+                self.tree.create_node(tag=pos_cell_id, identifier=pos_cell_id, data=dd, parent=child)
+                self.graph.add_node(pos_cell_id)
+                self.cells[pos_cell_id] = cell_positive
 
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
                 self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
@@ -1591,8 +1562,7 @@ class CellComplex:
             for neighbor_id_old_cell in neighbors_of_old_cell:
 
                 # get the neighboring convex
-                # nconvex = self.graph.nodes[neighbor_id_old_cell]["convex"]
-                nconvex = self.tree.nodes.get(neighbor_id_old_cell).data["convex"]
+                nconvex = self.cells.get(neighbor_id_old_cell)
                 # intersect new cells with old neighbors to make the new facets
                 n_nonempty = False; p_nonempty = False
                 if cell_negative.dim()==3:
@@ -1630,13 +1600,8 @@ class CellComplex:
 
         pbar.close()
 
-        # self._build_graph()
-
         if export:
-            self.cellComplexExporter.write_graph(m,self.graph)
-        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
-        assert(len(self.cells) == len(list(self.graph.nodes))) ## this makes sure that every graph node has a convex attached
-
+            self.cellComplexExporter.write_graph(m,self.graph,self.cells)
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
         logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))
@@ -1646,19 +1611,25 @@ class CellComplex:
 
     def save_partition(self,infile):
 
+        logger.info("Save tree, graph and convex cells to file...")
+
         os.makedirs(infile,exist_ok=True)
 
         pickle.dump(self.tree,open(os.path.join(infile,'tree.pickle'),'wb'))
         pickle.dump(self.graph,open(os.path.join(infile,'graph.pickle'),'wb'))
+        pickle.dump(self.cells,open(os.path.join(infile,'cells.pickle'),'wb'))
+
 
 
     def load_partition(self,infile):
 
-        self.tree=pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
-        self.graph=pickle.load(open(os.path.join(infile,'graph.pickle'),'rb'))
+        logger.info("Load tree, graph and convex cells from file...")
 
-        self.cells = list(nx.get_node_attributes(self.graph, "convex").values())
-        assert(len(self.cells) == len(list(self.graph.nodes))) ## this makes sure that every graph node has a convex attached
+        self.tree = pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
+        self.graph = pickle.load(open(os.path.join(infile,'graph.pickle'),'rb'))
+        self.cells = pickle.load(open(os.path.join(infile,'cells.pickle'),'rb'))
+
+        assert(len(self.cells) == len(self.tree.nodes)+6) ## this makes sure that every graph node has a convex attached
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 

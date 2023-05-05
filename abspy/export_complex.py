@@ -33,7 +33,7 @@ class CellComplexExporter:
         self.cellComplex = cellComplex
 
 
-    def write_graph(self, m, graph, subfolder="", color = None):
+    def write_graph(self, m, graph, cells, subfolder="", color = None):
 
         c = color if color is not None else np.random.random(size=3)
         c = (c*255).astype(int)
@@ -45,8 +45,8 @@ class CellComplexExporter:
         edge_strings = []
         f = open(filename,'w')
         all_nodes = np.array(graph.nodes())
-        for i,node in enumerate(graph.nodes(data=True)):
-            centroid = np.array(node[1]["convex"].center())
+        for i,node in enumerate(graph.nodes(data=False)):
+            centroid = np.array(cells.get(node).center())
             f.write("v {:.3f} {:.3f} {:.3f} {} {} {}\n".format(centroid[0],centroid[1],centroid[2],c[0],c[1],c[2]))
             edges = list(graph.edges(node[0]))
             for c1,c2 in edges:
