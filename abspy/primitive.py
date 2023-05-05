@@ -221,35 +221,42 @@ class VertexGroup:
         return np.where(slope_squared > slope_threshold ** 2)[0]
 
 
+    def _fill_hull_vertices(self):
 
-    def _sample_polygons(self,polygons,n_points=None):
+        hull_vertices = []
+
+        for i,v in enumerate(self.hull_vertices):
+
+            hp = np.array(self.convex_hulls[i].hull_points)
+            fill_vertices = hp[np.random.choice(hp.shape[0],self.n_fill-hp.shape[0])]
+            hp = np.concatenate((hp,fill_vertices))
+            hull_vertices.append(hp)
+
+
+        if self.backend == 'gpu':
+            self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
+        elif self.backend == 'cpu':
+            self.hull_vertices = np.array(hull_vertices)
+        else:
+            raise NotImplementedError
+
+
+
+
+    def _sample_polygons(self,n_points=None):
 
         ## project inliers to plane and get the convex hull
         all_sampled_points = []
-        hull_vertices = []
-        for i,poly in enumerate(polygons):
-            # the old way
+        for i,poly in enumerate(self.polygons):
             np.random.seed(42)
             if n_points is None:
                 n = 3+int(self.sample_count_per_area*poly.area)
             sampled_points = poly.sample(n)
             sampled_points = np.concatenate((sampled_points,poly.vertices),axis=0,dtype=np.float32)
             all_sampled_points.append(sampled_points)
+            self.convex_hulls[i].all_points = sampled_points
 
-            # the new way
-            hp = np.array(self.convex_hulls[i].hull_points)
-            fill_vertices = hp[np.random.choice(hp.shape[0],self.n_fill-hp.shape[0])]
-            hp = np.concatenate((hp,fill_vertices))
-            hull_vertices.append(hp)
-
-        if self.backend == 'gpu':
-            hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
-        elif self.backend == 'cpu':
-            hull_vertices = np.array(hull_vertices)
-        else:
-            raise NotImplementedError
-
-        return np.array(all_sampled_points,dtype=object), hull_vertices
+        return np.array(all_sampled_points,dtype=object)
 
 
 
@@ -271,21 +278,19 @@ class VertexGroup:
         verts = data["group_points"].flatten()
         colors = data["group_colors"]
         self.points_grouped = []
-        self.n_hull_points = []
+        n_hull_points = []
         self.convex_hulls = []
+        self.hull_vertices = []
         last = 0
         for i,npp in enumerate(npoints):
             ## make the point groups
             vert_group = verts[last:(npp+last)]
             pts = points[vert_group]
             self.points_grouped.append(pts)
-            # ## make the polys
-            # pp = PyPlane(self.planes[i]).get_hull_points_of_projected_points(pts,dim=3)
-            # pp = SagePlane(self.planes[i]).project_points_to_plane(pp)
-            # try:
-            #     self.polygons.append(Polyhedron(vertices=pp))
-            # except:
-            #     a=5
+
+            # TODO: i am computing the convex hull twice below; not necessary
+
+            ## make the polys
             ## make a trimesh of each input polygon
             pl = PyPlane(self.planes[i])
             mesh = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
@@ -294,13 +299,16 @@ class VertexGroup:
 
             pch = ProjectedConvexHull(self.planes[i],pts)
             self.convex_hulls.append(pch)
-            self.n_hull_points.append(len(pch.hull.vertices))
+            self.hull_vertices.append(pch.hull_points)
+            n_hull_points.append(len(pch.hull_points))
 
             last += npp
 
         self.convex_hulls = np.array(self.convex_hulls)
-        self.n_hull_points = np.array(self.n_hull_points)
-        self.n_fill = self.n_hull_points.max()*2
+        # fill the hull array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
+        n_hull_points = np.array(n_hull_points)
+        self.n_fill = n_hull_points.max()*2
+        self._fill_hull_vertices()
 
 
         ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
@@ -312,7 +320,7 @@ class VertexGroup:
                 n_points = self.fixed_sample_count
             else:
                 n_points = None
-            self.points_grouped, self.hull_vertices = self._sample_polygons(self.polygons, n_points=n_points)
+            self.points_grouped = self._sample_polygons(n_points=n_points)
             # self.merge_duplicates = True
         elif self.points_type == "inliers":
             pass
@@ -328,8 +336,6 @@ class VertexGroup:
         pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
         plane_file =  self.filepath.with_suffix('.ply')
         pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=colors)
-
-
 
 
         n_planes = self.planes.shape[0]
@@ -391,10 +397,7 @@ class VertexGroup:
         self.halfspaces = []
         self.plane_dict = dict()
         for i,p in enumerate(self.planes):
-            p = p/np.linalg.norm(p)
-
-            # could do sth like this: str(['{:.3f}'.format(d) for d in p])
-
+            p = p/np.linalg.norm(p) # this was for a test with a different graph construction function; not really necessary anymore
             self.plane_dict[str(p)] = i
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
         self.halfspaces = np.array(self.halfspaces)
@@ -405,11 +408,6 @@ class VertexGroup:
         self.points_ungrouped = points[self.points_ungrouped.astype(int)]
 
         self.processed = True
-
-        a=5
-
-
-
 
 
 

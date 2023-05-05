@@ -794,54 +794,6 @@ class CellComplex:
 
         return best_plane_id
 
-    @profile
-    def _get_best_split_gpu2(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
-
-        # TODO: in fact left_right has to be computed only one single time per plane and can be stored throughout the algorithm
-        # a simple first try could be to store it for each primitve and simply make a function which sorts it at each insertion according to the current available cell ids
-
-
-        ## sum calls the get_best_plane function less often than product, but with more planes
-        ## since get_best_planes is O(n^2), it is better to call it more often with smaller n than less often with bigger n
-
-
-        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
-        ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
-
-        ### the whole thing vectorized. doesn't really work for some reason
-        # UPDATE: should work, first tries where with wrong condition
-        # planes = np.repeat(vertex_group.planes[np.newaxis,current_ids,:],current_ids.shape[0],axis=0)
-        # pgs = np.repeat(point_groups[np.newaxis,current_ids,:,:],current_ids.shape[0],axis=0)
-        #
-        # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
-
-        earlystop = False
-        if "earlystop" in insertion_order:
-            earlystop = True
-
-        planes = primitive_dict["planes"][current_ids]
-        point_groups = primitive_dict['polygon_vertices'][current_ids]
-        planes = torch.from_numpy(planes).type(torch.float16).to('cuda')
-        # planes = planes[:33,:]
-
-        ### find the plane which seperates all other planes without splitting them
-
-        pg = point_groups.transpose(2,0)
-
-        which_side = torch.tensordot(planes[:,:3], pg, 1).transpose(2,0)
-
-        left = (which_side < -planes[:,3]).all(axis=1)
-        right = (which_side >= -planes[:,3]).all(axis=1)
-
-        left = left.sum(dim=0)
-        right = right.sum(dim=0)
-
-        return torch.argmax(left*right)
-
-
-
-
-
 
     @profile
     def _get_best_split_gpu(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
@@ -880,7 +832,7 @@ class CellComplex:
 
 
             pv = hull_verts.transpose(2,0)
-            pv = torch.cat((pv[:,:,0:i],pv[:,:,i:-1]),axis=2)
+            pv = torch.cat((pv[:,:,:i],pv[:,:,i+1:]),axis=2)
 
             which_side = torch.tensordot(pls[:3], pv, 1)
 
@@ -1380,17 +1332,12 @@ class CellComplex:
         primitive_dict["convex_hulls"] = list(self.convex_hulls)
         primitive_dict["split_count"] = [0]*len(self.planes)
         primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
-        if self.backend == 'gpu':
-            primitive_dict["point_groups"] = []
-            for ch in self.convex_hulls:
-                primitive_dict["point_groups"].append(ch.all_points)
 
 
         split_colors = [[0,1,0],[1,0,0],[0,0,1],[139/255,0,139/255]]
 
         cell_count = 0
         self.split_count = 0
-        self.sphere_breaker_count = 0
 
         ## init the graph
         self.graph = nx.Graph()
@@ -1405,6 +1352,7 @@ class CellComplex:
         plane_count = 0
         n_points_total = np.concatenate(primitive_dict["point_groups"],dtype=object).shape[0]
         pbar = tqdm(total=n_points_total,file=sys.stdout)
+        best_plane_ids = []
         for child in children:
 
 
@@ -1427,10 +1375,13 @@ class CellComplex:
                 else:
                     raise NotImplementedError
             
-            
+
+            ### for debugging
+            best_plane_ids.append(best_plane_id)
+
             ### progress bar update
             n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
-            current_original_plane_id = primitive_dict["plane_ids"][current_ids[best_plane_id]]
+
 
             ### export best plane
             if export:
@@ -1521,6 +1472,8 @@ class CellComplex:
             
 
         pbar.close()
+
+        print(best_plane_ids)
 
         if export:
             self.cellComplexExporter.write_graph(m,self.graph,self.cells)
