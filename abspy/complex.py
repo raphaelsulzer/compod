@@ -830,7 +830,6 @@ class CellComplex:
         for i,id in enumerate(current_ids):
             pls = planes[i]
 
-
             pv = hull_verts.transpose(2,0)
             pv = torch.cat((pv[:,:,:i],pv[:,:,i+1:]),axis=2)
 
@@ -839,14 +838,10 @@ class CellComplex:
             left = which_side.all(axis=0)
             right = (~which_side).all(axis=0)
 
-            # left = (which_side < -pls[3]).all(axis=0)
-            # right = (which_side > -pls[3]).all(axis=0)
-
             lr = torch.logical_or(left,right)
 
-
-
-            if lr.all():
+            if earlystop and lr.all():
+                logger.debug("earlystop")
                 return i
             else:
                 left = left.sum().item()
@@ -1135,6 +1130,65 @@ class CellComplex:
         self.polygons_initialized = True
 
 
+    def simplify2(self):
+
+        # TODO: try a simplify version from top to botton
+
+        """
+        2. simplify the partition
+        :return:
+        """
+
+        ## this function does not need the sibling polygons to be initialized, ie edges need to be there, but we do not need to know the intersection!! initalizing afterwards is sufficient!
+
+
+
+        def filter_edge(n0,n1):
+            to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]))
+            return to_process
+
+        before=len(self.graph.nodes)
+        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
+        while len(edges):
+
+            for c0,c1 in edges:
+
+                union = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
+
+                if self.graph.edges[c0, c1]["convex_intersection"] or union.volume() == self.cells[c0].volume()+self.cells[c1].volume():
+
+                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
+                    parent = self.tree.parent(c0)
+                    pp_id = self.tree.parent(parent.identifier).identifier
+
+                    self.tree.remove_node(parent.identifier)
+
+                    dd = {"plane_ids": parent.data["plane_ids"]}
+                    self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
+                    self.cells[c0] = union
+
+                    if len(self.tree.siblings(c0)) == 0:
+                        # TODO: maybe I can further simplify in this case by removing the alone sibling
+                        continue
+
+                    sibling =  self.tree.siblings(c0)[0]
+                    if sibling.is_leaf():
+                        self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
+
+                edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+
+        logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
+
+        self.polygons_initialized = False
+
+
+
+
+
+
+
 
     def simplify(self):
 
@@ -1153,12 +1207,11 @@ class CellComplex:
             to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
             return to_process
 
-        collapse_count=0
+        before=len(self.graph.nodes)
         edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
         while len(edges):
 
             for c0,c1 in edges:
-                collapse_count+=1
                 nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
 
                 parent = self.tree.parent(c0)
@@ -1167,7 +1220,8 @@ class CellComplex:
                 self.tree.remove_node(parent.identifier)
 
                 dd = {"plane_ids": parent.data["plane_ids"]}
-                self.cells[c0] = self.cells[parent.identifier]
+                # self.cells[c0] = self.cells[parent.identifier]
+                self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
                 self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
 
                 if len(self.tree.siblings(c0)) == 0:
@@ -1179,6 +1233,9 @@ class CellComplex:
                     self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+
+        logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
 
         self.polygons_initialized = False
 
@@ -1437,6 +1494,7 @@ class CellComplex:
             neighbors_of_old_cell = list(self.graph[child])
             old_cell_id=child
             for neighbor_id_old_cell in neighbors_of_old_cell:
+                logger.debug("make neighbors")
 
                 # get the neighboring convex
                 nconvex = self.cells.get(neighbor_id_old_cell)
@@ -1472,13 +1530,12 @@ class CellComplex:
                 primitive_dict["halfspaces"][current_ids[best_plane_id]] = None
                 primitive_dict["point_groups"][current_ids[best_plane_id]] = None
                 primitive_dict["convex_hulls"][current_ids[best_plane_id]] = None
-            
-            
+
+            del self.cells[child]
 
         pbar.close()
 
-        print(best_plane_ids)
-
+        # print(best_plane_ids)
         if export:
             self.cellComplexExporter.write_graph(m,self.graph,self.cells)
         self.polygons_initialized = False # false because I do not initialize the sibling facets
@@ -1678,6 +1735,8 @@ class CellComplex:
 
         self.cells_bounds = [self.bounding_poly.bounding_box()]
         self.cells = [self.bounding_poly]
+        cell_dict = dict()
+        cell_dict[self.index_node] = self.bounding_poly
 
         if exhaustive:
             logger.info('construct exhaustive cell complex'.format())
@@ -1725,8 +1784,10 @@ class CellComplex:
                 # incrementally build the adjacency graph
                 if self.graph is not None:
                     # append the two nodes (UID) being partitioned
-                    self.graph.add_node(self.index_node + 1,convex=cell_positive)
-                    self.graph.add_node(self.index_node + 2,convex=cell_negative)
+                    self.graph.add_node(self.index_node + 1)
+                    self.graph.add_node(self.index_node + 2)
+                    cell_dict[self.index_node+1] = cell_positive
+                    cell_dict[self.index_node+2] = cell_negative
 
                     # append the edge in between
                     self.graph.add_edge(self.index_node + 1, self.index_node + 2,supporting_plane=self.planes[i])
@@ -1761,6 +1822,7 @@ class CellComplex:
                 self.cells.append(cell_positive)
                 self.cells.append(cell_negative)
 
+
                 # incrementally cache the bounds for created cells
                 self.cells_bounds.append(cell_positive.bounding_box())
                 self.cells_bounds.append(cell_negative.bounding_box())
@@ -1774,9 +1836,11 @@ class CellComplex:
 
                 # remove the parent node (and subsequently its incident edges) in the graph
                 if self.graph is not None:
+                    del cell_dict[list(self.graph.nodes)[index_parent]]
                     self.graph.remove_node(list(self.graph.nodes)[index_parent])
 
         logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
 
+        self.cells=cell_dict
 
 

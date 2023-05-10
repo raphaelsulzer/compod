@@ -53,6 +53,7 @@ def attach_to_log(level=logging.INFO,
     logger = logging.getLogger()
     logger.setLevel(level)
 
+
     if not any([isinstance(handler, logging.StreamHandler) for handler in logger.handlers]):
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
@@ -65,5 +66,7 @@ def attach_to_log(level=logging.INFO,
 
     # set nicer numpy print options
     np.set_printoptions(precision=5, suppress=True)
+
+    # logger.addHandler(logging.StreamHandler())
 
     return logger
