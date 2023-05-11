@@ -582,8 +582,8 @@ class CellComplex:
 
             if str(plane) in self.plane_dict.keys():
                 plane_id = self.plane_dict[str(plane)]
-            elif str(-plane) in self.plane_dict.keys():
-                plane_id = self.plane_dict[str(-plane)]
+            # elif str(-plane) in self.plane_dict.keys():
+            #     plane_id = self.plane_dict[str(-plane)]
             else:
                 plane_id = -1
 
@@ -1303,6 +1303,8 @@ class CellComplex:
         :return:
         """
         logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.backend))
+        if export:
+            logger.warning('\nDebug export activated!\n')
         primitive_dict = dict()
         primitive_dict["planes"] = self.planes
         primitive_dict["halfspaces"] = list(self.halfspaces)
@@ -1339,6 +1341,7 @@ class CellComplex:
 
             if len(current_ids) == 1:
                 best_plane_id = 0
+                best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
                 left_planes = []; right_planes = []
             else:
                 best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids,primitive_dict, insertion_order)
@@ -1355,6 +1358,8 @@ class CellComplex:
             ### for debugging
             best_plane_ids.append(best_plane_id)
 
+            print("\n{}: {} with point {}".format(current_ids[best_plane_id],best_plane,primitive_dict["point_groups"][current_ids[best_plane_id]][0,:]))
+
             ### progress bar update
             n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
 
@@ -1364,7 +1369,9 @@ class CellComplex:
                 epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
                 if epoints.shape[0]>3:
-                    self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count))
+                    color = self.plane_dict.get(str(best_plane))
+                    color = self.plane_colors[color]
+                    self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
 
             ## create the new convexes
@@ -1440,8 +1447,8 @@ class CellComplex:
         pbar.close()
 
         # print(best_plane_ids)
-        if export:
-            self.cellComplexExporter.write_graph(m,self.graph,self.cells)
+        # if export:
+        #     self.cellComplexExporter.write_graph(m,self.graph,self.cells)
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
         logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))

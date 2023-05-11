@@ -186,14 +186,7 @@ class VertexGroup:
             sizes = np.linalg.norm(self.bounds[:, 1, :] - self.bounds[:, 0, :], ord=2, axis=1)
             return np.argsort(sizes)[::-1]
         elif mode == 'area':
-            areas = []
-            for i,plane in enumerate(self.planes):
-                if self.points_grouped[i].shape[0] > 2:
-                    mesh = PyPlane(plane).get_trimesh_of_projected_points(self.points_grouped[i])
-                    areas.append(mesh.area)
-                else:
-                    areas.append(0)
-            return np.argsort(areas)[::-1]
+            return np.argsort(self.polygon_areas)[::-1]
         elif mode == "product" or mode == "product-earlystop" or mode == "sum" or mode == "sum-earlystop":
             return indices_sorted_planes
         else:
@@ -257,7 +250,7 @@ class VertexGroup:
             all_sampled_points.append(sampled_points)
             self.convex_hulls[i].all_points = sampled_points
 
-        return np.array(all_sampled_points,dtype=object)
+        self.points_grouped = np.array(all_sampled_points,dtype=object)
 
 
 
@@ -272,12 +265,12 @@ class VertexGroup:
 
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(np.float32)
-        self.polygons = []
-        total_area = 0
         points = data["points"].astype(np.float32)
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
-        colors = data["group_colors"]
+        self.plane_colors = data["group_colors"]
+        self.polygons = []
+        self.polygon_areas = []
         self.points_grouped = []
         n_hull_points = []
         self.convex_hulls = []
@@ -294,9 +287,9 @@ class VertexGroup:
             ## make the polys
             ## make a trimesh of each input polygon
             pl = PyPlane(self.planes[i])
-            mesh = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
-            total_area+=mesh.area
-            self.polygons.append(mesh)
+            poly = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
+            self.polygons.append(poly)
+            self.polygon_areas.append(poly.area)
 
             pch = ProjectedConvexHull(self.planes[i],pts)
             self.convex_hulls.append(pch)
@@ -305,29 +298,46 @@ class VertexGroup:
 
             last += npp
 
+
+
+        self.polygons = np.array(self.polygons)
+        self.polygon_areas = np.array(self.polygon_areas)
         self.convex_hulls = np.array(self.convex_hulls)
         # fill the hull array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
         n_hull_points = np.array(n_hull_points)
         self.n_fill = n_hull_points.max()*2
         self._fill_hull_vertices()
 
-
         ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
-        self.sample_count_per_area = self.sample_count_per_area/total_area
-
+        self.sample_count_per_area = self.sample_count_per_area/self.polygon_areas.sum()
 
         if self.points_type == "samples":
             if self.fixed_sample_count:
                 n_points = self.fixed_sample_count
             else:
                 n_points = None
-            self.points_grouped = self._sample_polygons(n_points=n_points)
-            # self.merge_duplicates = True
+            self._sample_polygons(n_points=n_points) # redefines self.points_grouped
         elif self.points_type == "inliers":
-            pass
+            raise NotImplementedError
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             NotImplementedError
+
+
+
+        if self.prioritise_planes:
+            order = self._prioritise_planes(self.prioritise_planes)
+            self.planes = self.planes[order]
+            self.points_grouped = list(np.array(self.points_grouped,dtype=object)[order])
+            self.polygons = self.polygons[order]
+            self.polygon_areas = self.polygon_areas[order]
+            self.hull_vertices = self.hull_vertices[order.copy(),:,:]
+            self.convex_hulls = self.convex_hulls[order]
+            self.plane_colors = self.plane_colors[order]
+        else:
+            logger.info("No plane prioritisation applied")
+
+
 
 
         ## export planes and samples
@@ -336,7 +346,8 @@ class VertexGroup:
         # plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
         pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
         plane_file =  self.filepath.with_suffix('.ply')
-        pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=colors)
+        pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
+
 
 
         n_planes = self.planes.shape[0]
@@ -371,34 +382,21 @@ class VertexGroup:
             #
             # logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
         else:
-            self.plane_colors = colors
             self.merged_primitives_to_input_primitives = []
             for i in range(len(self.planes)):
                 self.merged_primitives_to_input_primitives.append([i])
+
 
         self.bounds = []
         for pg in self.points_grouped:
             self.bounds.append(self._points_bound(pg))
         self.bounds = np.array(self.bounds)
 
-        if self.prioritise_planes:
-            order = self._prioritise_planes(self.prioritise_planes)
-            self.planes = self.planes[order]
-            self.points_grouped = list(np.array(self.points_grouped,dtype=object)[order])
-            self.hull_vertices = self.hull_vertices[order.copy(),:,:]
-            self.convex_hulls = self.convex_hulls[order]
-            self.merged_primitives_to_input_primitives = list(np.array(self.merged_primitives_to_input_primitives,dtype=object)[order])
-            self.plane_colors = np.array(self.plane_colors)[order]
-            self.bounds = self.bounds[order]
-            self.polygons = np.array(self.polygons)[order]
-        else:
-            logger.info("No plane prioritisation applied")
 
         # make the bounds and halfspace used in the cell complex construction
         self.halfspaces = []
         self.plane_dict = dict()
         for i,p in enumerate(self.planes):
-            p = p/np.linalg.norm(p) # this was for a test with a different graph construction function; not really necessary anymore
             self.plane_dict[str(p)] = i
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
         self.halfspaces = np.array(self.halfspaces)
@@ -409,7 +407,6 @@ class VertexGroup:
         self.points_ungrouped = points[self.points_ungrouped.astype(int)]
 
         self.processed = True
-
 
 
 
