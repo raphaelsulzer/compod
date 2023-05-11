@@ -960,9 +960,9 @@ class CellComplex:
             left_points = polygon_points[which_side < -best_plane[3], :]
             right_points = polygon_points[which_side > -best_plane[3], :]
 
-            if (polygon_points.shape[0] - left_points.shape[0]) < th:
+            if (polygon_points.shape[0] - left_points.shape[0]) <= th:
                 left_plane_ids.append(id)
-            elif(polygon_points.shape[0] - right_points.shape[0]) < th:
+            elif(polygon_points.shape[0] - right_points.shape[0]) <= th:
                 right_plane_ids.append(id)
             else:
                 # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
@@ -1069,11 +1069,11 @@ class CellComplex:
             right_points = primitive_dict["point_groups"][id][which_side > -best_plane[3], :]
             assert (primitive_dict["point_groups"][id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
 
-            if (primitive_dict["point_groups"][id].shape[0] - left_points.shape[0]) < th:
+            if (primitive_dict["point_groups"][id].shape[0] - left_points.shape[0]) <= th:
                 # if left_points.shape[0] > th:
                 left_plane_ids.append(id)
                 primitive_dict["point_groups"][id] = left_points  # update the point group, in case some points got dropped according to threshold
-            elif(primitive_dict["point_groups"][id].shape[0] - right_points.shape[0]) < th:
+            elif(primitive_dict["point_groups"][id].shape[0] - right_points.shape[0]) <= th:
                 # if right_points.shape[0] > th:
                 right_plane_ids.append(id)
                 primitive_dict["point_groups"][id] = right_points # update the point group, in case some points got dropped according to threshold
@@ -1128,65 +1128,6 @@ class CellComplex:
             # edge["vertices"] = edge["intersection"].vertices_list()
 
         self.polygons_initialized = True
-
-
-    def simplify2(self):
-
-        # TODO: try a simplify version from top to botton
-
-        """
-        2. simplify the partition
-        :return:
-        """
-
-        ## this function does not need the sibling polygons to be initialized, ie edges need to be there, but we do not need to know the intersection!! initalizing afterwards is sufficient!
-
-
-
-        def filter_edge(n0,n1):
-            to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]))
-            return to_process
-
-        before=len(self.graph.nodes)
-        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
-        while len(edges):
-
-            for c0,c1 in edges:
-
-                union = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
-
-                if self.graph.edges[c0, c1]["convex_intersection"] or union.volume() == self.cells[c0].volume()+self.cells[c1].volume():
-
-                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-
-                    parent = self.tree.parent(c0)
-                    pp_id = self.tree.parent(parent.identifier).identifier
-
-                    self.tree.remove_node(parent.identifier)
-
-                    dd = {"plane_ids": parent.data["plane_ids"]}
-                    self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
-                    self.cells[c0] = union
-
-                    if len(self.tree.siblings(c0)) == 0:
-                        # TODO: maybe I can further simplify in this case by removing the alone sibling
-                        continue
-
-                    sibling =  self.tree.siblings(c0)[0]
-                    if sibling.is_leaf():
-                        self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
-
-                edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
-
-
-        logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
-
-        self.polygons_initialized = False
-
-
-
-
-
 
 
 
@@ -1350,25 +1291,8 @@ class CellComplex:
         pass
 
 
-    def _plane_from_points(self,points):
-
-        points = np.array(points)
-
-        a = points[1,:]-points[0,:]
-        b = points[2,:]-points[0,:]
-        n = np.cross(a,b)
-        d = np.dot(points[0,:],n)
-        plane= np.array([n[0],n[1],n[2],-d])
-        return plane/np.linalg.norm(plane)
-
-
-
     @profile
     def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", backend='cpu'):
-
-        logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.backend))
-
-
         """
         1. construct the partition
         :param m:
@@ -1378,13 +1302,7 @@ class CellComplex:
         :param export:
         :return:
         """
-
-
-        ## Tree.DEPTH seems slightly faster then Tree.WIDTH
-
-
-        # The tag property of tree.node is what is shown when you call tree.show(). can be changed with tree.node(NODEid).tag = "some_text"
-
+        logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.backend))
         primitive_dict = dict()
         primitive_dict["planes"] = self.planes
         primitive_dict["halfspaces"] = list(self.halfspaces)
@@ -1393,9 +1311,6 @@ class CellComplex:
         primitive_dict["convex_hulls"] = list(self.convex_hulls)
         primitive_dict["split_count"] = [0]*len(self.planes)
         primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
-
-
-        split_colors = [[0,1,0],[1,0,0],[0,0,1],[139/255,0,139/255]]
 
         cell_count = 0
         self.split_count = 0
@@ -1448,10 +1363,8 @@ class CellComplex:
             if export:
                 epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
-                nsplits = primitive_dict["split_count"][current_ids[best_plane_id]]
-                color = split_colors[nsplits] if nsplits < 4 else split_colors[3]
                 if epoints.shape[0]>3:
-                    self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
+                    self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count))
 
 
             ## create the new convexes
@@ -1516,15 +1429,6 @@ class CellComplex:
 
             self.graph.remove_node(child)
             pbar.update(n_points_processed)
-            
-            # clean:
-            # primitive_dict["planes"] = self.planes
-            # primitive_dict["halfspaces"] = self.halfspaces
-            # primitive_dict["point_groups"] = list(self.points)
-            # primitive_dict["hull_vertices"] = self.hull_vertices
-            # primitive_dict["convex_hulls"] = list(self.convex_hulls)
-            # primitive_dict["split_count"] = [0] * len(self.planes)
-            # primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
 
             if self.backend == 'gpu':
                 primitive_dict["halfspaces"][current_ids[best_plane_id]] = None
