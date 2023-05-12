@@ -78,17 +78,12 @@ class CellComplex:
         self.hull_vertices = vertex_group.hull_vertices
         self.convex_hulls = vertex_group.convex_hulls
         self.vertex_group_n_fill = vertex_group.n_fill
-
-        self.cells = dict()
-
         del vertex_group
 
+        self.cells = dict()
+        self.tree = None
+        self.graph = None
         self.backend = backend
-
-
-
-        # missing planes due to occlusion or incapacity of RANSAC
-        self.additional_planes = None
 
         self.polygons_initialized = False
 
@@ -399,7 +394,7 @@ class CellComplex:
             raise NotImplementedError
 
 
-    def extract_in_cells_explode(self,filename):
+    def extract_in_cells_explode(self,filename,shrink_percentage=0.01):
 
         logger.info('Extract inside cells...')
 
@@ -413,8 +408,6 @@ class CellComplex:
         facets = []
         vert_count = 0
         view = nx.subgraph_view(self.graph,filter_node=filter_node)
-        # for node in enumerate(self.graph.nodes(data=True)):
-            # if node[1]["occupancy"] == 1:
 
         # get total volume
         cell_volumes = []
@@ -424,7 +417,8 @@ class CellComplex:
         cell_volumes = np.array(cell_volumes)
         # cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.80))
         cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.95))
-
+        bb_diag = np.array(self.bounding_poly.bounding_box(),dtype=float)
+        bb_diag = np.linalg.norm(bb_diag[0,:]-bb_diag[1,:])
         for i,node in enumerate(view.nodes()):
             c = np.random.randint(low=100,high=255,size=3)
             polyhedron = self.cells.get(node)
@@ -437,14 +431,15 @@ class CellComplex:
             verts = np.vstack(verts)
             centroid = np.mean(verts,axis=0)
 
-            vector = (verts - centroid)*cell_volumes[i]
-            verts = centroid + vector
+            # vectors = (verts - centroid)*cell_volumes[i]
+            vectors = (verts - centroid)
+            vector_lens = np.linalg.norm(vectors,axis=1)
+            max_vector = vector_lens.max()
+            max_vector_ratio = (max_vector - bb_diag*shrink_percentage)/max_vector
+            verts = centroid + vectors*max_vector_ratio
 
             for v in verts:
                 outverts.append([v[0], v[1], v[2], c[0], c[1], c[2]])
-
-
-            # verts.append([v[1], v[2], v[3], str(c[0]), str(c[1]), str(c[2])])
 
             for fa in ss[3]:
                 tf = []
@@ -528,7 +523,6 @@ class CellComplex:
             for v in fa:
                 f.write("{}".format(v))
             f.write("\n")
-
 
         f.close()
 
@@ -1464,7 +1458,8 @@ class CellComplex:
 
         os.makedirs(infile,exist_ok=True)
 
-        pickle.dump(self.tree,open(os.path.join(infile,'tree.pickle'),'wb'))
+        if self.tree is not None:
+            pickle.dump(self.tree,open(os.path.join(infile,'tree.pickle'),'wb'))
         pickle.dump(self.graph,open(os.path.join(infile,'graph.pickle'),'wb'))
         pickle.dump(self.cells,open(os.path.join(infile,'cells.pickle'),'wb'))
 
@@ -1474,11 +1469,12 @@ class CellComplex:
 
         logger.info("Load tree, graph and convex cells from file...")
 
-        self.tree = pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
+        if os.path.isfile(os.path.join(infile,'tree.pickle')):
+            self.tree = pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
         self.graph = pickle.load(open(os.path.join(infile,'graph.pickle'),'rb'))
         self.cells = pickle.load(open(os.path.join(infile,'cells.pickle'),'rb'))
 
-        assert(len(self.cells) == len(self.tree.nodes)+6) ## this makes sure that every graph node has a convex attached
+        assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
