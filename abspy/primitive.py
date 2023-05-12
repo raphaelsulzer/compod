@@ -325,6 +325,15 @@ class VertexGroup:
 
 
 
+
+        ## export planes and samples
+        pe = PlaneExporter()
+        # pt_file = os.path.join(os.path.dirname(str(self.filepath)),"polygon_samples.ply")
+        # plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
+        pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
+        plane_file =  self.filepath.with_suffix('.ply')
+        pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
+
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)
             self.planes = self.planes[order]
@@ -339,14 +348,6 @@ class VertexGroup:
 
 
 
-
-        ## export planes and samples
-        pe = PlaneExporter()
-        # pt_file = os.path.join(os.path.dirname(str(self.filepath)),"polygon_samples.ply")
-        # plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
-        pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
-        plane_file =  self.filepath.with_suffix('.ply')
-        pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
 
 
 

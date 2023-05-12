@@ -274,53 +274,57 @@ class CellComplex:
         return intersection_points
 
 
-    def extract_soup(self, filename):
+    def extract_colored_soup(self, filename):
 
-        faces = []
+        logger.info('Extract colored soup...')
+
+        colors = []
         all_points = []
-        n_points=0
-        face_lens = []
-
-        for ec, (e0, e1) in enumerate(self.graph.edges):
-
-            # if e0 > e1:
-            #     continue
+        # for cgal export
+        faces = []
+        n_points = 0
+        for e0, e1 in self.graph.edges:
 
             c0 = self.graph.nodes[e0]
             c1 = self.graph.nodes[e1]
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                intersection_points = self._get_intersection(e0,e1)
+                # TODO: a better solution instead of using a plane dict is simply to get the ID from the primitive_dict["plane_ids"] array
+                plane_id = self.plane_dict.get(str(self.graph.edges[e0, e1]["supporting_plane"]), -1)
+                col = self.plane_colors[plane_id] if plane_id > -1 else np.random.randint(100, 255, size=3)
+                colors.append(col)
 
-                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,self.graph[e0][e1]["supporting_plane"])
-                assert(len(intersection_points)==len(correct_order))
+                intersection_points = self._get_intersection(e0, e1)
+
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,
+                                                                         self.graph[e0][e1]["supporting_plane"])
+
+                assert (len(intersection_points) == len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
+                if (len(intersection_points) < 3):
+                    print("ERROR: Encountered facet with less than 2 vertices.")
+                    sys.exit(1)
 
                 ## orient polygon
                 outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
                 # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
-                if self._orient_exact_polygon(intersection_points,outside):
+                if self._orient_exact_polygon(intersection_points, outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
-                for i in range(intersection_points.shape[0]):
-                    all_points.append(tuple(intersection_points[i,:]))
-                faces.append(np.arange(len(intersection_points))+n_points)
-                face_lens.append(len(intersection_points))
-                n_points+=len(intersection_points)
+                for pt in intersection_points:
+                    all_points.append(pt)
+                # for cgal export
+                faces.append(np.arange(len(intersection_points)) + n_points)
+                n_points += len(intersection_points)
 
+        all_points = np.array(all_points, dtype=float)
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        logger.debug('Save colored polygon soup to {}'.format(filename))
 
-
-        sm = s2m.Soup2Mesh()
-        sm.loadSoup(np.array(all_points,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
-        triangulate = True
-        sm.makeMesh(triangulate)
-        sm.saveMesh(filename)
-
-        # logger.debug('Save polygon mesh to {}'.format(filename))
-        # os.makedirs(os.path.dirname(filename), exist_ok=True)
-        # self.cellComplexExporter.write_off(filename,points=np.array(all_points,dtype=np.float32),facets=faces)
+        self.cellComplexExporter.write_colored_surface_to_ply(filename, points=all_points,
+                                                              facets=faces, colors=colors)
 
 
     # @profile
@@ -330,6 +334,7 @@ class CellComplex:
 
 
         tris = []
+        colors = []
         all_points = []
         # for cgal export
         faces = []
@@ -344,7 +349,6 @@ class CellComplex:
             c1 = self.graph.nodes[e1]
 
             if c0["occupancy"] != c1["occupancy"]:
-
 
                 intersection_points = self._get_intersection(e0,e1)
 
@@ -390,7 +394,7 @@ class CellComplex:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
 
-            self.cellComplexExporter.write_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
+            self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
         else:
             raise NotImplementedError
 
@@ -575,19 +579,17 @@ class CellComplex:
             points.append(np.array(face.vertices_list())[correct_vertex_order])
             indices.append(list(np.arange(count,len(correct_vertex_order)+count)))
 
+
             plane = self.graph.edges[c0,c1]["supporting_plane"]
             supporting_planes.append(plane)
             ## if plane_id is negative append negative primitive_id
 
-
+            # TODO: a better solution instead of using a plane dict is simply to get the ID from the primitive_dict["plane_ids"] array
             if str(plane) in self.plane_dict.keys():
                 plane_id = self.plane_dict[str(plane)]
-            # elif str(-plane) in self.plane_dict.keys():
-            #     plane_id = self.plane_dict[str(-plane)]
             else:
+                logger.warning("\nPlane not found in plane_dict")
                 plane_id = -1
-
-
 
             if plane_id > -1:
                 colors.append(self.plane_colors[plane_id])
@@ -1358,7 +1360,7 @@ class CellComplex:
             ### for debugging
             best_plane_ids.append(best_plane_id)
 
-            print("\n{}: {} with point {}".format(current_ids[best_plane_id],best_plane,primitive_dict["point_groups"][current_ids[best_plane_id]][0,:]))
+            # print("\n{}: {} with point {}".format(current_ids[best_plane_id],best_plane,primitive_dict["point_groups"][current_ids[best_plane_id]][0,:]))
 
             ### progress bar update
             n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])

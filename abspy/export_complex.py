@@ -199,20 +199,47 @@ class CellComplexExporter:
             f.write("{:.3f} {:.3f} {:.3f}\n".format(p[0],p[1],p[2]))
         f.close()
 
-    def write_off(self,filename,points,facets):
-
-        # c = color if color is not None else (np.random.random(size=3)*255).astype(int)
-
+    def write_surface_to_off(self,filename,points,facets):
 
         f = open(filename[:-3]+"off",'w')
-        f.write("OFF\n")
+        f.write("COFF\n")
         f.write("{} {} 0\n".format(points.shape[0],len(facets)))
         for p in points:
             f.write("{} {} {}\n".format(p[0],p[1],p[2]))
-        for face in facets:
+        for i,face in enumerate(facets):
             f.write("{}".format(len(face)))
             for v in face:
                 f.write(" {}".format(v))
             f.write('\n')
         f.close()
+
+    def write_colored_surface_to_ply(self, filename, points, facets, colors=None):
+
+        col = colors if colors is not None else (np.random.random(size=3) * 255).astype(int)
+
+        f = open(filename, 'w')
+
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write("element vertex {}\n".format(len(points)))
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("element face {}\n".format(len(facets)))
+        f.write("property list uchar int vertex_index\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("end_header\n")
+        for v in points:
+            f.write("{} {} {}\n".format(v[0], v[1], v[2]))
+        for i,fa in enumerate(facets):
+            f.write("{}".format(len(fa)))
+            for v in fa:
+                f.write(" {}".format(v))
+            for c in col[i]:
+                f.write(" {}".format(c))
+            f.write("\n")
+
+
 
