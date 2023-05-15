@@ -11,7 +11,7 @@ so will be the corresponding adjacency graph of the complex.
 """
 
 from .setup import *
-import os, sys, time, multiprocessing, pickle, torch
+import os, sys, time, multiprocessing, pickle, torch, colorsys
 from pathlib import Path
 from random import random
 from fractions import Fraction
@@ -22,7 +22,6 @@ from sage.all import QQ, RR, Polyhedron, vector, arctan2
 from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
-import trimesh
 
 from .logger import attach_to_log
 logger = attach_to_log()
@@ -32,7 +31,7 @@ import libPyLabeler as PL
 import libSoup2Mesh as s2m
 from export import PlaneExporter
 from pyplane import PyPlane, SagePlane, ProjectedConvexHull
-
+from color import FancyColor
 
 class CellComplex:
     """
@@ -417,10 +416,14 @@ class CellComplex:
         cell_volumes = np.array(cell_volumes)
         # cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.80))
         cell_volumes = np.interp(cell_volumes, (cell_volumes.min(), cell_volumes.max()), (0.85, 0.95))
-        bb_diag = np.array(self.bounding_poly.bounding_box(),dtype=float)
-        bb_diag = np.linalg.norm(bb_diag[0,:]-bb_diag[1,:])
+        bbox = np.array(self.bounding_poly.bounding_box(),dtype=float)
+        bbox_dim = bbox[0, :] - bbox[1, :]
+        # color_scales = (255-100)/bbox_dim
+        # color_scales = [1.0,0.91,0.61]/bbox_dim
+        bb_diag = np.linalg.norm(bbox_dim)
+        col=FancyColor(bbox)
         for i,node in enumerate(view.nodes()):
-            c = np.random.randint(low=100,high=255,size=3)
+            # c = np.random.randint(low=100,high=255,size=3)
             polyhedron = self.cells.get(node)
             ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
             verts = []
@@ -437,7 +440,11 @@ class CellComplex:
             max_vector = vector_lens.max()
             max_vector_ratio = (max_vector - bb_diag*shrink_percentage)/max_vector
             verts = centroid + vectors*max_vector_ratio
-
+            # c = (np.abs(color_scales*centroid)+100).astype(int)
+            # c = np.abs(color_scales*centroid)+[0.0,0.09,0.39]
+            # c = np.array(colorsys.hsv_to_rgb(c[0],c[1],c[2]))*255
+            # c = c.astype(int)
+            c = col.get_rgb_from_xyz(centroid)
             for v in verts:
                 outverts.append([v[0], v[1], v[2], c[0], c[1], c[2]])
 

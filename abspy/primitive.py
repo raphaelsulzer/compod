@@ -2,17 +2,17 @@ import os, sys, struct
 from pathlib import Path
 import numpy as np
 import torch
-from sage.all import polytopes, QQ, RR, Polyhedron
+from sage.all import polytopes, QQ, Polyhedron
 # from torchrec import sparse
 PYTHONPATH="/home/rsulzer/python"
 sys.path.append(os.path.join(PYTHONPATH,"pyplane"))
+sys.path.append(os.path.join(PYTHONPATH,"ksr-benchmark"))
 from pyplane import PyPlane, SagePlane, ProjectedConvexHull
 from export import PlaneExporter
-
+from color import FancyColor
 from .logger import attach_to_log
-
 logger = attach_to_log()
-
+import copy
 
 class VertexGroup:
     """
@@ -252,6 +252,17 @@ class VertexGroup:
 
         self.points_grouped = np.array(all_sampled_points,dtype=object)
 
+    def _recolor_planes(self):
+
+        all_points = np.concatenate(self.points_grouped)
+        bbox = np.vstack((all_points.min(axis=0),all_points.max(axis=0)))
+
+        fc=FancyColor(bbox)
+        cols = []
+        for p in self.polygons:
+            pt = copy.deepcopy(p.centroid)
+            cols.append(fc.get_rgb_from_xyz(pt))
+        self.plane_colors = np.array(cols)
 
 
     def _process_npz(self):
@@ -299,6 +310,13 @@ class VertexGroup:
             last += npp
 
 
+        self._recolor_planes()
+        # save with new colors
+        data = dict(data)
+        data["group_colors"] = self.plane_colors
+        np.savez(fn,**data)
+
+
 
         self.polygons = np.array(self.polygons)
         self.polygon_areas = np.array(self.polygon_areas)
@@ -333,6 +351,9 @@ class VertexGroup:
         pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
         plane_file =  self.filepath.with_suffix('.ply')
         pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
+
+
+
 
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)
