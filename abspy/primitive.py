@@ -1,7 +1,6 @@
 import os, sys, struct
 from pathlib import Path
 import numpy as np
-import torch
 from sage.all import polytopes, QQ, Polyhedron
 # from torchrec import sparse
 PYTHONPATH="/home/rsulzer/python"
@@ -21,7 +20,7 @@ class VertexGroup:
 
     def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None,
                  points_type="inliers", sample_count_per_area=2, fixed_sample_count=10, export=False,
-                 backend='gpu'):
+                 device='gpu'):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -51,7 +50,7 @@ class VertexGroup:
         self.points_type = points_type
 
         self.export = export
-        self.backend = backend
+        self.device = device
 
         ending = os.path.splitext(filepath)[1]
         if ending == ".npz":
@@ -226,10 +225,11 @@ class VertexGroup:
             hull_vertices.append(hp)
 
 
-        if self.backend == 'gpu':
+        if self.device == 'gpu':
+            import torch
             # self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
             self.hull_vertices = torch.Tensor(np.array(hull_vertices)).to('cuda')
-        elif self.backend == 'cpu':
+        elif self.device == 'cpu':
             self.hull_vertices = np.array(hull_vertices)
         else:
             raise NotImplementedError
@@ -352,11 +352,9 @@ class VertexGroup:
         plane_file =  self.filepath.with_suffix('.ply')
         pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
 
-
-
-
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)
+            self.plane_order = order
             self.planes = self.planes[order]
             self.points_grouped = list(np.array(self.points_grouped,dtype=object)[order])
             self.polygons = self.polygons[order]
@@ -403,10 +401,10 @@ class VertexGroup:
             # self.merged_primitives_to_input_primitives = list(primitive_ids.values())
             #
             # logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
-        else:
-            self.merged_primitives_to_input_primitives = []
-            for i in range(len(self.planes)):
-                self.merged_primitives_to_input_primitives.append([i])
+        # else:
+        #     self.merged_primitives_to_input_primitives = []
+        #     for i in range(len(self.planes)):
+        #         self.merged_primitives_to_input_primitives.append([i])
 
 
         self.bounds = []

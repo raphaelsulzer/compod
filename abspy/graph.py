@@ -466,7 +466,7 @@ class AdjacencyGraph:
         f.write("element vertex {}\n".format(self.pset.shape[0]))
         f.write("property float x\nproperty float y\nproperty float z\n")
         f.write("element face {}\n".format(len(self.facets)))
-        f.write("property list uchar int vertex_index\n")
+        f.write("property list uchar int vertex_indices\n")
         f.write("end_header\n")
         for p in self.pset:
             f.write("{} {} {}\n".format(p[0],p[1],p[2]))

@@ -11,7 +11,7 @@ so will be the corresponding adjacency graph of the complex.
 """
 
 from .setup import *
-import os, sys, time, multiprocessing, pickle, torch, colorsys
+import os, sys, time, multiprocessing, pickle
 from pathlib import Path
 from random import random
 from fractions import Fraction
@@ -37,7 +37,7 @@ class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, model, vertex_group, initial_padding=0.1, export=False, backend='cpu'):
+    def __init__(self, model, vertex_group, initial_padding=0.1, export=False, device='cpu'):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -69,9 +69,9 @@ class CellComplex:
         vertex_group.planes, vertex_group.halfspaces, vertex_group.bounds, vertex_group.points_grouped,
         self.bounds = vertex_group.bounds
         self.planes = vertex_group.planes
+        self.plane_order = vertex_group.plane_order
         self.plane_dict = vertex_group.plane_dict
         self.plane_colors = vertex_group.plane_colors
-        self.merged_primitives_to_input_primitives = vertex_group.merged_primitives_to_input_primitives
         self.halfspaces = vertex_group.halfspaces
         self.points = vertex_group.points_grouped
         self.hull_vertices = vertex_group.hull_vertices
@@ -82,7 +82,12 @@ class CellComplex:
         self.cells = dict()
         self.tree = None
         self.graph = None
-        self.backend = backend
+        self.device = device
+        if self.device == 'gpu':
+            import torch
+            self.torch = torch
+        else:
+            self.torch = None
 
         self.polygons_initialized = False
 
@@ -101,7 +106,7 @@ class CellComplex:
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points)
         aabb = pcd.get_axis_aligned_bounding_box()
-        aabb.scale(padding,aabb.get_center())
+        # aabb.scale(padding,aabb.get_center())
         ppmin = aabb.min_bound.astype(points.dtype)
         ppmax = aabb.max_bound.astype(points.dtype)
 
@@ -115,6 +120,15 @@ class CellComplex:
         pmax=[]
         for p in ppmax:
             pmax.append(Fraction(str(p)))
+
+
+        pmin = vector(pmin)
+        pmax = vector(pmax)
+        d = pmax-pmin
+        d = d*QQ(padding)
+        pmin = pmin-d
+        pmax = pmax+d
+
 
         self.bounding_verts.append(pmin)
         self.bounding_verts.append([pmin[0],pmax[1],pmin[2]])
@@ -272,7 +286,8 @@ class CellComplex:
 
         logger.info('Extract colored soup...')
 
-        colors = []
+        fcolors = []
+        pcolors = []
         all_points = []
         # for cgal export
         faces = []
@@ -287,7 +302,7 @@ class CellComplex:
                 # TODO: a better solution instead of using a plane dict is simply to get the ID from the primitive_dict["plane_ids"] array
                 plane_id = self.plane_dict.get(str(self.graph.edges[e0, e1]["supporting_plane"]), -1)
                 col = self.plane_colors[plane_id] if plane_id > -1 else np.random.randint(100, 255, size=3)
-                colors.append(col)
+                fcolors.append(col)
 
                 intersection_points = self._get_intersection(e0, e1)
 
@@ -309,6 +324,7 @@ class CellComplex:
 
                 for pt in intersection_points:
                     all_points.append(pt)
+                    pcolors.append(col)
                 # for cgal export
                 faces.append(np.arange(len(intersection_points)) + n_points)
                 n_points += len(intersection_points)
@@ -317,12 +333,12 @@ class CellComplex:
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         logger.debug('Save colored polygon soup to {}'.format(filename))
 
-        self.cellComplexExporter.write_colored_surface_to_ply(filename, points=all_points,
-                                                              facets=faces, colors=colors)
+        self.cellComplexExporter.write_colored_soup_to_ply(filename, points=all_points,
+                                                              facets=faces, pcolors=pcolors,fcolors=fcolors)
 
 
     # @profile
-    def extract_surface(self, filename, backend = "python"):
+    def extract_surface(self, filename, backend = "python", triangulate = False):
 
         logger.info('Extract surface...')
 
@@ -375,7 +391,6 @@ class CellComplex:
         if backend == "cgal":
             sm = s2m.Soup2Mesh()
             sm.loadSoup(np.array(all_points,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
-            triangulate = False
             sm.makeMesh(triangulate)
             sm.saveMesh(filename)
         elif backend == "python":
@@ -466,7 +481,7 @@ class CellComplex:
         f.write("property uchar green\n")
         f.write("property uchar blue\n")
         f.write("element face {}\n".format(len(facets)))
-        f.write("property list uchar int vertex_index\n")
+        f.write("property list uchar int vertex_indices\n")
         f.write("end_header\n")
         for v in outverts:
             f.write("{} {} {} {} {} {}\n".format(v[0],v[1],v[2],v[3],v[4],v[5]))
@@ -521,7 +536,7 @@ class CellComplex:
         f.write("property uchar green\n")
         f.write("property uchar blue\n")
         f.write("element face {}\n".format(len(facets)))
-        f.write("property list uchar int vertex_index\n")
+        f.write("property list uchar int vertex_indices\n")
         f.write("end_header\n")
         for v in verts:
             f.write("{} {} {} {} {} {}\n".format(v[0],v[1],v[2],v[3],v[4],v[5]))
@@ -534,7 +549,7 @@ class CellComplex:
         f.close()
 
 
-    def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True):
+    def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
         logger.info('Extract partition...')
 
         """
@@ -594,7 +609,7 @@ class CellComplex:
 
             if plane_id > -1:
                 colors.append(self.plane_colors[plane_id])
-                primitive_ids.append(self.merged_primitives_to_input_primitives[plane_id])
+                primitive_ids.append([self.plane_order[plane_id]])
             else:
                 colors.append(np.random.randint(100, 255, size=3))
                 primitive_ids.append([])
@@ -623,11 +638,12 @@ class CellComplex:
         # f.write("property uchar blue\n")
         # f.write("element face {}\n".format(len(self.graph.edges)))
         f.write("element face {}\n".format(ecount))
-        f.write("property list uchar int vertex_index\n")
+        f.write("property list uchar int vertex_indices\n")
         f.write("property uchar red\n")
         f.write("property uchar green\n")
         f.write("property uchar blue\n")
-        f.write("property list uchar int primitive_index\n")
+        if with_primitive_id:
+            f.write("property list uchar int primitive_indices\n")
         # f.write("property float a\n")
         # f.write("property float b\n")
         # f.write("property float c\n")
@@ -641,10 +657,11 @@ class CellComplex:
                 f.write("{} ".format(v))
             c = colors[i]
             f.write("{} {} {}".format(c[0],c[1],c[2]))
-            pi = primitive_ids[i]
-            f.write(" {} ".format(len(pi)))
-            for v in pi:
-                f.write("{} ".format(v))
+            if with_primitive_id:
+                pi = primitive_ids[i]
+                f.write(" {} ".format(len(pi)))
+                for v in pi:
+                    f.write("{} ".format(v))
             # sp = supporting_planes[i]
             # f.write("{} {} {} {}".format(sp[0],sp[1],sp[2],sp[3]))
             f.write("\n")
@@ -826,7 +843,7 @@ class CellComplex:
 
         planes = primitive_dict["planes"][current_ids]
         hull_verts = primitive_dict['hull_vertices'][current_ids]
-        planes = torch.from_numpy(planes).type(torch.float32).to('cuda')
+        planes = self.torch.from_numpy(planes).type(self.torch.float32).to('cuda')
 
         ### find the plane which seperates all other planes without splitting them
         left_right = []
@@ -834,14 +851,14 @@ class CellComplex:
             pls = planes[i]
 
             pv = hull_verts.transpose(2,0)
-            pv = torch.cat((pv[:,:,:i],pv[:,:,i+1:]),axis=2)
+            pv = self.torch.cat((pv[:,:,:i],pv[:,:,i+1:]),axis=2)
 
-            which_side = torch.tensordot(pls[:3], pv, 1)
+            which_side = self.torch.tensordot(pls[:3], pv, 1)
             which_side = which_side < -pls[3]
             left = which_side.all(axis=0)
             right = (~which_side).all(axis=0)
 
-            lr = torch.logical_or(left,right)
+            lr = self.torch.logical_or(left,right)
 
             if earlystop and lr.all():
                 logger.debug("earlystop")
@@ -895,9 +912,9 @@ class CellComplex:
         if insertion_order == "random":
             return np.random.choice(len(current_ids),size=1)[0]
         elif insertion_order in ["product", "product-earlystop", "sum", "sum-earlystop", "equal", "equal-earlystop", "intersect", "intersect-earlystop"]:
-            if self.backend == "gpu":
+            if self.device == "gpu":
                 return self._get_best_split_gpu(current_ids,primitive_dict,insertion_order)
-            elif self.backend == "cpu":
+            elif self.device == "cpu":
                 return self._get_best_split(current_ids,primitive_dict,insertion_order)
             else:
                 raise NotImplementedError
@@ -997,9 +1014,9 @@ class CellComplex:
                     else:
                         logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
                         hull_points = hull_points[:self.vertex_group_n_fill]
-                    primitive_dict["hull_vertices"] = torch.cat(
+                    primitive_dict["hull_vertices"] = self.torch.cat(
                         (primitive_dict["hull_vertices"],
-                         torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
+                         self.torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
 
                 if (right_points.shape[0] > th):
                     right_plane_ids.append(primitive_dict["planes"].shape[0])
@@ -1028,9 +1045,9 @@ class CellComplex:
                     else:
                         logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
                         hull_points = hull_points[:self.vertex_group_n_fill]
-                    primitive_dict["hull_vertices"] = torch.cat(
+                    primitive_dict["hull_vertices"] = self.torch.cat(
                         (primitive_dict["hull_vertices"],
-                         torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
+                         self.torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
 
 
                 self.split_count+=1
@@ -1204,24 +1221,38 @@ class CellComplex:
         negative = [QQ(-element) for element in positive]
         return positive, negative
 
-
     def add_bounding_box_planes(self):
 
         logger.info("Add bounding planes...")
 
-        outside_poly = self._init_bounding_box(padding=self.initial_padding**2)
-        # bigger_bb_box = self._init_bounding_box(padding=self.initial_padding)
-        # bb_verts = np.array(bigger_bb_box.bounding_box())
-        # TODO: again there is a mix here between float and double; I need to take the planes from the BB box instead of remqking them
-        bb_verts = np.array(self.bounding_poly.bounding_box())
+        pmin = vector(self.bounding_poly.bounding_box()[0])
+        pmax = vector(self.bounding_poly.bounding_box()[1])
+        d = pmax-pmin
+        d = d*QQ(self.initial_padding*10)
+        pmin = pmin-d
+        pmax = pmax+d
+
+        bounding_verts = []
+        bounding_verts.append(pmin)
+        bounding_verts.append([pmin[0],pmax[1],pmin[2]])
+        bounding_verts.append([pmin[0],pmin[1],pmax[2]])
+        bounding_verts.append([pmin[0],pmax[1],pmax[2]])
+        bounding_verts.append(pmax)
+        bounding_verts.append([pmax[0],pmin[1],pmax[2]])
+        bounding_verts.append([pmax[0],pmax[1],pmin[2]])
+        bounding_verts.append([pmax[0],pmin[1],pmin[2]])
+
+        outside_poly = Polyhedron(vertices=bounding_verts)
+
+        bb_verts = self.bounding_poly.bounding_box()
         bb_planes = []
-        bb_planes.append([-1,0,0,bb_verts[0,0]])
-        bb_planes.append([1,0,0,-bb_verts[1,0]])
-        bb_planes.append([0,-1,0,bb_verts[0,1]])
-        bb_planes.append([0,1,0,-bb_verts[1,1]])
-        bb_planes.append([0,0,-1,bb_verts[0,2]])
-        bb_planes.append([0,0,1,-bb_verts[1,2]])
-        bb_planes = np.array(bb_planes)
+        bb_planes.append([-1,0,0,bb_verts[0][0]])
+        bb_planes.append([1,0,0,-bb_verts[1][0]])
+        bb_planes.append([0,-1,0,bb_verts[0][1]])
+        bb_planes.append([0,1,0,-bb_verts[1][1]])
+        bb_planes.append([0,0,-1,bb_verts[0][2]])
+        bb_planes.append([0,0,1,-bb_verts[1][2]])
+        bb_planes = np.array(bb_planes,dtype=object)
 
         for i,plane in enumerate(bb_planes):
 
@@ -1244,6 +1275,7 @@ class CellComplex:
                 if intersection.dim() == 2:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
                                    supporting_plane=plane, convex_intersection=False, bounding_box_edge=True)
+
 
     def construct_polygons(self):
 
@@ -1295,7 +1327,7 @@ class CellComplex:
 
 
     @profile
-    def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", backend='cpu'):
+    def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", device='cpu'):
         """
         1. construct the partition
         :param m:
@@ -1305,7 +1337,7 @@ class CellComplex:
         :param export:
         :return:
         """
-        logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.backend))
+        logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
         if export:
             logger.warning('\nDebug export activated!\n')
         primitive_dict = dict()
@@ -1350,9 +1382,9 @@ class CellComplex:
                 best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids,primitive_dict, insertion_order)
                 best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
                 ### split the primitives with the best_plane, and append them to the plane array
-                if self.backend == 'cpu':
+                if self.device == 'cpu':
                     left_planes, right_planes = self._split_support_points(best_plane_id,current_ids,primitive_dict, th)
-                elif self.backend == 'gpu':
+                elif self.device == 'gpu':
                     left_planes, right_planes = self._split_support_points_gpu(best_plane_id,current_ids,primitive_dict, th)
                 else:
                     raise NotImplementedError
@@ -1440,7 +1472,7 @@ class CellComplex:
             self.graph.remove_node(child)
             pbar.update(n_points_processed)
 
-            if self.backend == 'gpu':
+            if self.device == 'gpu':
                 primitive_dict["halfspaces"][current_ids[best_plane_id]] = None
                 primitive_dict["point_groups"][current_ids[best_plane_id]] = None
                 primitive_dict["convex_hulls"][current_ids[best_plane_id]] = None

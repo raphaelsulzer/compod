@@ -176,9 +176,9 @@ class CellComplexExporter:
 
         f = open(filename, 'w')
         for p in points:
-            f.write("v {:3f} {:3f} {:3f}\n".format(p[0],p[1],p[2]))
+            f.write("v {:6f} {:6f} {:6f}\n".format(p[0],p[1],p[2]))
 
-        f.write("v {:3f} {:3f} {:3f}\n".format(outside[0], outside[1], outside[2]))
+        f.write("v {:6f} {:6f} {:6f}\n".format(outside[0], outside[1], outside[2]))
 
         nump = points.shape[0]
         for i,p in enumerate(points):
@@ -202,10 +202,10 @@ class CellComplexExporter:
     def write_surface_to_off(self,filename,points,facets):
 
         f = open(filename[:-3]+"off",'w')
-        f.write("COFF\n")
+        f.write("OFF\n")
         f.write("{} {} 0\n".format(points.shape[0],len(facets)))
         for p in points:
-            f.write("{} {} {}\n".format(p[0],p[1],p[2]))
+            f.write("{:6f} {:6f} {:6f}\n".format(p[0],p[1],p[2]))
         for i,face in enumerate(facets):
             f.write("{}".format(len(face)))
             for v in face:
@@ -213,9 +213,9 @@ class CellComplexExporter:
             f.write('\n')
         f.close()
 
-    def write_colored_surface_to_ply(self, filename, points, facets, colors=None):
+    def write_colored_soup_to_ply(self, filename, points, facets, pcolors=None, fcolors=None):
 
-        col = colors if colors is not None else (np.random.random(size=3) * 255).astype(int)
+        # col = colors if colors is not None else (np.random.random(size=3) * 255).astype(int)
 
         f = open(filename, 'w')
 
@@ -225,19 +225,22 @@ class CellComplexExporter:
         f.write("property float x\n")
         f.write("property float y\n")
         f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
         f.write("element face {}\n".format(len(facets)))
-        f.write("property list uchar int vertex_index\n")
+        f.write("property list uchar int vertex_indices\n")
         f.write("property uchar red\n")
         f.write("property uchar green\n")
         f.write("property uchar blue\n")
         f.write("end_header\n")
-        for v in points:
-            f.write("{} {} {}\n".format(v[0], v[1], v[2]))
+        for i,v in enumerate(points):
+            f.write("{:6f} {:6f} {:6f} {} {} {}\n".format(v[0], v[1], v[2], pcolors[i][0],pcolors[i][1],pcolors[i][2]))
         for i,fa in enumerate(facets):
             f.write("{}".format(len(fa)))
             for v in fa:
                 f.write(" {}".format(v))
-            for c in col[i]:
+            for c in fcolors[i]:
                 f.write(" {}".format(c))
             f.write("\n")
 
