@@ -19,7 +19,7 @@ class VertexGroup:
     """
 
     def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None,
-                 points_type="inliers", sample_count_per_area=2, fixed_sample_count=10, export=False,
+                 points_type="inliers", total_sample_count=100000, polygon_sample_count=100, export=False,
                  device='gpu'):
         """
         Init VertexGroup.
@@ -44,8 +44,8 @@ class VertexGroup:
         self.points_ungrouped = None
         self.merge_duplicates = merge_duplicates
         self.prioritise_planes = prioritise_planes
-        self.sample_count_per_area = sample_count_per_area
-        self.fixed_sample_count = fixed_sample_count
+        self.total_sample_count = total_sample_count
+        self.polygon_sample_count = polygon_sample_count
 
         self.points_type = points_type
 
@@ -270,7 +270,6 @@ class VertexGroup:
         Start processing vertex group.
         """
 
-
         fn = self.filepath.with_suffix(".npz")
         data = np.load(fn)
 
@@ -327,16 +326,17 @@ class VertexGroup:
         self._fill_hull_vertices()
 
         ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
-        self.sample_count_per_area = self.sample_count_per_area/self.polygon_areas.sum()
+        self.sample_count_per_area = self.total_sample_count/self.polygon_areas.sum()
 
         if self.points_type == "samples":
-            if self.fixed_sample_count:
-                n_points = self.fixed_sample_count
+            if self.polygon_sample_count:
+                n_points = self.polygon_sample_count
             else:
                 n_points = None
             self._sample_polygons(n_points=n_points) # redefines self.points_grouped
         elif self.points_type == "inliers":
-            raise NotImplementedError
+            # raise NotImplementedError
+            pass
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             NotImplementedError
