@@ -9,8 +9,6 @@ sys.path.append(os.path.join(PYTHONPATH,"ksr-benchmark"))
 from pyplane import PyPlane, SagePlane, ProjectedConvexHull
 from export import PlaneExporter
 from color import FancyColor
-from .logger import attach_to_log
-logger = attach_to_log()
 import copy
 
 class VertexGroup:
@@ -20,7 +18,7 @@ class VertexGroup:
 
     def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None,
                  points_type="inliers", total_sample_count=100000, polygon_sample_count=100, export=False,
-                 device='gpu'):
+                 device='gpu', logger=None):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -30,6 +28,9 @@ class VertexGroup:
         filepath: str or Path
             Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
         """
+
+        self.logger = logger if logger else logging.getLogger()
+
 
         if isinstance(filepath, str):
             self.filepath = Path(filepath)
@@ -138,7 +139,7 @@ class VertexGroup:
         """
         Start processing vertex group.
         """
-        logger.debug('processing {}'.format(self.filepath))
+        self.logger.debug('processing {}'.format(self.filepath))
         self._load_vg_file()
         self.points = self._get_points()
         self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self._get_primitives()
@@ -160,7 +161,7 @@ class VertexGroup:
         prioritise_verticals: bool
             Prioritise vertical planes if set True
         """
-        logger.info('Prioritise planar primitive with mode {}'.format(mode))
+        self.logger.info('Prioritise planar primitive with mode {}'.format(mode))
 
         indices_sorted_planes = np.arange(len(self.planes))
 
@@ -363,7 +364,7 @@ class VertexGroup:
             self.convex_hulls = self.convex_hulls[order]
             self.plane_colors = self.plane_colors[order]
         else:
-            logger.info("No plane prioritisation applied")
+            self.logger.info("No plane prioritisation applied")
 
 
 
@@ -400,7 +401,7 @@ class VertexGroup:
             # # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
             # self.merged_primitives_to_input_primitives = list(primitive_ids.values())
             #
-            # logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
+            # self.logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
         # else:
         #     self.merged_primitives_to_input_primitives = []
         #     for i in range(len(self.planes)):

@@ -10,8 +10,8 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 
-from .setup import *
 import os, sys, time, multiprocessing, pickle
+from .imports import *
 from pathlib import Path
 from random import random
 from fractions import Fraction
@@ -23,8 +23,7 @@ from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
 
-from .logger import attach_to_log
-logger = attach_to_log()
+
 
 from .export_complex import CellComplexExporter
 import libPyLabeler as PL
@@ -37,7 +36,7 @@ class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, model, vertex_group, initial_padding=0.1, export=False, device='cpu'):
+    def __init__(self, model, vertex_group, initial_padding=0.1, export=False, device='cpu' ,logger=None):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -64,7 +63,9 @@ class CellComplex:
         self.planeExporter = PlaneExporter()
         self.cellComplexExporter = CellComplexExporter(self)
 
-        logger.debug('Init cell complex with padding {}'.format(initial_padding))
+        self.logger = logger if logger else logging.getLogger()
+
+        self.logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
         vertex_group.planes, vertex_group.halfspaces, vertex_group.bounds, vertex_group.points_grouped,
         self.bounds = vertex_group.bounds
@@ -284,7 +285,7 @@ class CellComplex:
 
     def extract_colored_soup(self, filename):
 
-        logger.info('Extract colored soup...')
+        self.logger.info('Extract colored soup...')
 
         fcolors = []
         pcolors = []
@@ -331,7 +332,7 @@ class CellComplex:
 
         all_points = np.array(all_points, dtype=float)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        logger.debug('Save colored polygon soup to {}'.format(filename))
+        self.logger.debug('Save colored polygon soup to {}'.format(filename))
 
         self.cellComplexExporter.write_colored_soup_to_ply(filename, points=all_points,
                                                               facets=faces, pcolors=pcolors,fcolors=fcolors)
@@ -340,7 +341,7 @@ class CellComplex:
     # @profile
     def extract_surface(self, filename, backend = "python", triangulate = False):
 
-        logger.info('Extract surface...')
+        self.logger.info('Extract surface...')
 
 
         tris = []
@@ -386,7 +387,7 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
+        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
 
         if backend == "cgal":
             sm = s2m.Soup2Mesh()
@@ -410,7 +411,7 @@ class CellComplex:
 
     def extract_in_cells_explode(self,filename,shrink_percentage=0.01):
 
-        logger.info('Extract inside cells...')
+        self.logger.info('Extract inside cells...')
 
         os.makedirs(os.path.dirname(filename),exist_ok=True)
         f = open(filename,'w')
@@ -496,7 +497,7 @@ class CellComplex:
 
     def extract_in_cells(self,filename):
 
-        logger.info('Extract inside cells...')
+        self.logger.info('Extract inside cells...')
 
         os.makedirs(os.path.dirname(filename),exist_ok=True)
         f = open(filename,'w')
@@ -550,7 +551,7 @@ class CellComplex:
 
 
     def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
-        logger.info('Extract partition...')
+        self.logger.info('Extract partition...')
 
         """
         Save polygon soup of indexed convexes to an obj file.
@@ -604,7 +605,7 @@ class CellComplex:
             if str(plane) in self.plane_dict.keys():
                 plane_id = self.plane_dict[str(plane)]
             else:
-                logger.warning("\nPlane not found in plane_dict")
+                self.logger.warning("\nPlane not found in plane_dict")
                 plane_id = -1
 
             if plane_id > -1:
@@ -672,7 +673,7 @@ class CellComplex:
 
     def graph_cut(self):
 
-        logger.info("Apply label regularization with graph-cut...")
+        self.logger.info("Apply label regularization with graph-cut...")
 
         dtype = np.int64
         # Internally, in the pyGCO code datatype is always converted to np.int32
@@ -861,7 +862,7 @@ class CellComplex:
             lr = self.torch.logical_or(left,right)
 
             if earlystop and lr.all():
-                logger.debug("earlystop")
+                self.logger.debug("earlystop")
                 return i
             else:
                 left = left.sum().item()
@@ -1012,7 +1013,7 @@ class CellComplex:
                         fill = hull_points[np.random.choice(hull_points.shape[0],fill)]
                         hull_points=np.concatenate((hull_points,fill))
                     else:
-                        logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
+                        self.logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
                         hull_points = hull_points[:self.vertex_group_n_fill]
                     primitive_dict["hull_vertices"] = self.torch.cat(
                         (primitive_dict["hull_vertices"],
@@ -1043,7 +1044,7 @@ class CellComplex:
                         fill = hull_points[np.random.choice(hull_points.shape[0],fill)]
                         hull_points=np.concatenate((hull_points,fill))
                     else:
-                        logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
+                        self.logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
                         hull_points = hull_points[:self.vertex_group_n_fill]
                     primitive_dict["hull_vertices"] = self.torch.cat(
                         (primitive_dict["hull_vertices"],
@@ -1196,7 +1197,7 @@ class CellComplex:
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
 
-        logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
+        self.logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
 
         self.polygons_initialized = False
 
@@ -1223,7 +1224,7 @@ class CellComplex:
 
     def add_bounding_box_planes(self):
 
-        logger.info("Add bounding planes...")
+        self.logger.info("Add bounding planes...")
 
         pmin = vector(self.bounding_poly.bounding_box()[0])
         pmax = vector(self.bounding_poly.bounding_box()[1])
@@ -1337,9 +1338,9 @@ class CellComplex:
         :param export:
         :return:
         """
-        logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
+        self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
         if export:
-            logger.warning('\nDebug export activated!\n')
+            self.logger.warning('\nDebug export activated!\n')
         primitive_dict = dict()
         primitive_dict["planes"] = self.planes
         primitive_dict["halfspaces"] = list(self.halfspaces)
@@ -1449,7 +1450,7 @@ class CellComplex:
             neighbors_of_old_cell = list(self.graph[child])
             old_cell_id=child
             for neighbor_id_old_cell in neighbors_of_old_cell:
-                logger.debug("make neighbors")
+                self.logger.debug("make neighbors")
 
                 # get the neighboring convex
                 nconvex = self.cells.get(neighbor_id_old_cell)
@@ -1486,14 +1487,14 @@ class CellComplex:
         #     self.cellComplexExporter.write_graph(m,self.graph,self.cells)
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
-        logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))
+        self.logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))
 
         return 0
 
 
     def save_partition(self,infile):
 
-        logger.info("Save tree, graph and convex cells to file...")
+        self.logger.info("Save tree, graph and convex cells to file...")
 
         os.makedirs(infile,exist_ok=True)
 
@@ -1506,7 +1507,7 @@ class CellComplex:
 
     def load_partition(self,infile):
 
-        logger.info("Load tree, graph and convex cells from file...")
+        self.logger.info("Load tree, graph and convex cells from file...")
 
         if os.path.isfile(os.path.join(infile,'tree.pickle')):
             self.tree = pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
@@ -1687,9 +1688,9 @@ class CellComplex:
         cell_dict[self.index_node] = self.bounding_poly
 
         if exhaustive:
-            logger.info('construct exhaustive cell complex'.format())
+            self.logger.info('construct exhaustive cell complex'.format())
         else:
-            logger.info('construct cell complex'.format())
+            self.logger.info('construct cell complex'.format())
 
         tik = time.time()
 
@@ -1787,7 +1788,7 @@ class CellComplex:
                     del cell_dict[list(self.graph.nodes)[index_parent]]
                     self.graph.remove_node(list(self.graph.nodes)[index_parent])
 
-        logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
+        self.logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
 
         self.cells=cell_dict
 
