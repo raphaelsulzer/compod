@@ -10,27 +10,25 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 
-import os, sys, time, multiprocessing, pickle
-from .imports import *
+import time, multiprocessing, pickle, logging
 from pathlib import Path
-from random import random
 from fractions import Fraction
 import numpy as np
 from tqdm import trange
 import networkx as nx
-from sage.all import QQ, RR, Polyhedron, vector, arctan2
+from sage.all import QQ, Polyhedron, vector, arctan2
 from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
 
 
-
 from .export_complex import CellComplexExporter
+from .imports import *
 import libPyLabeler as PL
 import libSoup2Mesh as s2m
-from export import PlaneExporter
-from pyplane import PyPlane, SagePlane, ProjectedConvexHull
-from color import FancyColor
+from pyplane.export import PlaneExporter
+from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
+from fancycolor.color import FancyColor
 
 class CellComplex:
     """
@@ -334,8 +332,73 @@ class CellComplex:
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         self.logger.debug('Save colored polygon soup to {}'.format(filename))
 
-        self.cellComplexExporter.write_colored_soup_to_ply(filename, points=all_points,
-                                                              facets=faces, pcolors=pcolors,fcolors=fcolors)
+        self.cellComplexExporter.write_colored_soup_to_ply(filename, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
+
+
+    def extract_polygon_mesh(self, filename):
+
+
+        self.logger.info('Extract surface...')
+
+
+        tris = []
+        colors = []
+        all_points = []
+        # for cgal export
+        faces = []
+        face_lens = []
+        n_points = 0
+        for e0, e1 in self.graph.edges:
+
+            # if e0 > e1:
+            #     continue
+
+            c0 = self.graph.nodes[e0]
+            c1 = self.graph.nodes[e1]
+
+            if c0["occupancy"] != c1["occupancy"]:
+
+                intersection_points = self._get_intersection(e0,e1)
+
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,self.graph[e0][e1]["supporting_plane"])
+
+                assert(len(intersection_points)==len(correct_order))
+                intersection_points = intersection_points[correct_order]
+
+                if(len(intersection_points)<3):
+                    print("ERROR: Encountered facet with less than 2 vertices.")
+                    sys.exit(1)
+
+                ## orient polygon
+                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
+                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
+                if self._orient_exact_polygon(intersection_points,outside):
+                    intersection_points = np.flip(intersection_points, axis=0)
+
+                for i in range(intersection_points.shape[0]):
+                    all_points.append(tuple(intersection_points[i,:]))
+                tris.append(intersection_points)
+                # for cgal export
+                faces.append(np.arange(len(intersection_points))+n_points)
+                face_lens.append(len(intersection_points))
+                n_points+=len(intersection_points)
+
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
+
+
+        pset = set(all_points)
+        pset = np.array(list(pset),dtype=object)
+        facets = []
+        for tri in tris:
+            face = []
+            for pt in tri:
+                face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
+            facets.append(face)
+        self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
+
+
+
 
 
     # @profile
@@ -403,7 +466,6 @@ class CellComplex:
                 for pt in tri:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
-
             self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
         else:
             raise NotImplementedError

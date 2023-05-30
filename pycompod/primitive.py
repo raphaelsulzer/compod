@@ -2,13 +2,9 @@ import os, sys, struct
 from pathlib import Path
 import numpy as np
 from sage.all import polytopes, QQ, Polyhedron
-# from torchrec import sparse
-PYTHONPATH="/home/rsulzer/python"
-sys.path.append(os.path.join(PYTHONPATH,"pyplane"))
-sys.path.append(os.path.join(PYTHONPATH,"ksr-benchmark"))
-from pyplane import PyPlane, SagePlane, ProjectedConvexHull
-from export import PlaneExporter
-from color import FancyColor
+from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
+from pyplane.export import PlaneExporter
+from fancycolor.color import FancyColor
 import copy
 
 class VertexGroup:

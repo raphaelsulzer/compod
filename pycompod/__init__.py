@@ -1,5 +1,3 @@
-from .version import __version__
-
 __all__ = ['CellComplex','CellComplexExporter', 'VertexGroup', 'AdjacencyGraph']
 
 from .complex import *
