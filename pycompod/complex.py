@@ -10,7 +10,7 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 
-import time, multiprocessing, pickle, logging
+import time, multiprocessing, pickle, logging, trimesh
 from pathlib import Path
 from fractions import Fraction
 import numpy as np
@@ -20,6 +20,7 @@ from sage.all import QQ, Polyhedron, vector, arctan2
 from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
+from collections import defaultdict
 
 
 from .export_complex import CellComplexExporter
@@ -69,7 +70,6 @@ class CellComplex:
         self.bounds = vertex_group.bounds
         self.planes = vertex_group.planes
         self.plane_order = vertex_group.plane_order
-        self.plane_dict = vertex_group.plane_dict
         self.plane_colors = vertex_group.plane_colors
         self.halfspaces = vertex_group.halfspaces
         self.points = vertex_group.points_grouped
@@ -299,7 +299,7 @@ class CellComplex:
             if c0["occupancy"] != c1["occupancy"]:
 
                 # TODO: a better solution instead of using a plane dict is simply to get the ID from the primitive_dict["plane_ids"] array
-                plane_id = self.plane_dict.get(str(self.graph.edges[e0, e1]["supporting_plane"]), -1)
+                plane_id = self.graph.edges[e0, e1]["supporting_plane_id"]
                 col = self.plane_colors[plane_id] if plane_id > -1 else np.random.randint(100, 255, size=3)
                 fcolors.append(col)
 
@@ -360,7 +360,9 @@ class CellComplex:
 
                 intersection_points = self._get_intersection(e0,e1)
 
-                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,self.graph[e0][e1]["supporting_plane"])
+                plane_id = self.graph[e0][e1]["supporting_plane_id"]
+                plane = self.planes[plane_id]
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
 
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
@@ -384,7 +386,6 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
 
 
         pset = set(all_points)
@@ -639,7 +640,6 @@ class CellComplex:
         indices = []
         primitive_ids = []
         count = 0
-        supporting_planes = []
         ecount = 0
 
         colors = []
@@ -659,16 +659,10 @@ class CellComplex:
             indices.append(list(np.arange(count,len(correct_vertex_order)+count)))
 
 
-            plane = self.graph.edges[c0,c1]["supporting_plane"]
-            supporting_planes.append(plane)
+            # plane = self.graph.edges[c0,c1]["supporting_plane"]
+            plane_id = self.graph.edges[c0,c1]["supporting_plane_id"]
             ## if plane_id is negative append negative primitive_id
 
-            # TODO: a better solution instead of using a plane dict is simply to get the ID from the primitive_dict["plane_ids"] array
-            if str(plane) in self.plane_dict.keys():
-                plane_id = self.plane_dict[str(plane)]
-            else:
-                self.logger.warning("\nPlane not found in plane_dict")
-                plane_id = -1
 
             if plane_id > -1:
                 colors.append(self.plane_colors[plane_id])
@@ -1319,7 +1313,6 @@ class CellComplex:
 
         for i,plane in enumerate(bb_planes):
 
-            self.plane_dict[str(plane)] = -(i+1)
 
             hspace_neg, hspace_pos = self._inequalities(plane)
             op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
@@ -1337,7 +1330,7 @@ class CellComplex:
 
                 if intersection.dim() == 2:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
-                                   supporting_plane=plane, convex_intersection=False, bounding_box_edge=True)
+                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box_edge=True)
 
 
     def construct_polygons(self):
@@ -1350,6 +1343,9 @@ class CellComplex:
         if not self.polygons_initialized:
             self._init_polygons()
 
+
+        polygon_dict = defaultdict(trimesh.Trimesh)
+
         for c0,c1 in list(self.graph.edges):
 
             if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
@@ -1357,6 +1353,8 @@ class CellComplex:
 
             current_edge = self.graph[c0][c1]
             current_facet = current_edge["intersection"]
+
+
 
             for neighbor in list(self.graph[c0]):
                 if neighbor == c1: continue
@@ -1374,6 +1372,36 @@ class CellComplex:
                     current_edge["vertices"] += facet_intersection.vertices_list()
                     this_edge["vertices"] += facet_intersection.vertices_list()
 
+
+    def build_mesh(self,filename):
+
+        """
+        4. add missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors
+        :return:
+        """
+
+        if not self.polygons_initialized:
+            self._init_polygons()
+
+
+        mesh = trimesh.Trimesh()
+
+        for c0,c1 in list(self.graph.edges):
+
+            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
+                continue
+
+            current_edge = self.graph[c0][c1]
+            current_facet = current_edge["intersection"]
+
+            points = np.array(current_facet.vertices_list(),dtype=float)
+            tris = np.array(current_facet.triangulate())
+
+            mesh+=trimesh.Trimesh(vertices=points,
+                            faces=tris)
+
+
+        mesh.export(filename)
 
     def build_tree(self, model):
 
@@ -1431,11 +1459,9 @@ class CellComplex:
         best_plane_ids = []
         for child in children:
 
-
             current_ids = self.tree[child].data["plane_ids"]
             current_cell = self.cells.get(child)
             plane_count+=1  # only used for debugging exports
-
 
             if len(current_ids) == 1:
                 best_plane_id = 0
@@ -1451,10 +1477,13 @@ class CellComplex:
                     left_planes, right_planes = self._split_support_points_gpu(best_plane_id,current_ids,primitive_dict, th)
                 else:
                     raise NotImplementedError
-            
 
             ### for debugging
             best_plane_ids.append(best_plane_id)
+            best_plane_id_input = primitive_dict["plane_ids"][current_ids[best_plane_id]]
+
+
+
 
             # print("\n{}: {} with point {}".format(current_ids[best_plane_id],best_plane,primitive_dict["point_groups"][current_ids[best_plane_id]][0,:]))
 
@@ -1467,8 +1496,7 @@ class CellComplex:
                 epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
                 if epoints.shape[0]>3:
-                    color = self.plane_dict.get(str(best_plane))
-                    color = self.plane_colors[color]
+                    color = self.plane_colors[best_plane_id_input]
                     self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
 
@@ -1503,7 +1531,7 @@ class CellComplex:
 
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
                 self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
-                               supporting_plane=best_plane, convex_intersection=True, bounding_box_edge=False)
+                               supporting_plane_id=best_plane_id_input, convex_intersection=True, bounding_box_edge=False)
                 if export:
                     new_intersection = cell_negative.intersection(cell_positive)
                     self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
@@ -1527,10 +1555,10 @@ class CellComplex:
                 # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
                 if n_nonempty:
                     self.graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[],
-                                   supporting_plane=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
+                                   supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
                 if p_nonempty:
                     self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
-                                   supporting_plane=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane"], convex_intersection=False, bounding_box_edge=False)
+                                   supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
 
             self.graph.remove_node(child)
             pbar.update(n_points_processed)
@@ -1711,13 +1739,13 @@ class CellComplex:
 
         if interface_positive.dim() == 2:
             # this neighbour can connect with either or both children
-            self.graph.add_edge(self.index_node + 1, n, supporting_plane=kwargs["supporting_plane"])
+            self.graph.add_edge(self.index_node + 1, n, supporting_plane_id=kwargs["supporting_plane_id"])
             interface_negative = cell_negative.intersection(cell_neighbour)
             if interface_negative.dim() == 2:
-                self.graph.add_edge(self.index_node + 2, n, supporting_plane=kwargs["supporting_plane"])
+                self.graph.add_edge(self.index_node + 2, n, supporting_plane_id=kwargs["supporting_plane_id"])
         else:
             # this neighbour must otherwise connect with the other child
-            self.graph.add_edge(self.index_node + 2, n, supporting_plane=kwargs["supporting_plane"])
+            self.graph.add_edge(self.index_node + 2, n, supporting_plane_id=kwargs["supporting_plane_id"])
 
     def construct_abspy(self, exhaustive=False, num_workers=0):
         """
@@ -1801,7 +1829,7 @@ class CellComplex:
                     cell_dict[self.index_node+2] = cell_negative
 
                     # append the edge in between
-                    self.graph.add_edge(self.index_node + 1, self.index_node + 2,supporting_plane=self.planes[i])
+                    self.graph.add_edge(self.index_node + 1, self.index_node + 2,supporting_plane_id=i)
 
                     # get neighbours of the current cell from the graph
                     neighbours = self.graph[list(self.graph.nodes)[index_cell]]  # index in the node list

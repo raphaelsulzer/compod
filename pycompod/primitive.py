@@ -412,9 +412,7 @@ class VertexGroup:
 
         # make the bounds and halfspace used in the cell complex construction
         self.halfspaces = []
-        self.plane_dict = dict()
         for i,p in enumerate(self.planes):
-            self.plane_dict[str(p)] = i
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
         self.halfspaces = np.array(self.halfspaces)
 
