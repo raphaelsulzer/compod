@@ -13,6 +13,8 @@ so will be the corresponding adjacency graph of the complex.
 import time, multiprocessing, pickle, logging, trimesh
 from pathlib import Path
 from fractions import Fraction
+
+import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import trange
 import networkx as nx
@@ -21,7 +23,7 @@ from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
 from collections import defaultdict
-
+from copy import deepcopy
 
 from .export_complex import CellComplexExporter
 from .imports import *
@@ -335,8 +337,152 @@ class CellComplex:
         self.cellComplexExporter.write_colored_soup_to_ply(filename, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
 
-    def extract_polygon_mesh(self, filename):
 
+    def _triangulate_points(self, v, attribute):
+        n = len(v)
+        triangles = []
+        attributes = []
+        for i in range(n - 2):
+            tri = [0, i % n + 1, i % n + 2]
+            triangles.append(v[tri])
+            attributes.append(attribute)
+
+        return triangles, attributes
+
+
+    @profile
+    def extract_surface(self, filename, backend = "python", triangulate = False):
+
+        self.logger.info('Extract surface...')
+
+        all_points = []
+        all_triangles = []
+        all_triangle_plane_ids = []
+        n_points = 0
+        for e0, e1 in self.graph.edges:
+
+            # if e0 > e1:
+            #     continue
+
+            c0 = self.graph.nodes[e0]
+            c1 = self.graph.nodes[e1]
+
+            if c0["occupancy"] != c1["occupancy"]:
+
+                intersection_points = self._get_intersection(e0,e1)
+
+                plane_id = self.graph[e0][e1]["supporting_plane_id"]
+                plane = self.planes[plane_id]
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
+
+                assert(len(intersection_points)==len(correct_order))
+                intersection_points = intersection_points[correct_order]
+
+
+                ## orient polygon
+                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
+                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
+                if self._orient_exact_polygon(intersection_points,outside):
+                    intersection_points = np.flip(intersection_points, axis=0)
+
+                all_points.append(intersection_points)
+                
+                polys = np.arange(len(intersection_points))+n_points
+                
+                tris, plane_ids = self._triangulate_points(polys,plane_id)
+                all_triangles.append(tris)
+                all_triangle_plane_ids.append(plane_ids)
+
+
+                n_points+=len(intersection_points)
+
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
+        
+        ## make a mesh, where each face of the partition is a triangulated face of the mesh
+        all_points = np.concatenate(all_points).astype(float)
+        all_triangles = np.concatenate(all_triangles)
+        all_triangle_plane_ids = np.concatenate(all_triangle_plane_ids)
+        atpd = {}
+        for i,id in enumerate(all_triangle_plane_ids):
+            atpd[i] = id
+        mesh = trimesh.Trimesh(vertices=all_points,faces=all_triangles,face_attributes=atpd,process=True)
+
+        ## collect the regions of the mesh, ie facets that come from the same plane
+        region_dict = defaultdict(list)
+        for i,f in enumerate(mesh.face_attributes.values()):
+            region_dict[f]+=[i]
+            
+        polygons = []
+        polygon_lens = []
+
+        from triangle import triangulate
+
+        ## apply a constrained delaunay triangulation to the regions
+        for plane_id,faces in region_dict.items():
+
+            ## get outlines of the region
+            outline3d = mesh.outline(face_ids=faces)
+            pyplane = PyPlane(self.planes[plane_id])
+            verts_2d = pyplane.to_2d(mesh.vertices)
+            outline2d = trimesh.path.Path2D(entities=outline3d.entities,
+                            vertices=verts_2d,
+                            process=False)
+
+            ## collect holes per outline
+            points_inside_holes = []
+            for exterior_id, interior_ids in outline2d.enclosure_shell.items():
+
+                # this is simply for finding a point inside the hole, so I can pass it to the constrained delaunay triangulator
+                for iid in interior_ids:
+                    ent = outline2d.entities[iid]
+                    segments = ent.nodes - ent.points.min()
+                    hpts = verts_2d[ent.points, :]
+                    tridict = {"vertices": hpts, "segments": segments}
+                    hole = triangulate(tridict)
+                    pts = hole['vertices'][hole["triangles"][0]]
+                    points_inside_holes.append(pts.mean(axis=0))
+
+            points_inside_holes = np.array(points_inside_holes)
+
+            referenced_vertices = deepcopy(outline2d.referenced_vertices)
+            outline2d.remove_unreferenced_vertices()
+
+
+            if len(points_inside_holes):
+                tridict = {"vertices": outline2d.vertices, "segments": outline2d.vertex_nodes, "holes": points_inside_holes}
+            else:
+                tridict = {"vertices": outline2d.vertices, "segments": outline2d.vertex_nodes}
+
+            tri = triangulate(tridict, 'p')
+            points2d = tri['vertices']
+            triangles = tri['triangles']
+            triangles = referenced_vertices[triangles]
+
+
+
+
+            polygons.append(triangles)
+            polygon_lens.append(np.zeros(triangles.shape[0],dtype=int)+3)
+
+
+
+        verts=np.array(mesh.vertices)
+
+        # sm = s2m.Soup2Mesh()
+        # sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
+        # sm.makeMesh(True)
+        # sm.saveMesh(filename)
+
+        mesh = trimesh.Trimesh(vertices=verts,faces=np.concatenate(polygons))
+        mesh.export(filename)
+
+
+        a=5
+
+
+    @profile
+    def extract_surface2(self, filename, backend = "python", triangulate = False):
 
         self.logger.info('Extract surface...')
 
@@ -363,71 +509,6 @@ class CellComplex:
                 plane_id = self.graph[e0][e1]["supporting_plane_id"]
                 plane = self.planes[plane_id]
                 correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
-
-                assert(len(intersection_points)==len(correct_order))
-                intersection_points = intersection_points[correct_order]
-
-                if(len(intersection_points)<3):
-                    print("ERROR: Encountered facet with less than 2 vertices.")
-                    sys.exit(1)
-
-                ## orient polygon
-                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
-                if self._orient_exact_polygon(intersection_points,outside):
-                    intersection_points = np.flip(intersection_points, axis=0)
-
-                for i in range(intersection_points.shape[0]):
-                    all_points.append(tuple(intersection_points[i,:]))
-                tris.append(intersection_points)
-                # for cgal export
-                faces.append(np.arange(len(intersection_points))+n_points)
-                face_lens.append(len(intersection_points))
-                n_points+=len(intersection_points)
-
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-
-
-        pset = set(all_points)
-        pset = np.array(list(pset),dtype=object)
-        facets = []
-        for tri in tris:
-            face = []
-            for pt in tri:
-                face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
-            facets.append(face)
-        self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
-
-
-
-
-
-    # @profile
-    def extract_surface(self, filename, backend = "python", triangulate = False):
-
-        self.logger.info('Extract surface...')
-
-
-        tris = []
-        colors = []
-        all_points = []
-        # for cgal export
-        faces = []
-        face_lens = []
-        n_points = 0
-        for e0, e1 in self.graph.edges:
-
-            # if e0 > e1:
-            #     continue
-
-            c0 = self.graph.nodes[e0]
-            c1 = self.graph.nodes[e1]
-
-            if c0["occupancy"] != c1["occupancy"]:
-
-                intersection_points = self._get_intersection(e0,e1)
-
-                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,self.graph[e0][e1]["supporting_plane"])
 
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
@@ -812,7 +893,7 @@ class CellComplex:
 
 
 
-    @profile
+    # @profile
     def _get_best_split(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
 
         ## sum calls the get_best_plane function less often than product, but with more planes
@@ -872,7 +953,7 @@ class CellComplex:
         return best_plane_id
 
 
-    @profile
+    # @profile
     def _get_best_split_gpu(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
 
         # TODO: in fact left_right has to be computed only one single time per plane and can be stored throughout the algorithm
@@ -1003,7 +1084,7 @@ class CellComplex:
         else:
             raise NotImplementedError
 
-    @profile
+    # @profile
     def _split_support_points_gpu(self,best_plane_id,current_ids,primitive_dict, th=1):
 
         '''
@@ -1193,7 +1274,7 @@ class CellComplex:
             c0 = self.cells.get(e0)
             c1 = self.cells.get(e1)
             ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
-            ### I could just say if self.simplified or something like that, but for now will just recaculate all the intersections here
+            ### I could just say if self.simplified or something like that, but for now will just recompute all the intersections here
             # if not self.graph.edges[e0,e1]["intersection"]:
             intersection = c0.intersection(c1)
             if intersection.dim() == 2:
@@ -1332,7 +1413,7 @@ class CellComplex:
                     self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
                                    supporting_plane_id=-(i+1), convex_intersection=False, bounding_box_edge=True)
 
-
+    @profile
     def construct_polygons(self):
 
         """
@@ -1354,15 +1435,13 @@ class CellComplex:
             current_edge = self.graph[c0][c1]
             current_facet = current_edge["intersection"]
 
-
-
             for neighbor in list(self.graph[c0]):
                 if neighbor == c1: continue
                 this_edge = self.graph[c0][neighbor]
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"]+=facet_intersection.vertices_list()
-                    this_edge["vertices"]+=facet_intersection.vertices_list()
+                    # this_edge["vertices"]+=facet_intersection.vertices_list()
 
             for neighbor in list(self.graph[c1]):
                 if neighbor == c0: continue
@@ -1370,7 +1449,7 @@ class CellComplex:
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
-                    this_edge["vertices"] += facet_intersection.vertices_list()
+                    # this_edge["vertices"] += facet_intersection.vertices_list()
 
 
     def build_mesh(self,filename):
@@ -1385,6 +1464,7 @@ class CellComplex:
 
 
         mesh = trimesh.Trimesh()
+        polygon_dict = defaultdict(trimesh.Trimesh)
 
         for c0,c1 in list(self.graph.edges):
 
@@ -1397,10 +1477,47 @@ class CellComplex:
             points = np.array(current_facet.vertices_list(),dtype=float)
             tris = np.array(current_facet.triangulate())
 
-            mesh+=trimesh.Trimesh(vertices=points,
-                            faces=tris)
+            m=trimesh.Trimesh(vertices=points, faces=tris)
+            mesh+=m
+
+            plane_id = current_edge["supporting_plane_id"]
+            polygon_dict[plane_id]+=m
+
+        points = ""
+        pc = 0
+        lines = ""
+        lc = 0
+        # for k,mesh in polygon_dict.items():
+        #
+        #     for line in mesh.outline().entities():
+        #         lc+=1
+        #         for p in
 
 
+
+
+        f = open(filename, 'w')
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write("element vertex {}\n".format(len(verts)))
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        # f.write("property uchar red\n")
+        # f.write("property uchar green\n")
+        # f.write("property uchar blue\n")
+        f.write("element edge {}\n".format(len()))
+        f.write("property list uchar int vertex_index\n")
+        f.write("end_header\n")
+        f.write(points)
+        f.write(lines)
+
+
+
+
+
+        mesh.merge_vertices()
+        mesh=mesh.process()
         mesh.export(filename)
 
     def build_tree(self, model):
@@ -1417,7 +1534,7 @@ class CellComplex:
         pass
 
 
-    @profile
+    # @profile
     def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", device='cpu'):
         """
         1. construct the partition
