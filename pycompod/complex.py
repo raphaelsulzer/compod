@@ -425,9 +425,12 @@ class CellComplex:
             outline3d = mesh.outline(face_ids=faces)
             pyplane = PyPlane(self.planes[plane_id])
             verts_2d = pyplane.to_2d(mesh.vertices)
-            outline2d = trimesh.path.Path2D(entities=outline3d.entities,
-                            vertices=verts_2d,
+            outline2d = trimesh.path.Path2D(entities=deepcopy(outline3d.entities),
+                            vertices=deepcopy(verts_2d),
                             process=False)
+
+            referenced_vertices = deepcopy(outline2d.referenced_vertices)
+            outline2d.remove_unreferenced_vertices()
 
             ## collect holes per outline
             points_inside_holes = []
@@ -437,17 +440,16 @@ class CellComplex:
                 for iid in interior_ids:
                     ent = outline2d.entities[iid]
                     segments = ent.nodes - ent.points.min()
-                    hpts = verts_2d[ent.points, :]
+                    hpts = outline2d.vertices[ent.points, :]
                     tridict = {"vertices": hpts, "segments": segments}
-                    hole = triangulate(tridict)
+                    try:
+                        hole = triangulate(tridict)
+                    except:
+                        self.logger.warning("Skipping wholes")
                     pts = hole['vertices'][hole["triangles"][0]]
                     points_inside_holes.append(pts.mean(axis=0))
 
             points_inside_holes = np.array(points_inside_holes)
-
-            referenced_vertices = deepcopy(outline2d.referenced_vertices)
-            outline2d.remove_unreferenced_vertices()
-
 
             if len(points_inside_holes):
                 tridict = {"vertices": outline2d.vertices, "segments": outline2d.vertex_nodes, "holes": points_inside_holes}
@@ -459,23 +461,19 @@ class CellComplex:
             triangles = tri['triangles']
             triangles = referenced_vertices[triangles]
 
-
-
-
             polygons.append(triangles)
             polygon_lens.append(np.zeros(triangles.shape[0],dtype=int)+3)
 
 
-
         verts=np.array(mesh.vertices)
 
-        # sm = s2m.Soup2Mesh()
-        # sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
-        # sm.makeMesh(True)
-        # sm.saveMesh(filename)
+        sm = s2m.Soup2Mesh()
+        sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
+        sm.makeMesh(True)
+        sm.saveMesh(filename)
 
-        mesh = trimesh.Trimesh(vertices=verts,faces=np.concatenate(polygons))
-        mesh.export(filename)
+        # mesh = trimesh.Trimesh(vertices=verts,faces=np.concatenate(polygons))
+        # mesh.export(filename)
 
 
         a=5
