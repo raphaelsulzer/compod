@@ -144,32 +144,6 @@ class CellComplex:
 
 
 
-    def _sorted_vertex_indices(self,adjacency_matrix):
-        """
-        Return sorted vertex indices.
-
-        Parameters
-        ----------
-        adjacency_matrix: matrix
-            Adjacency matrix
-
-        Returns
-        -------
-        sorted_: list of int
-            Sorted vertex indices
-        """
-        pointer = 0
-        sorted_ = [pointer]
-        for _ in range(len(adjacency_matrix[0]) - 1):
-            connected = np.where(adjacency_matrix[pointer])[0]  # two elements
-            if connected[0] not in sorted_:
-                pointer = connected[0]
-                sorted_.append(connected[0])
-            else:
-                pointer = connected[1]
-                sorted_.append(connected[1])
-        return sorted_
-
     def _sort_vertex_indices_by_angle_exact(self,points,plane):
         '''order vertices of a convex polygon:
         https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
@@ -338,20 +312,22 @@ class CellComplex:
 
 
 
-    def _triangulate_points(self, v, attribute):
-        n = len(v)
-        triangles = []
-        attributes = []
-        for i in range(n - 2):
-            tri = [0, i % n + 1, i % n + 2]
-            triangles.append(v[tri])
-            attributes.append(attribute)
 
-        return triangles, attributes
 
 
     @profile
-    def extract_surface(self, filename, backend = "python", triangulate = False):
+    def make_polygon_mesh(self, filename, backend = "python", triangulate = False):
+
+        def _triangulate_points(v, attribute):
+            n = len(v)
+            triangles = []
+            attributes = []
+            for i in range(n - 2):
+                tri = [0, i % n + 1, i % n + 2]
+                triangles.append(v[tri])
+                attributes.append(attribute)
+
+            return triangles, attributes
 
         self.logger.info('Extract surface...')
 
@@ -480,7 +456,7 @@ class CellComplex:
 
 
     @profile
-    def extract_surface2(self, filename, backend = "python", triangulate = False):
+    def make_mesh(self, filename, backend = "python", triangulate = False):
 
         self.logger.info('Extract surface...')
 
@@ -693,10 +669,8 @@ class CellComplex:
 
 
     def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
-        self.logger.info('Extract partition...')
-
         """
-        Save polygon soup of indexed convexes to an obj file.
+        Save polygon soup of indexed convexes to a ply file.
 
         Parameters
         ----------
@@ -707,6 +681,25 @@ class CellComplex:
         use_mtl: bool
             Use mtl attribute in obj if set True
         """
+
+        def _sorted_vertex_indices(self, adjacency_matrix):
+
+            pointer = 0
+            sorted_ = [pointer]
+            for _ in range(len(adjacency_matrix[0]) - 1):
+                connected = np.where(adjacency_matrix[pointer])[0]  # two elements
+                if connected[0] not in sorted_:
+                    pointer = connected[0]
+                    sorted_.append(connected[0])
+                else:
+                    pointer = connected[1]
+                    sorted_.append(connected[1])
+            return sorted_
+
+
+        self.logger.info('Extract partition...')
+
+
         # create the dir if not exists
         if not self.polygons_initialized:
             self._init_polygons()
