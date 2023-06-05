@@ -104,27 +104,9 @@ class CellComplex:
         self.bounding_verts = []
 
         points = np.concatenate(self.points)
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points)
-        aabb = pcd.get_axis_aligned_bounding_box()
-        # aabb.scale(padding,aabb.get_center())
-        ppmin = aabb.min_bound.astype(points.dtype)
-        ppmax = aabb.max_bound.astype(points.dtype)
+        pmin = vector([QQ(points[:,0].min()),QQ(points[:,1].min()),QQ(points[:,2].min())])
+        pmax = vector([QQ(points[:,0].max()),QQ(points[:,1].max()),QQ(points[:,2].max())])
 
-        ### very important to have the same types, otherwise the bounding planes will not be correctly inserted
-        assert(points.dtype == np.float32)
-        assert(ppmin.dtype == np.float32)
-
-        pmin=[]
-        for p in ppmin:
-            pmin.append(Fraction(str(p)))
-        pmax=[]
-        for p in ppmax:
-            pmax.append(Fraction(str(p)))
-
-
-        pmin = vector(pmin)
-        pmax = vector(pmax)
         d = pmax-pmin
         d = d*QQ(padding)
         pmin = pmin-d
@@ -143,6 +125,82 @@ class CellComplex:
         return Polyhedron(vertices=self.bounding_verts)
 
 
+    def _inequalities(self, plane):
+        """
+        Inequalities from plane parameters.
+
+        Parameters
+        ----------
+        plane: (4,) float
+            Plane parameters
+
+        Returns
+        -------
+        positive: (4,) float
+            Inequality of the positive half-plane
+        negative: (4,) float
+            Inequality of the negative half-plane
+        """
+        positive = [QQ(plane[-1]), QQ(plane[0]), QQ(plane[1]), QQ(plane[2])]
+        negative = [QQ(-element) for element in positive]
+        return positive, negative
+
+
+    def add_bounding_box_planes(self):
+
+        self.logger.info("Add bounding planes...")
+
+        pmin = vector(self.bounding_poly.bounding_box()[0])
+        pmax = vector(self.bounding_poly.bounding_box()[1])
+        d = pmax-pmin
+        d = d*QQ(self.initial_padding*10)
+        pmin = pmin-d
+        pmax = pmax+d
+
+        bounding_verts = []
+        bounding_verts.append(pmin)
+        bounding_verts.append([pmin[0],pmax[1],pmin[2]])
+        bounding_verts.append([pmin[0],pmin[1],pmax[2]])
+        bounding_verts.append([pmin[0],pmax[1],pmax[2]])
+        bounding_verts.append(pmax)
+        bounding_verts.append([pmax[0],pmin[1],pmax[2]])
+        bounding_verts.append([pmax[0],pmax[1],pmin[2]])
+        bounding_verts.append([pmax[0],pmin[1],pmin[2]])
+
+        outside_poly = Polyhedron(vertices=bounding_verts)
+
+        bb_verts = self.bounding_poly.bounding_box()
+        bb_planes = []
+        bb_planes.append([-1,0,0,bb_verts[0][0]])
+        bb_planes.append([1,0,0,-bb_verts[1][0]])
+        bb_planes.append([0,-1,0,bb_verts[0][1]])
+        bb_planes.append([0,1,0,-bb_verts[1][1]])
+        bb_planes.append([0,0,-1,bb_verts[0][2]])
+        bb_planes.append([0,0,1,-bb_verts[1][2]])
+        bb_planes = np.array(bb_planes,dtype=object)
+
+        for i,plane in enumerate(bb_planes):
+
+
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
+
+            if self.export:
+                self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
+
+            self.cells[-(i+1)] = op
+            self.graph.add_node(-(i+1), occupancy=0.0)
+
+
+            for cell_id in list(self.graph.nodes):
+
+                intersection = op.intersection(self.cells.get(cell_id))
+
+                if intersection.dim() == 2:
+                    self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
+                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box_edge=True)
+
+
 
     def _sort_vertex_indices_by_angle_exact(self,points,plane):
         '''order vertices of a convex polygon:
@@ -152,9 +210,7 @@ class CellComplex:
         # pp=PyPlane(plane).project_points_to_plane_coordinate_system(points)
 
         max_coord=PyPlane(plane).max_coord
-
         pp = np.delete(points,max_coord,axis=1)
-
 
         center = np.mean(pp,axis=0)
         vectors = pp - center
@@ -169,31 +225,9 @@ class CellComplex:
 
         return np.argsort(radians)
 
-    def _sort_vertex_indices_by_angle(self,points,plane):
-        '''order vertices of a convex polygon:
-        https://blogs.sas.com/content/iml/2021/11/17/order-vertices-convex-polygon.html#:~:text=Order%20vertices%20of%20a%20convex%20polygon&text=You%20can%20use%20the%20centroid,vertices%20of%20the%20convex%20polygon
-        '''
-        ## project to plane
-        # pp=PyPlane(plane).project_points_to_plane_coordinate_system(points)
-        pp=PyPlane(plane).to_2d(points)
-
-        center = np.mean(pp,axis=0)
-        vectors = pp - center
-        # vectors = vectors/np.linalg.norm(vectors)
-        radians = np.arctan2(vectors[:,1],vectors[:,0])
-
-        if (np.unique(radians,return_counts=True)[1]>1).any():
-            a=5
 
 
-        # same_rads = radians[np.unique(radians,return_counts=True)[1]>1]
-        # if same_rads.shape[0]:
-        #     print("WARNING: same angle")
-        #     return None
-
-        return np.argsort(radians)
-
-    def _orient_exact_polygon(self, points, outside):
+    def _orient_polygon_exact(self, points, outside):
         # check for left or right orientation
         # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
 
@@ -218,26 +252,6 @@ class CellComplex:
 
         return dot < 0
 
-    def _orient_inexact_polygon(self, points, outside):
-        # check for left or right orientation
-        # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
-
-        i = 0
-        cross=0
-        while np.sum(cross) == 0:
-            a = points[i+1] - points[i]
-            a = a/np.linalg.norm(a)
-            b = points[i+2] - points[i]
-            b = b/np.linalg.norm(b)
-            cross = np.cross(a,b)
-            i+=1
-
-        c = np.array(outside) - points[i]
-        c = c/np.linalg.norm(c)
-        cross = cross/np.linalg.norm(cross)
-        dot = np.dot(cross,c)
-
-        return dot < 0
 
     def _get_intersection(self, e0, e1):
 
@@ -257,9 +271,9 @@ class CellComplex:
         return intersection_points
 
 
-    def extract_colored_soup(self, filename):
+    def save_colored_soup(self, filename):
 
-        self.logger.info('Extract colored soup...')
+        self.logger.info('Save colored surface soup...')
 
         fcolors = []
         pcolors = []
@@ -281,8 +295,9 @@ class CellComplex:
 
                 intersection_points = self._get_intersection(e0, e1)
 
-                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,
-                                                                         self.graph[e0][e1]["supporting_plane"])
+                plane_id = self.graph[e0][e1]["supporting_plane_id"]
+                plane = self.planes[plane_id]
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
 
                 assert (len(intersection_points) == len(correct_order))
                 intersection_points = intersection_points[correct_order]
@@ -293,8 +308,7 @@ class CellComplex:
 
                 ## orient polygon
                 outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
-                if self._orient_exact_polygon(intersection_points, outside):
+                if self._orient_polygon_exact(intersection_points, outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 for pt in intersection_points:
@@ -312,11 +326,18 @@ class CellComplex:
 
 
 
-
-
-
     @profile
-    def make_polygon_mesh(self, filename, backend = "python", triangulate = False):
+    def save_simplified_surface(self, filename, backend = "python", triangulate = False):
+
+        """
+        This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
+        Result is that some simplified meshes are not watertight.
+
+        :param filename:
+        :param backend:
+        :param triangulate:
+        :return:
+        """
 
         def _triangulate_points(v, attribute):
             n = len(v)
@@ -329,16 +350,13 @@ class CellComplex:
 
             return triangles, attributes
 
-        self.logger.info('Extract surface...')
+        self.logger.info('Save simplified surface mesh ({})...'.format(backend))
 
         all_points = []
         all_triangles = []
         all_triangle_plane_ids = []
         n_points = 0
         for e0, e1 in self.graph.edges:
-
-            # if e0 > e1:
-            #     continue
 
             c0 = self.graph.nodes[e0]
             c1 = self.graph.nodes[e1]
@@ -356,21 +374,23 @@ class CellComplex:
 
 
                 ## orient polygon
-                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
-                if self._orient_exact_polygon(intersection_points,outside):
+                ## here we want facets coming from the same plane to be oriented the same
+
+                outside = vector(intersection_points[0])+vector([QQ(plane[1]),QQ(plane[2]),QQ(plane[3])])
+                if self._orient_polygon_exact(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 all_points.append(intersection_points)
                 
                 polys = np.arange(len(intersection_points))+n_points
                 
-                tris, plane_ids = self._triangulate_points(polys,plane_id)
+                tris, plane_ids = _triangulate_points(polys,plane_id)
                 all_triangles.append(tris)
                 all_triangle_plane_ids.append(plane_ids)
 
 
                 n_points+=len(intersection_points)
+
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
@@ -382,9 +402,14 @@ class CellComplex:
         atpd = {}
         for i,id in enumerate(all_triangle_plane_ids):
             atpd[i] = id
-        mesh = trimesh.Trimesh(vertices=all_points,faces=all_triangles,face_attributes=atpd,process=True)
+        mesh = trimesh.Trimesh(vertices=all_points,faces=all_triangles,face_attributes=atpd)
+        mesh.merge_vertices()
+        emesh = deepcopy(mesh)
+        emesh.face_attributes = dict()
+        emesh.export(filename[:-4]+"_trimesh.ply")
 
-        ## collect the regions of the mesh, ie facets that come from the same plane
+
+        ## collect the regions of the mesh, ie facets that came from the same plane
         region_dict = defaultdict(list)
         for i,f in enumerate(mesh.face_attributes.values()):
             region_dict[f]+=[i]
@@ -415,13 +440,12 @@ class CellComplex:
                 # this is simply for finding a point inside the hole, so I can pass it to the constrained delaunay triangulator
                 for iid in interior_ids:
                     ent = outline2d.entities[iid]
-                    segments = ent.nodes - ent.points.min()
                     hpts = outline2d.vertices[ent.points, :]
-                    tridict = {"vertices": hpts, "segments": segments}
-                    try:
-                        hole = triangulate(tridict)
-                    except:
+                    tridict = {"vertices": hpts}
+                    if not ent.closed: # here is the bug mentioned in the header of this function. All outlines should be closed, but self-intersecting ones are not.
                         self.logger.warning("Skipping wholes")
+                        continue
+                    hole = triangulate(tridict)
                     pts = hole['vertices'][hole["triangles"][0]]
                     points_inside_holes.append(pts.mean(axis=0))
 
@@ -432,7 +456,7 @@ class CellComplex:
             else:
                 tridict = {"vertices": outline2d.vertices, "segments": outline2d.vertex_nodes}
 
-            tri = triangulate(tridict, 'p')
+            tri = triangulate(tridict, 'p') # 'p' means make a Delaunay triangulation constraint to the passed segments
             points2d = tri['vertices']
             triangles = tri['triangles']
             triangles = referenced_vertices[triangles]
@@ -440,25 +464,24 @@ class CellComplex:
             polygons.append(triangles)
             polygon_lens.append(np.zeros(triangles.shape[0],dtype=int)+3)
 
-
         verts=np.array(mesh.vertices)
 
-        sm = s2m.Soup2Mesh()
-        sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
-        sm.makeMesh(True)
-        sm.saveMesh(filename)
-
-        # mesh = trimesh.Trimesh(vertices=verts,faces=np.concatenate(polygons))
-        # mesh.export(filename)
-
-
-        a=5
+        if backend == "cgal":
+            sm = s2m.Soup2Mesh()
+            sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
+            sm.makeMesh(True)
+            sm.saveMesh(filename)
+        elif backend == "python":
+            mesh = trimesh.Trimesh(vertices=verts,faces=np.concatenate(polygons))
+            mesh.export(filename)
+        else:
+            raise NotImplementedError
 
 
     @profile
-    def make_mesh(self, filename, backend = "python", triangulate = False):
+    def save_surface(self, filename, backend = "python", triangulate = False):
 
-        self.logger.info('Extract surface...')
+        self.logger.info('Save surface mesh ({})...'.format(backend))
 
 
         tris = []
@@ -493,8 +516,7 @@ class CellComplex:
 
                 ## orient polygon
                 outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                # if self._orient_inexact_polygon(intersection_points_float,np.array(outside).astype(float)):
-                if self._orient_exact_polygon(intersection_points,outside):
+                if self._orient_polygon_exact(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 for i in range(intersection_points.shape[0]):
@@ -506,7 +528,6 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
 
         if backend == "cgal":
             sm = s2m.Soup2Mesh()
@@ -514,6 +535,8 @@ class CellComplex:
             sm.makeMesh(triangulate)
             sm.saveMesh(filename)
         elif backend == "python":
+            if triangulate:
+                self.logger.warning("Mesh will not be triangulated")
             pset = set(all_points)
             pset = np.array(list(pset),dtype=object)
             facets = []
@@ -523,13 +546,29 @@ class CellComplex:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
             self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
+        elif backend == "trimesh":
+            if not triangulate:
+                self.logger.warning("Mesh will be triangulated")
+            def _triangulate_points(v):
+                n = len(v)
+                triangles = []
+                for i in range(n - 2):
+                    tri = [0, i % n + 1, i % n + 2]
+                    triangles.append(v[tri])
+                return triangles
+            # triangulate all faces
+            tris = []
+            for fa in faces:
+                tris.append(_triangulate_points(fa))
+            mesh = trimesh.Trimesh(vertices=all_points,faces=np.concatenate(tris))
+            mesh.export(filename)
         else:
             raise NotImplementedError
 
 
-    def extract_in_cells_explode(self,filename,shrink_percentage=0.01):
+    def save_in_cells_explode(self,filename,shrink_percentage=0.01):
 
-        self.logger.info('Extract inside cells...')
+        self.logger.info('Save exploded inside cells...')
 
         os.makedirs(os.path.dirname(filename),exist_ok=True)
         f = open(filename,'w')
@@ -613,9 +652,9 @@ class CellComplex:
         f.close()
 
 
-    def extract_in_cells(self,filename):
+    def save_in_cells(self,filename):
 
-        self.logger.info('Extract inside cells...')
+        self.logger.info('Save inside cells...')
 
         os.makedirs(os.path.dirname(filename),exist_ok=True)
         f = open(filename,'w')
@@ -668,7 +707,7 @@ class CellComplex:
         f.close()
 
 
-    def extract_partition_as_ply(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
+    def save_partition(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
         """
         Save polygon soup of indexed convexes to a ply file.
 
@@ -682,7 +721,7 @@ class CellComplex:
             Use mtl attribute in obj if set True
         """
 
-        def _sorted_vertex_indices(self, adjacency_matrix):
+        def _sorted_vertex_indices(adjacency_matrix):
 
             pointer = 0
             sorted_ = [pointer]
@@ -697,7 +736,7 @@ class CellComplex:
             return sorted_
 
 
-        self.logger.info('Extract partition...')
+        self.logger.info('Save partition...')
 
 
         # create the dir if not exists
@@ -726,9 +765,11 @@ class CellComplex:
 
             ecount+=1
             face = self.graph.edges[c0,c1]["intersection"]
-            correct_vertex_order = self._sorted_vertex_indices(face.adjacency_matrix())
-            points.append(np.array(face.vertices_list())[correct_vertex_order])
-            indices.append(list(np.arange(count,len(correct_vertex_order)+count)))
+            verts = face.vertices_list()
+            correct_vertex_order = _sorted_vertex_indices(face.adjacency_matrix())
+            points.append(np.array(verts)[correct_vertex_order])
+            # points.append(verts)
+            indices.append(list(np.arange(count,len(verts)+count)))
 
 
             # plane = self.graph.edges[c0,c1]["supporting_plane"]
@@ -744,7 +785,7 @@ class CellComplex:
                 primitive_ids.append([])
 
 
-            count+=len(correct_vertex_order)
+            count+=len(verts)
 
         if rand_colors:
             colors = np.random.randint(100, 255, size=(len(self.graph.edges), 3))
@@ -849,7 +890,15 @@ class CellComplex:
         return labels
 
 
-    def label_cells(self, m, n_test_points=50,graph_cut=True,export=False):
+    def label_partition(self, m, n_test_points=50,graph_cut=True,export=False):
+        """
+        Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
+        :param m:
+        :param n_test_points:
+        :param graph_cut:
+        :param export:
+        :return:
+        """
 
         pl=PL.PyLabeler(n_test_points)
         if pl.loadMesh(m["mesh"]):
@@ -1251,36 +1300,7 @@ class CellComplex:
         return left_plane_ids,right_plane_ids
 
 
-    def _init_polygons(self):
-
-        """
-        3. initialize the polygons
-        3a. intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
-        3b. init an empty vertices list needed for self.construct_polygons
-        """
-
-        for e0,e1 in self.graph.edges:
-
-            edge = self.graph.edges[e0,e1]
-            c0 = self.cells.get(e0)
-            c1 = self.cells.get(e1)
-            ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
-            ### I could just say if self.simplified or something like that, but for now will just recompute all the intersections here
-            # if not self.graph.edges[e0,e1]["intersection"]:
-            intersection = c0.intersection(c1)
-            if intersection.dim() == 2:
-                edge["intersection"] = c0.intersection(c1)
-                edge["vertices"] =  []
-            else:
-                self.graph.remove_edge(e0,e1)
-
-            # edge["vertices"] = edge["intersection"].vertices_list()
-
-        self.polygons_initialized = True
-
-
-
-    def simplify(self):
+    def simplify_partition(self):
 
         # TODO: try a simplify version from top to botton
 
@@ -1330,79 +1350,32 @@ class CellComplex:
         self.polygons_initialized = False
 
 
-    def _inequalities(self, plane):
+    def _init_polygons(self):
+
         """
-        Inequalities from plane parameters.
-
-        Parameters
-        ----------
-        plane: (4,) float
-            Plane parameters
-
-        Returns
-        -------
-        positive: (4,) float
-            Inequality of the positive half-plane
-        negative: (4,) float
-            Inequality of the negative half-plane
+        3. initialize the polygons
+        3a. intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
+        3b. init an empty vertices list needed for self.construct_polygons
         """
-        positive = [QQ(plane[-1]), QQ(plane[0]), QQ(plane[1]), QQ(plane[2])]
-        negative = [QQ(-element) for element in positive]
-        return positive, negative
 
-    def add_bounding_box_planes(self):
+        for e0,e1 in self.graph.edges:
 
-        self.logger.info("Add bounding planes...")
+            edge = self.graph.edges[e0,e1]
+            c0 = self.cells.get(e0)
+            c1 = self.cells.get(e1)
+            ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
+            ### I could just say if self.simplified or something like that, but for now will just recompute all the intersections here
+            # if not self.graph.edges[e0,e1]["intersection"]:
+            intersection = c0.intersection(c1)
+            if intersection.dim() == 2:
+                edge["intersection"] = c0.intersection(c1)
+                edge["vertices"] =  []
+            else:
+                self.graph.remove_edge(e0,e1)
 
-        pmin = vector(self.bounding_poly.bounding_box()[0])
-        pmax = vector(self.bounding_poly.bounding_box()[1])
-        d = pmax-pmin
-        d = d*QQ(self.initial_padding*10)
-        pmin = pmin-d
-        pmax = pmax+d
+            # edge["vertices"] = edge["intersection"].vertices_list()
 
-        bounding_verts = []
-        bounding_verts.append(pmin)
-        bounding_verts.append([pmin[0],pmax[1],pmin[2]])
-        bounding_verts.append([pmin[0],pmin[1],pmax[2]])
-        bounding_verts.append([pmin[0],pmax[1],pmax[2]])
-        bounding_verts.append(pmax)
-        bounding_verts.append([pmax[0],pmin[1],pmax[2]])
-        bounding_verts.append([pmax[0],pmax[1],pmin[2]])
-        bounding_verts.append([pmax[0],pmin[1],pmin[2]])
-
-        outside_poly = Polyhedron(vertices=bounding_verts)
-
-        bb_verts = self.bounding_poly.bounding_box()
-        bb_planes = []
-        bb_planes.append([-1,0,0,bb_verts[0][0]])
-        bb_planes.append([1,0,0,-bb_verts[1][0]])
-        bb_planes.append([0,-1,0,bb_verts[0][1]])
-        bb_planes.append([0,1,0,-bb_verts[1][1]])
-        bb_planes.append([0,0,-1,bb_verts[0][2]])
-        bb_planes.append([0,0,1,-bb_verts[1][2]])
-        bb_planes = np.array(bb_planes,dtype=object)
-
-        for i,plane in enumerate(bb_planes):
-
-
-            hspace_neg, hspace_pos = self._inequalities(plane)
-            op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
-
-            if self.export:
-                self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
-
-            self.cells[-(i+1)] = op
-            self.graph.add_node(-(i+1), occupancy=0.0)
-
-
-            for cell_id in list(self.graph.nodes):
-
-                intersection = op.intersection(self.cells.get(cell_id))
-
-                if intersection.dim() == 2:
-                    self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
-                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box_edge=True)
+        self.polygons_initialized = True
 
     @profile
     def construct_polygons(self):
@@ -1443,75 +1416,8 @@ class CellComplex:
                     # this_edge["vertices"] += facet_intersection.vertices_list()
 
 
-    def build_mesh(self,filename):
 
-        """
-        4. add missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors
-        :return:
-        """
-
-        if not self.polygons_initialized:
-            self._init_polygons()
-
-
-        mesh = trimesh.Trimesh()
-        polygon_dict = defaultdict(trimesh.Trimesh)
-
-        for c0,c1 in list(self.graph.edges):
-
-            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
-                continue
-
-            current_edge = self.graph[c0][c1]
-            current_facet = current_edge["intersection"]
-
-            points = np.array(current_facet.vertices_list(),dtype=float)
-            tris = np.array(current_facet.triangulate())
-
-            m=trimesh.Trimesh(vertices=points, faces=tris)
-            mesh+=m
-
-            plane_id = current_edge["supporting_plane_id"]
-            polygon_dict[plane_id]+=m
-
-        points = ""
-        pc = 0
-        lines = ""
-        lc = 0
-        # for k,mesh in polygon_dict.items():
-        #
-        #     for line in mesh.outline().entities():
-        #         lc+=1
-        #         for p in
-
-
-
-
-        f = open(filename, 'w')
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("element vertex {}\n".format(len(verts)))
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        # f.write("property uchar red\n")
-        # f.write("property uchar green\n")
-        # f.write("property uchar blue\n")
-        f.write("element edge {}\n".format(len()))
-        f.write("property list uchar int vertex_index\n")
-        f.write("end_header\n")
-        f.write(points)
-        f.write(lines)
-
-
-
-
-
-        mesh.merge_vertices()
-        mesh=mesh.process()
-        mesh.export(filename)
-
-    def build_tree(self, model):
+    def construct_tree(self, model):
 
         # TODO: make a version where the tree is build without any intersection computations.
         #  Here the tree nodes are planes, and only the leaf nodes are (not yet) constructed cells (see Murali et al. Figure 3 for such a tree).
@@ -1525,7 +1431,8 @@ class CellComplex:
         pass
 
 
-    # @profile
+
+    @profile
     def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", device='cpu'):
         """
         1. construct the partition
@@ -1605,7 +1512,7 @@ class CellComplex:
                 epoints = epoints[~np.isnan(epoints).all(axis=-1)]
                 if epoints.shape[0]>3:
                     color = self.plane_colors[best_plane_id_input]
-                    self.planeExporter.export_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
+                    self.planeExporter.save_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
 
             ## create the new convexes
@@ -1690,7 +1597,7 @@ class CellComplex:
         return 0
 
 
-    def save_partition(self,infile):
+    def save_partition_to_pickle(self,infile):
 
         self.logger.info("Save tree, graph and convex cells to file...")
 
@@ -1703,7 +1610,7 @@ class CellComplex:
 
 
 
-    def load_partition(self,infile):
+    def load_partition_from_pickle(self,infile):
 
         self.logger.info("Load tree, graph and convex cells from file...")
 
@@ -1717,143 +1624,6 @@ class CellComplex:
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
 
-    @staticmethod
-    def _pad_bound(bound, padding=0.00):
-        """
-        Pad bound.
-
-        Parameters
-        ----------
-        bound: (2, 3) float
-            Bound of the query planar primitive
-        padding: float
-            Padding factor, defaults to 0.05.
-
-        Returns
-        -------
-        as_float: (2, 3) float
-            Padded bound
-        """
-
-        extent = bound[1] - bound[0]
-        return [bound[0] - extent * padding, bound[1] + extent * padding]
-
-
-    def _intersect_bound_plane(self, bound, plane, exhaustive=False, epsilon=10e-5):
-        """
-        Pre-intersection test between query primitive and existing cells,
-        based on AABB and plane parameters.
-
-        Parameters
-        ----------
-        bound: (2, 3) float
-            Bound of the query planar primitive
-        plane: (4,) float
-            Plane parameters
-        exhaustive: bool
-            Exhaustive partitioning, only for benchmarking
-        epsilon: float
-            Distance tolerance
-
-        Returns
-        -------
-        as_int: (n,) int
-            Indices of existing cells whose bounds intersect with bounds of the query primitive
-            and intersect with the supporting plane of the primitive
-        """
-        if exhaustive:
-            return np.arange(len(self.cells_bounds))
-
-        # each planar primitive partitions only the 3D cells that intersect with it
-        cells_bounds = np.array(self.cells_bounds)  # easier array manipulation
-        center_targets = np.mean(cells_bounds, axis=1)  # N * 3
-        extent_targets = cells_bounds[:, 1, :] - cells_bounds[:, 0, :]  # N * 3
-
-        if bound[0][0] == -np.inf:
-            intersection_bound = np.arange(len(self.cells_bounds))
-
-        else:
-            # intersection with existing cells' AABB
-            center_query = np.mean(bound, axis=0)  # 3,
-            center_distance = np.abs(center_query - center_targets)  # N * 3
-            extent_query = bound[1] - bound[0]  # 3,
-
-            # abs(center_distance) * 2 < (query extent + target extent) for every dimension -> intersection
-            intersection_bound = np.where(np.all(center_distance * 2 < extent_query + extent_targets + epsilon, axis=1))[0]
-
-        # plane-AABB intersection test from extracted intersection_bound only
-        # https://gdbooks.gitbooks.io/3dcollisions/content/Chapter2/static_aabb_plane.html
-        # compute the projection interval radius of AABB onto L(t) = center + t * normal
-        radius = np.dot(extent_targets[intersection_bound] / 2, np.abs(plane[:3]))
-        # compute distance of box center from plane
-        distance = np.dot(center_targets[intersection_bound], plane[:3]) + plane[3]
-        # intersection between plane and AABB occurs when distance falls within [-radius, +radius] interval
-        intersection_plane = np.where(np.abs(distance) <= radius + epsilon)[0]
-
-        return intersection_bound[intersection_plane]
-
-    @staticmethod
-    def _inequalities(plane):
-        """
-        Inequalities from plane parameters.
-
-        Parameters
-        ----------
-        plane: (4,) float
-            Plane parameters
-
-        Returns
-        -------
-        positive: (4,) float
-            Inequality of the positive half-plane
-        negative: (4,) float
-            Inequality of the negative half-plane
-        """
-        positive = [QQ(plane[-1]), QQ(plane[0]), QQ(plane[1]), QQ(plane[2])]
-        negative = [QQ(-element) for element in positive]
-        return positive, negative
-
-    def _index_node_to_cell(self, query):
-        """
-        Convert index in the node list to that in the cell list.
-        The rationale behind is #nodes == #cells (when a primitive is settled down).
-
-        Parameters
-        ----------
-        query: int
-            Query index in the node list
-
-        Returns
-        -------
-        as_int: int
-            Query index in the cell list
-        """
-        return list(self.graph.nodes).index(query)
-
-
-    def _intersect_neighbour(self, kwargs):
-        """
-        Intersection test between partitioned cells and neighbouring cell.
-        Implemented for multi-processing across all neighbours.
-
-        Parameters
-        ----------
-        kwargs: (int, Polyhedron object, Polyhedron object, Polyhedron object)
-            (neighbour index, positive cell, negative cell, neighbouring cell)
-        """
-        n, cell_positive, cell_negative, cell_neighbour = kwargs['n'], kwargs['positive'], kwargs['negative'], kwargs['neighbour']
-
-        interface_positive = cell_positive.intersection(cell_neighbour)
-
-        if interface_positive.dim() == 2:
-            # this neighbour can connect with either or both children
-            self.graph.add_edge(self.index_node + 1, n, supporting_plane_id=kwargs["supporting_plane_id"])
-            interface_negative = cell_negative.intersection(cell_neighbour)
-            if interface_negative.dim() == 2:
-                self.graph.add_edge(self.index_node + 2, n, supporting_plane_id=kwargs["supporting_plane_id"])
-        else:
-            # this neighbour must otherwise connect with the other child
-            self.graph.add_edge(self.index_node + 2, n, supporting_plane_id=kwargs["supporting_plane_id"])
 
     def construct_abspy(self, exhaustive=False, num_workers=0):
         """
@@ -1875,6 +1645,103 @@ class CellComplex:
         num_workers: int
             Number of workers for multi-processing, disabled if set 0
         """
+
+        def _intersect_neighbour(kwargs):
+            """
+            Intersection test between partitioned cells and neighbouring cell.
+            Implemented for multi-processing across all neighbours.
+
+            Parameters
+            ----------
+            kwargs: (int, Polyhedron object, Polyhedron object, Polyhedron object)
+                (neighbour index, positive cell, negative cell, neighbouring cell)
+            """
+            n, cell_positive, cell_negative, cell_neighbour = kwargs['n'], kwargs['positive'], kwargs['negative'], \
+                                                              kwargs['neighbour']
+
+            interface_positive = cell_positive.intersection(cell_neighbour)
+
+            if interface_positive.dim() == 2:
+                # this neighbour can connect with either or both children
+                self.graph.add_edge(self.index_node + 1, n, supporting_plane_id=kwargs["supporting_plane_id"])
+                interface_negative = cell_negative.intersection(cell_neighbour)
+                if interface_negative.dim() == 2:
+                    self.graph.add_edge(self.index_node + 2, n, supporting_plane_id=kwargs["supporting_plane_id"])
+            else:
+                # this neighbour must otherwise connect with the other child
+                self.graph.add_edge(self.index_node + 2, n, supporting_plane_id=kwargs["supporting_plane_id"])
+
+
+        def _index_node_to_cell(query):
+            """
+            Convert index in the node list to that in the cell list.
+            The rationale behind is #nodes == #cells (when a primitive is settled down).
+
+            Parameters
+            ----------
+            query: int
+                Query index in the node list
+
+            Returns
+            -------
+            as_int: int
+                Query index in the cell list
+            """
+            return list(self.graph.nodes).index(query)
+
+        def _intersect_bound_plane(bound, plane, exhaustive=False, epsilon=10e-5):
+            """
+            Pre-intersection test between query primitive and existing cells,
+            based on AABB and plane parameters.
+
+            Parameters
+            ----------
+            bound: (2, 3) float
+                Bound of the query planar primitive
+            plane: (4,) float
+                Plane parameters
+            exhaustive: bool
+                Exhaustive partitioning, only for benchmarking
+            epsilon: float
+                Distance tolerance
+
+            Returns
+            -------
+            as_int: (n,) int
+                Indices of existing cells whose bounds intersect with bounds of the query primitive
+                and intersect with the supporting plane of the primitive
+            """
+            if exhaustive:
+                return np.arange(len(self.cells_bounds))
+
+            # each planar primitive partitions only the 3D cells that intersect with it
+            cells_bounds = np.array(self.cells_bounds)  # easier array manipulation
+            center_targets = np.mean(cells_bounds, axis=1)  # N * 3
+            extent_targets = cells_bounds[:, 1, :] - cells_bounds[:, 0, :]  # N * 3
+
+            if bound[0][0] == -np.inf:
+                intersection_bound = np.arange(len(self.cells_bounds))
+
+            else:
+                # intersection with existing cells' AABB
+                center_query = np.mean(bound, axis=0)  # 3,
+                center_distance = np.abs(center_query - center_targets)  # N * 3
+                extent_query = bound[1] - bound[0]  # 3,
+
+                # abs(center_distance) * 2 < (query extent + target extent) for every dimension -> intersection
+                intersection_bound = \
+                np.where(np.all(center_distance * 2 < extent_query + extent_targets + epsilon, axis=1))[0]
+
+            # plane-AABB intersection test from extracted intersection_bound only
+            # https://gdbooks.gitbooks.io/3dcollisions/content/Chapter2/static_aabb_plane.html
+            # compute the projection interval radius of AABB onto L(t) = center + t * normal
+            radius = np.dot(extent_targets[intersection_bound] / 2, np.abs(plane[:3]))
+            # compute distance of box center from plane
+            distance = np.dot(center_targets[intersection_bound], plane[:3]) + plane[3]
+            # intersection between plane and AABB occurs when distance falls within [-radius, +radius] interval
+            intersection_plane = np.where(np.abs(distance) <= radius + epsilon)[0]
+
+            return intersection_bound[intersection_plane]
 
         self.graph = nx.Graph()
         self.graph.add_node(0)  # the initial cell
@@ -1900,7 +1767,7 @@ class CellComplex:
         for i in pbar:  # kinetic for each primitive
             # bounding box intersection test
             # indices of existing cells with potential intersections
-            indices_cells = self._intersect_bound_plane(self.bounds[i], self.planes[i], exhaustive)
+            indices_cells = _intersect_bound_plane(self.bounds[i], self.planes[i], exhaustive)
             assert len(indices_cells), 'intersection failed! check the initial bound'
 
             # half-spaces defined by inequalities
@@ -1944,7 +1811,7 @@ class CellComplex:
 
                     if neighbours:
                         # get the neighbouring cells to the parent
-                        cells_neighbours = [self.cells[self._index_node_to_cell(n)] for n in neighbours]
+                        cells_neighbours = [self.cells[_index_node_to_cell(n)] for n in neighbours]
 
                         # adjacency test between both created cells and their neighbours
                         # todo:
@@ -1953,15 +1820,15 @@ class CellComplex:
 
                         kwargs = []
                         for n, cell in zip(neighbours, cells_neighbours):
-                            supporting_plane = self.graph.edges[list(self.graph.nodes)[index_cell],n]["supporting_plane"]
+                            supporting_plane_id = self.graph.edges[list(self.graph.nodes)[index_cell],n]["supporting_plane_id"]
                             kwargs.append({'n': n, 'positive': cell_positive, 'negative': cell_negative, 'neighbour': cell,
-                                           'supporting_plane':supporting_plane})
+                                           'supporting_plane_id':supporting_plane_id})
 
                         if pool is None:
                             for k in kwargs:
-                                self._intersect_neighbour(k)
+                                _intersect_neighbour(k)
                         else:
-                            pool.map(self._intersect_neighbour, kwargs)
+                            pool.map(_intersect_neighbour, kwargs)
 
                     # update cell id
                     self.index_node += 2

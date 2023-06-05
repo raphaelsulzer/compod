@@ -12,8 +12,8 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, filepath, merge_duplicates=False, prioritise_planes = None,
-                 points_type="inliers", total_sample_count=100000, polygon_sample_count=100, export=False,
+    def __init__(self, path, merge_duplicates=False, prioritise_planes = None,
+                 points_type="inliers", total_sample_count=100000, export=False,
                  device='gpu', logger=None):
         """
         Init VertexGroup.
@@ -28,10 +28,7 @@ class VertexGroup:
         self.logger = logger if logger else logging.getLogger()
 
 
-        if isinstance(filepath, str):
-            self.filepath = Path(filepath)
-        else:
-            self.filepath = filepath
+        self.path = path
         self.processed = False
         self.points = None
         self.planes = None
@@ -42,14 +39,13 @@ class VertexGroup:
         self.merge_duplicates = merge_duplicates
         self.prioritise_planes = prioritise_planes
         self.total_sample_count = total_sample_count
-        self.polygon_sample_count = polygon_sample_count
 
         self.points_type = points_type
 
         self.export = export
         self.device = device
 
-        ending = os.path.splitext(filepath)[1]
+        ending = os.path.splitext(self.path)[1]
         if ending == ".npz":
             self._process_npz()
         elif ending == ".vg":
@@ -157,7 +153,7 @@ class VertexGroup:
         prioritise_verticals: bool
             Prioritise vertical planes if set True
         """
-        self.logger.info('Prioritise planar primitive with mode {}'.format(mode))
+        self.logger.debug('Prioritise planar primitive with mode {}'.format(mode))
 
         indices_sorted_planes = np.arange(len(self.planes))
 
@@ -234,20 +230,19 @@ class VertexGroup:
 
 
 
-    def _sample_polygons(self,n_points=None):
+    def _sample_polygons(self):
 
         ## project inliers to plane and get the convex hull
         all_sampled_points = []
         for i,poly in enumerate(self.polygons):
             np.random.seed(42)
-            if n_points is None:
-                n = 3+int(self.sample_count_per_area*poly.area)
+            n = 3+int(self.sample_count_per_area*poly.area)
             sampled_points = poly.sample(n)
             sampled_points = np.concatenate((sampled_points,poly.vertices),axis=0,dtype=np.float32)
             all_sampled_points.append(sampled_points)
             self.convex_hulls[i].all_points = sampled_points
 
-        self.points_grouped = np.array(all_sampled_points,dtype=object)
+        return np.array(all_sampled_points,dtype=object)
 
     def _recolor_planes(self):
 
@@ -267,8 +262,7 @@ class VertexGroup:
         Start processing vertex group.
         """
 
-        fn = self.filepath.with_suffix(".npz")
-        data = np.load(fn)
+        data = np.load(self.path)
 
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(np.float32)
@@ -310,7 +304,7 @@ class VertexGroup:
         # save with new colors
         data = dict(data)
         data["group_colors"] = self.plane_colors
-        np.savez(fn,**data)
+        np.savez(self.path,**data)
 
 
 
@@ -326,14 +320,10 @@ class VertexGroup:
         self.sample_count_per_area = self.total_sample_count/self.polygon_areas.sum()
 
         if self.points_type == "samples":
-            if self.polygon_sample_count:
-                n_points = self.polygon_sample_count
-            else:
-                n_points = None
-            self._sample_polygons(n_points=n_points) # redefines self.points_grouped
+            self.logger.info("Sample polygons with {} points".format(self.total_sample_count))
+            self.points_grouped = self._sample_polygons() # changes self.convex_hull
         elif self.points_type == "inliers":
-            # raise NotImplementedError
-            pass
+            self.logger.info("Use {} inlier points of polygons".format(np.concatenate(self.points_grouped).shape[0]))
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             NotImplementedError
@@ -343,11 +333,9 @@ class VertexGroup:
 
         ## export planes and samples
         pe = PlaneExporter()
-        # pt_file = os.path.join(os.path.dirname(str(self.filepath)),"polygon_samples.ply")
-        # plane_file =  os.path.join(os.path.dirname(str(self.filepath)),"merged_planes.ply")
-        pt_file = os.path.splitext(str(self.filepath))[0]+"_samples.ply"
-        plane_file =  self.filepath.with_suffix('.ply')
-        pe.export_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
+        pt_file = os.path.splitext(self.path)[0]+"_samples.ply"
+        plane_file =  os.path.splitext(self.path)[0]+'.ply'
+        pe.save_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
 
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)
