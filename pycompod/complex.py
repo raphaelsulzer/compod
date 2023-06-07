@@ -255,15 +255,17 @@ class CellComplex:
 
     def _get_intersection(self, e0, e1):
 
-        if "vertices" in self.graph[e0][e1] and self.graph[e0][e1]["vertices"] is not None:
+        if "vertices" in self.graph[e0][e1] and len(self.graph[e0][e1]["vertices"]):
             pts = []
             for v in self.graph[e0][e1]["vertices"]:
                 pts.append(tuple(v))
             pts = list(set(pts))
             intersection_points = np.array(pts, dtype=object)
         elif "intersection" in self.graph[e0][e1] and self.graph[e0][e1] is not None:
+            self.logger.warning("This intersection should have been computed before!")
             intersection_points = np.array(self.graph[e0][e1]["intersection"].vertices_list(), dtype=object)
         else:
+            self.logger.warning("This intersection should have been computed before!")
             intersection = self.cells.get(e0).intersection(self.cells.get(e1))
             assert(intersection.dim()==2)
             intersection_points = np.array(intersection.vertices_list(), dtype=object)
@@ -303,7 +305,7 @@ class CellComplex:
                 intersection_points = intersection_points[correct_order]
 
                 if (len(intersection_points) < 3):
-                    print("ERROR: Encountered facet with less than 2 vertices.")
+                    print("ERROR: Encountered facet with less than 3 vertices.")
                     sys.exit(1)
 
                 ## orient polygon
@@ -511,7 +513,7 @@ class CellComplex:
                 intersection_points = intersection_points[correct_order]
 
                 if(len(intersection_points)<3):
-                    print("ERROR: Encountered facet with less than 2 vertices.")
+                    print("ERROR: Encountered facet with less than 3 vertices.")
                     sys.exit(1)
 
                 ## orient polygon
@@ -920,9 +922,9 @@ class CellComplex:
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
         del pl
 
-        foccs = dict(zip(self.graph.nodes, occs))
-        nx.set_node_attributes(self.graph,occs,"float_occupancy")
-
+        # foccs = dict(zip(self.graph.nodes, occs))
+        # nx.set_node_attributes(self.graph,occs,"float_occupancy")
+        #
         if graph_cut:
             # occs = self.graph_cut(occs)
             occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
@@ -1299,8 +1301,61 @@ class CellComplex:
 
         return left_plane_ids,right_plane_ids
 
-
     def simplify_partition(self):
+
+        # TODO: try a simplify version from top to botton
+
+        """
+        2. simplify the partition
+        :return:
+        """
+
+
+        before = len(self.graph.nodes)
+
+        def filter_edge(c0,c1):
+            return not self.graph.edges[c0,c1]["processed"]
+
+        nx.set_edge_attributes(self.graph,True,"processed")
+        edges = list(self.graph.edges)
+        while len(edges):
+
+            for c0, c1 in edges:
+
+                if not self.cells.get(c0, 0) or not self.cells.get(c1, 0):
+                    continue
+
+                if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
+                    self.graph.edges[c0,c1]["processed"] = True
+                    continue
+
+                merged_cell = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
+                c0_vol = self.cells[c0].volume()
+                c1_vol = self.cells[c1].volume()
+                if merged_cell.volume() != (c0_vol+c1_vol):
+                    self.graph.edges[c0,c1]["processed"] = True
+                    continue
+
+                # if not self.cells.get(c0, 0) or not self.cells.get(c1, 0):
+                #     continue
+
+                nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
+                for n0,n1 in self.graph.edges(c0):
+                    self.graph.edges[n0,n1]["processed"] = False
+
+                self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
+                del self.cells[c1]
+
+            edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+
+        self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
+
+        self.polygons_initialized = False
+
+
+    def simplify_partition_slow(self):
 
         # TODO: try a simplify version from top to botton
 
@@ -1311,13 +1366,63 @@ class CellComplex:
 
         ## this function does not need the sibling polygons to be initialized, ie edges need to be there, but we do not need to know the intersection!! initalizing afterwards is sufficient!
 
+        def filter_edge(n0,n1):
+            to_process = (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"])
+            if not to_process:
+                return to_process
+            to_process = Polyhedron(vertices=self.cells[n0].vertices_list()+self.cells[n1].vertices_list()).volume() == self.cells[n0].volume() + self.cells[n1].volume()
+            return to_process
+
+        before=len(self.graph.nodes)
+        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
+
+        while len(edges):
+            for c0,c1 in edges:
+                if not self.cells.get(c0,0) or not self.cells.get(c1,0):
+                    continue
+
+                nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
+
+                self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
+                del self.cells[c1]
+
+
+                # parent = self.tree.parent(c0)
+                # pp_id = self.tree.parent(parent.identifier).identifier
+                #
+                # self.tree.remove_node(parent.identifier)
+                #
+                # dd = {"plane_ids": parent.data["plane_ids"]}
+                # self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
+
+                # if len(self.tree.siblings(c0)) == 0:
+                #     # TODO: maybe I can further simplify in this case by removing the alone sibling
+                #     continue
+                #
+                # sibling =  self.tree.siblings(c0)[0]
+                # if sibling.is_leaf():
+                #     self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
+
+            edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+
+        self.logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
+
+        self.polygons_initialized = False
+
+
+    def simplify_partition_tree_based(self):
+
+        ### this is nice and very fast, but it cannot simplify every case. because the tree would need to be restructured.
+        ### there are cases where two cells are on the same side of the surface, there union is convex, but they are not siblings in the tree -> they cannot be simplified with this function
+
+
+
 
 
         def filter_edge(n0,n1):
             to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
-
-            
-
             return to_process
 
         before=len(self.graph.nodes)
@@ -1333,7 +1438,6 @@ class CellComplex:
                 self.tree.remove_node(parent.identifier)
 
                 dd = {"plane_ids": parent.data["plane_ids"]}
-                # self.cells[c0] = self.cells[parent.identifier]
                 self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
                 self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
 
@@ -1361,6 +1465,8 @@ class CellComplex:
         3b. init an empty vertices list needed for self.construct_polygons
         """
 
+        self.logger.info("Initialise polygons...")
+
         for e0,e1 in self.graph.edges:
 
             edge = self.graph.edges[e0,e1]
@@ -1371,8 +1477,8 @@ class CellComplex:
             # if not self.graph.edges[e0,e1]["intersection"]:
             intersection = c0.intersection(c1)
             if intersection.dim() == 2:
-                edge["intersection"] = c0.intersection(c1)
-                edge["vertices"] =  []
+                edge["intersection"] = intersection
+                edge["vertices"] =  intersection.vertices_list()
             else:
                 self.graph.remove_edge(e0,e1)
 
@@ -1391,6 +1497,7 @@ class CellComplex:
         if not self.polygons_initialized:
             self._init_polygons()
 
+        self.logger.info("Construct polygons...")
 
         polygon_dict = defaultdict(trimesh.Trimesh)
 
