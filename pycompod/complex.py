@@ -1315,6 +1315,9 @@ class CellComplex:
 
         def filter_edge(n0,n1):
             to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
+
+            
+
             return to_process
 
         before=len(self.graph.nodes)
