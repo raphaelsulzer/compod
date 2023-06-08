@@ -1301,51 +1301,63 @@ class CellComplex:
 
         return left_plane_ids,right_plane_ids
 
+
+
+
+
+
     def simplify_partition(self):
 
-        # TODO: try a simplify version from top to botton
-
-        """
-        2. simplify the partition
-        :return:
-        """
+        self.simplify_partition_tree_based()
+        # TODO: incooperate the function above into this one. everytime I deal with siblings, I do not have to compute the volume
+            # simply need to update the tree with the correct node_id, how it is already done in simplify_partition_tree_based
+            # furthermore, the case that I previously drew and found to be unsolveable with tree traversal is also solveable with tree traversal
+                # if the two siblings of two graph adjacent nodes where split with the same plane ID they should be collapseable!?
+        # TOOD: save the labelling to file. it takes the most amount of time when prototyping tree collapse and alos graph-cut later
 
 
         before = len(self.graph.nodes)
+        nx.set_node_attributes(self.graph,None,"volume")
+        nx.set_edge_attributes(self.graph,None,"union_volume")
 
-        def filter_edge(c0,c1):
-            return not self.graph.edges[c0,c1]["processed"]
+        def filter_edge(c0, c1):
+            return not self.graph.edges[c0, c1]["processed"]
 
-        nx.set_edge_attributes(self.graph,True,"processed")
-        edges = list(self.graph.edges)
+        nx.set_edge_attributes(self.graph,False,"processed")
+        edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
         while len(edges):
 
             for c0, c1 in edges:
-
-                if not self.cells.get(c0, 0) or not self.cells.get(c1, 0):
-                    continue
 
                 if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
                     self.graph.edges[c0,c1]["processed"] = True
                     continue
 
-                merged_cell = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
-                c0_vol = self.cells[c0].volume()
-                c1_vol = self.cells[c1].volume()
-                if merged_cell.volume() != (c0_vol+c1_vol):
+                cx = None
+                if self.graph.edges[c0,c1]["union_volume"] is None:
+                    cx = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
+                    self.graph.edges[c0,c1]["union_volume"] = cx.volume()
+                if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = self.cells[c0].volume()
+                if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = self.cells[c1].volume()
+                if self.graph.edges[c0, c1]["union_volume"] != (self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]):
                     self.graph.edges[c0,c1]["processed"] = True
                     continue
+                else:
+                    self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                    self.cells[c0] = cx if cx is not None else Polyhedron(
+                        vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
+                    del self.cells[c1]
+                    for n0, n1 in self.graph.edges(c0):
+                        if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
+                            self.graph.edges[n0, n1]["union_volume"] = \
+                                Polyhedron(
+                                    vertices=self.cells[n0].vertices_list() + self.cells[n1].vertices_list()).volume()
+                            self.graph.edges[n0, n1]["processed"] = False
+                    del self.graph.nodes[c0]["contraction"]
 
-                # if not self.cells.get(c0, 0) or not self.cells.get(c1, 0):
-                #     continue
+                    break
 
-                nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-
-                for n0,n1 in self.graph.edges(c0):
-                    self.graph.edges[n0,n1]["processed"] = False
-
-                self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
-                del self.cells[c1]
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
@@ -1355,7 +1367,9 @@ class CellComplex:
         self.polygons_initialized = False
 
 
-    def simplify_partition_slow(self):
+
+    @profile
+    def simplify_partition2(self):
 
         # TODO: try a simplify version from top to botton
 
@@ -1364,51 +1378,53 @@ class CellComplex:
         :return:
         """
 
-        ## this function does not need the sibling polygons to be initialized, ie edges need to be there, but we do not need to know the intersection!! initalizing afterwards is sufficient!
+        # self.simplify_partition_tree_based()
 
-        def filter_edge(n0,n1):
-            to_process = (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"])
-            if not to_process:
-                return to_process
-            to_process = Polyhedron(vertices=self.cells[n0].vertices_list()+self.cells[n1].vertices_list()).volume() == self.cells[n0].volume() + self.cells[n1].volume()
-            return to_process
+        before = len(self.graph.nodes)
+        nx.set_node_attributes(self.graph,None,"volume")
+        nx.set_edge_attributes(self.graph,None,"union_volume")
 
-        before=len(self.graph.nodes)
-        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
 
+        def filter_edge(c0,c1):
+            return not self.graph.edges[c0,c1]["processed"]
+
+        nx.set_edge_attributes(self.graph,False,"processed")
+        edges = list(self.graph.edges)
         while len(edges):
-            for c0,c1 in edges:
-                if not self.cells.get(c0,0) or not self.cells.get(c1,0):
+
+            for c0, c1 in edges:
+
+                if not self.cells.get(c0, 0) or not self.cells.get(c1, 0):
                     continue
 
+                if (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]) is None:
+                    self.graph.edges[c0,c1]["processed"] = True
+                    continue
+
+                cx = None
+                if self.graph.edges[c0,c1]["union_volume"] is None:
+                    cx = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
+                    self.graph.edges[c0,c1]["union_volume"] = cx.volume()
+                if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = self.cells[c0].volume()
+                if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = self.cells[c1].volume()
+                if self.graph.edges[c0, c1]["union_volume"] != (self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]):
+                    self.graph.edges[c0,c1]["processed"] = True
+                    continue
+
+                self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
                 nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-
-
-                self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
+                self.cells[c0] = cx if cx is not None else Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
                 del self.cells[c1]
-
-
-                # parent = self.tree.parent(c0)
-                # pp_id = self.tree.parent(parent.identifier).identifier
-                #
-                # self.tree.remove_node(parent.identifier)
-                #
-                # dd = {"plane_ids": parent.data["plane_ids"]}
-                # self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
-
-                # if len(self.tree.siblings(c0)) == 0:
-                #     # TODO: maybe I can further simplify in this case by removing the alone sibling
-                #     continue
-                #
-                # sibling =  self.tree.siblings(c0)[0]
-                # if sibling.is_leaf():
-                #     self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
+                for n0,n1 in self.graph.edges(c0):
+                    if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
+                        self.graph.edges[n0, n1]["union_volume"]=\
+                            Polyhedron(vertices=self.cells[n0].vertices_list() + self.cells[n1].vertices_list()).volume()
+                        self.graph.edges[n0,n1]["processed"] = False
+                del self.graph.nodes[c0]["contraction"]
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
-
-        self.logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
-
+        self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
         self.polygons_initialized = False
 
 
@@ -1418,11 +1434,19 @@ class CellComplex:
         ### there are cases where two cells are on the same side of the surface, there union is convex, but they are not siblings in the tree -> they cannot be simplified with this function
 
 
-
-
-
         def filter_edge(n0,n1):
-            to_process = ((self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]) and self.graph.edges[n0,n1]["convex_intersection"])
+            if n0 < 0 or n1 < 0:
+                return False
+            if not self.tree[n0].is_leaf():
+                return False
+            if not self.tree[n1].is_leaf():
+                return False
+            if len(self.tree.siblings(n0)) == 0:
+                return False
+            if self.tree.siblings(n0)[0].identifier != n1:
+                return False
+            to_process = (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"])
+                          # and self.graph.edges[n0,n1]["convex_intersection"])
             return to_process
 
         before=len(self.graph.nodes)
@@ -1430,7 +1454,11 @@ class CellComplex:
         while len(edges):
 
             for c0,c1 in edges:
+                if not c1 in self.cells:
+                    continue
+
                 nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
 
                 parent = self.tree.parent(c0)
                 pp_id = self.tree.parent(parent.identifier).identifier
@@ -1439,15 +1467,64 @@ class CellComplex:
 
                 dd = {"plane_ids": parent.data["plane_ids"]}
                 self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
+                del self.cells[c1]
                 self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
 
-                if len(self.tree.siblings(c0)) == 0:
-                    # TODO: maybe I can further simplify in this case by removing the alone sibling
+                # sibling =  self.tree.siblings(c0)[0]
+                # self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
+
+            edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+
+        self.logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
+
+        self.polygons_initialized = False
+
+
+    def simplify_partition_tree_based2(self):
+
+        ### this is nice and very fast, but it cannot simplify every case. because the tree would need to be restructured.
+        ### there are cases where two cells are on the same side of the surface, there union is convex, but they are not siblings in the tree -> they cannot be simplified with this function
+
+
+        def filter_edge(n0,n1):
+            if n0 < 0 or n1 < 0:
+                return False
+            if not self.tree[n0].is_leaf():
+                return False
+            if not self.tree[n1].is_leaf():
+                return False
+            if len(self.tree.siblings(n0)) == 0:
+                return False
+            if self.tree.siblings(n0)[0].identifier != n1:
+                return False
+            to_process = (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"])
+                          # and self.graph.edges[n0,n1]["convex_intersection"])
+            return to_process
+
+        before=len(self.graph.nodes)
+        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
+        while len(edges):
+
+            for c0,c1 in edges:
+                if not c1 in self.cells:
                     continue
 
-                sibling =  self.tree.siblings(c0)[0]
-                if sibling.is_leaf():
-                    self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
+                nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
+
+                parent = self.tree.parent(c0)
+                pp_id = self.tree.parent(parent.identifier).identifier
+
+                self.tree.remove_node(parent.identifier)
+
+                dd = {"plane_ids": parent.data["plane_ids"]}
+                self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
+                del self.cells[c1]
+                self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=pp_id)
+
+                # sibling =  self.tree.siblings(c0)[0]
+                # self.graph.edges[c0, sibling.identifier]["convex_intersection"] = True
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
