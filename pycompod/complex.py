@@ -1038,7 +1038,7 @@ class CellComplex:
             lr = self.torch.logical_or(left,right)
 
             if earlystop and lr.all():
-                self.logger.debug("earlystop")
+                # self.logger.debug("earlystop")
                 return i
             else:
                 left = left.sum().item()
@@ -1631,15 +1631,14 @@ class CellComplex:
         self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         self.cells[cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
-        plane_count = 0
+        plane_count = 0 # only used for debugging exports
         n_points_total = np.concatenate(primitive_dict["point_groups"],dtype=object).shape[0]
         pbar = tqdm(total=n_points_total,file=sys.stdout)
-        best_plane_ids = []
+        best_plane_ids = [] # only used for debugging exports
         for child in children:
 
             current_ids = self.tree[child].data["plane_ids"]
             current_cell = self.cells.get(child)
-            plane_count+=1  # only used for debugging exports
 
             if len(current_ids) == 1:
                 best_plane_id = 0
@@ -1665,6 +1664,7 @@ class CellComplex:
 
             ### export best plane
             if self.debug_export:
+                plane_count += 1
                 epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
                 epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
                 if epoints.shape[0]>3:
@@ -1716,7 +1716,7 @@ class CellComplex:
             neighbors_of_old_cell = list(self.graph[child])
             old_cell_id=child
             for neighbor_id_old_cell in neighbors_of_old_cell:
-                self.logger.debug("make neighbors")
+                # self.logger.debug("make neighbors")
 
                 # get the neighboring convex
                 nconvex = self.cells.get(neighbor_id_old_cell)
