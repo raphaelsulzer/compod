@@ -12,8 +12,8 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, path, merge_duplicates=False, prioritise_planes = None,
-                 points_type="inliers", total_sample_count=100000, export=False,
+    def __init__(self, path, prioritise_planes = None,
+                 points_type="inliers", total_sample_count=100000,
                  device='gpu', logger=None):
         """
         Init VertexGroup.
@@ -36,13 +36,11 @@ class VertexGroup:
         self.bounds = None
         self.points_grouped = None
         self.points_ungrouped = None
-        self.merge_duplicates = merge_duplicates
         self.prioritise_planes = prioritise_planes
         self.total_sample_count = total_sample_count
 
         self.points_type = points_type
 
-        self.export = export
         self.device = device
 
         ending = os.path.splitext(self.path)[1]
@@ -350,53 +348,10 @@ class VertexGroup:
         else:
             self.logger.info("No plane prioritisation applied")
 
-
-
-
-
-
-        n_planes = self.planes.shape[0]
-        # merge input polygons that come from the same plane but are disconnected
-        # this is desirable for the adaptive tree construction, because it otherwise may insert the same plane into the same cell twice
-        if self.merge_duplicates:
-            raise NotImplementedError # need to add the polygons tensor to this first
-            # pts = defaultdict(int)
-            # primitive_ids = defaultdict(list)
-            # polygons = defaultdict(list)
-            # cols = defaultdict(list)
-            # un, inv = np.unique(self.planes, return_inverse=True, axis=0)
-            # for i in range(len(self.planes)):
-            #     if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
-            #         pts[inv[i]] = self.points_grouped[i]
-            #         polygons[inv[i]] = self.polygons[i]
-            #     else:
-            #         pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
-            #         polygons[inv[i]]+=self.polygons[i]
-            #         # pp = polygons[inv[i]].vertices_list() + self.polygons[i].vertices_list()
-            #         # polygons[inv[i]] = Polyhedron(vertices=pp)
-            #
-            #     cols[inv[i]] = colors[i]
-            #     primitive_ids[inv[i]]+=[i]
-            #
-            # self.plane_colors = list(cols.values())
-            # self.planes = un[list(pts.keys())]
-            # self.points_grouped = list(pts.values())
-            # self.polygons = polygons
-            # # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
-            # self.merged_primitives_to_input_primitives = list(primitive_ids.values())
-            #
-            # self.logger.info("Merged primitives from the same plane, reducing primitive count from {} to {}".format(n_planes,self.planes.shape[0]))
-        # else:
-        #     self.merged_primitives_to_input_primitives = []
-        #     for i in range(len(self.planes)):
-        #         self.merged_primitives_to_input_primitives.append([i])
-
-
         self.bounds = []
         for pg in self.points_grouped:
             self.bounds.append(self._points_bound(pg))
         self.bounds = np.array(self.bounds)
-
 
         # make the bounds and halfspace used in the cell complex construction
         self.halfspaces = []

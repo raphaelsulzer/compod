@@ -9,7 +9,7 @@ with adaptive binary space partitioning: upon insertion of a primitive
 only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
-
+import os
 import time, multiprocessing, pickle, logging, trimesh
 from pathlib import Path
 from fractions import Fraction
@@ -37,7 +37,7 @@ class CellComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, model, vertex_group, initial_padding=0.1, export=False, device='cpu' ,logger=None):
+    def __init__(self, model, vertex_group, initial_padding=0.02, device='cpu', logger=None, debug_export=False):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -50,15 +50,6 @@ class CellComplex:
             Corresponding bounding box bounds of the planar primitives
         points: (n, ) object of float
             Points grouped into primitives, points[any]: (m, 3)
-        initial_bound: None or (2, 3) float
-            Initial bound to partition
-        build_graph: bool
-            Build the cell adjacency graph if set True.
-        additional_planes: None or (n, 4) float
-            Additional planes to append to the complex,
-            can be missing planes due to occlusion or incapacity of RANSAC
-        quiet: bool
-            Disable logging and progress bar if set True
         """
         self.model = model
         self.planeExporter = PlaneExporter()
@@ -68,7 +59,6 @@ class CellComplex:
 
         self.logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
-        vertex_group.planes, vertex_group.halfspaces, vertex_group.bounds, vertex_group.points_grouped,
         self.bounds = vertex_group.bounds
         self.planes = vertex_group.planes
         self.plane_order = vertex_group.plane_order
@@ -96,7 +86,7 @@ class CellComplex:
         self.initial_padding = initial_padding
         self.bounding_poly = self._init_bounding_box(padding=self.initial_padding)
 
-        self.export = export
+        self.debug_export = debug_export
 
 
     def _init_bounding_box(self,padding):
@@ -185,7 +175,7 @@ class CellComplex:
             hspace_neg, hspace_pos = self._inequalities(plane)
             op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
 
-            if self.export:
+            if self.debug_export:
                 self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
 
             self.cells[-(i+1)] = op
@@ -890,7 +880,7 @@ class CellComplex:
         return labels
 
 
-    def label_partition(self, m, n_test_points=50,graph_cut=True,export=False):
+    def label_partition_with_mesh(self, outpath, n_test_points=50,graph_cut=True):
         """
         Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
         :param m:
@@ -901,15 +891,16 @@ class CellComplex:
         """
 
         pl=PL.PyLabeler(n_test_points)
-        if pl.loadMesh(m["mesh"]):
+        if pl.loadMesh(self.model["mesh"]):
             return 1
         points = []
         points_len = []
-        for i,id in enumerate(list(self.graph.nodes)):
+        # for i,id in enumerate(list(self.graph.nodes)):
+        for id,cell in self.cells.items():
             if id < 0:  continue # skip the bounding box cells
-            cell = self.cells.get(id)
-            if export:
-                self.cellComplexExporter.write_cell(m,cell,count=i,subfolder="final_cells")
+            # cell = self.cells.get(id)
+            if self.debug_export:
+                self.cellComplexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
             pts = np.array(cell.vertices())
             points.append(pts)
             # print(pts)
@@ -919,6 +910,9 @@ class CellComplex:
         # assert(isinstance(points[0].dtype,np.float32))
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
         del pl
+
+        # save occupancies to file
+        np.savez(os.path.join(outpath,"occupancies.npz"),occupancies=occs)
 
         # foccs = dict(zip(self.graph.nodes, occs))
         # nx.set_node_attributes(self.graph,occs,"float_occupancy")
@@ -930,6 +924,13 @@ class CellComplex:
             occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
 
         nx.set_node_attributes(self.graph,occs,"occupancy")
+
+
+    def label_partition_with_point_cloud(self):
+
+        for node in self.graph.nodes:
+            pass
+
 
 
 
@@ -1554,8 +1555,11 @@ class CellComplex:
                     # this_edge["vertices"] += facet_intersection.vertices_list()
 
 
+    def partition_from_tree(self, model):
 
-    def construct_tree(self, model):
+        def which_side(node_id):
+            parent = self.tree.parent(node_id)
+            return self.tree.children(parent.identifier)[0].identifier != node_id
 
         # TODO: make a version where the tree is build without any intersection computations.
         #  Here the tree nodes are planes, and only the leaf nodes are (not yet) constructed cells (see Murali et al. Figure 3 for such a tree).
@@ -1566,11 +1570,33 @@ class CellComplex:
         # For surface reconstruction, i.e. to get the interface facets, a graph adjacency has to be recovered.
         # This could maybe be done by analysing from which supporting planes the cells come, i.e. if two cells share one supporting plane they are probably heighbors.
 
-        pass
+        construction_planes = defaultdict(list)
+
+        for cell in self.tree.leaves():
+
+            id = cell.identifier
+            id = self.tree.parent(id).identifier
+            if self.tree[id].is_root():
+                construction_planes[cell.identifier].append(self.tree[id].data["supporting_plane_id"])
+                continue
+            side = which_side(id)
+            construction_planes[cell.identifier].append(self.tree[id].data["supporting_plane_id"])
+            while (side == which_side(id)):
+                id = self.tree.parent(id).identifier
+                construction_planes[cell.identifier].append(self.tree[id].data["supporting_plane_id"])
+                if self.tree[id].is_root():
+                    break
+
+        hspaces=[]
+        for cell_id,planes in construction_planes.items():
+            for plane in planes:
+                hspaces.append(self._inequalities(self.planes[plane_id]))
+            p=Polyhedron(ieqs=hspaces)
 
 
 
-    def construct_partition(self, m, mode=Tree.DEPTH, th=1, export=False, insertion_order="product-earlystop", device='cpu'):
+
+    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop", device='cpu'):
         """
         1. construct the partition
         :param m:
@@ -1581,8 +1607,8 @@ class CellComplex:
         :return:
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
-        if export:
-            self.logger.warning('\nDebug export activated!\n')
+        if self.debug_export:
+            self.logger.warning('\nDebug export activated! Turn off for faster processing.\n')
         primitive_dict = dict()
         primitive_dict["planes"] = self.planes
         primitive_dict["halfspaces"] = list(self.halfspaces)
@@ -1634,22 +1660,16 @@ class CellComplex:
             best_plane_ids.append(best_plane_id)
             best_plane_id_input = primitive_dict["plane_ids"][current_ids[best_plane_id]]
 
-
-
-
-            # print("\n{}: {} with point {}".format(current_ids[best_plane_id],best_plane,primitive_dict["point_groups"][current_ids[best_plane_id]][0,:]))
-
             ### progress bar update
             n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
 
-
             ### export best plane
-            if export:
+            if self.debug_export:
                 epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
-                epoints = epoints[~np.isnan(epoints).all(axis=-1)]
+                epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
                 if epoints.shape[0]>3:
                     color = self.plane_colors[best_plane_id_input]
-                    self.planeExporter.save_plane(os.path.dirname(m["planes"]), best_plane, epoints,count=str(plane_count),color=color)
+                    self.planeExporter.save_plane(os.path.dirname(self.model["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
 
             ## create the new convexes
@@ -1662,8 +1682,8 @@ class CellComplex:
             ## update tree by creating the new nodes with the planes that fall into it
             ## and update graph with new nodes
             if(cell_negative.dim() == 3):
-                if export:
-                    self.cellComplexExporter.write_cell(m,cell_negative,count=str(cell_count+1)+"n")
+                if self.debug_export:
+                    self.cellComplexExporter.write_cell(self.model,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_id = cell_count
@@ -1672,8 +1692,8 @@ class CellComplex:
                 self.cells[neg_cell_id] = cell_negative
 
             if(cell_positive.dim() == 3):
-                if export:
-                    self.cellComplexExporter.write_cell(m,cell_positive,count=str(cell_count+1)+"p")
+                if self.debug_export:
+                    self.cellComplexExporter.write_cell(self.model,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_id = cell_count
@@ -1681,16 +1701,16 @@ class CellComplex:
                 self.graph.add_node(pos_cell_id)
                 self.cells[pos_cell_id] = cell_positive
 
+            ## add the split plane to the parent node of the tree
+            self.tree.nodes[child].data["supporting_plane_id"] = best_plane_id_input
+
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
 
-                ## add the split plane to the parent node of the tree
-                self.tree.nodes[child].data["supporting_plane_id"] = best_plane_id_input
-
                 self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
-                               supporting_plane_id=best_plane_id_input, convex_intersection=True, bounding_box_edge=False)
-                if export:
+                               supporting_plane_id=best_plane_id_input, bounding_box_edge=False)
+                if self.debug_export:
                     new_intersection = cell_negative.intersection(cell_positive)
-                    self.cellComplexExporter.write_facet(m,new_intersection,count=plane_count)
+                    self.cellComplexExporter.write_facet(self.model,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors_of_old_cell = list(self.graph[child])
@@ -1728,9 +1748,6 @@ class CellComplex:
 
         pbar.close()
 
-        # print(best_plane_ids)
-        # if export:
-        #     self.cellComplexExporter.write_graph(m,self.graph,self.cells)
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
         self.logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))
@@ -1738,31 +1755,47 @@ class CellComplex:
         return 0
 
 
-    def save_partition_to_pickle(self,infile):
+    def save_partition_to_pickle(self,outpath):
 
         self.logger.info("Save tree, graph and convex cells to file...")
 
-        os.makedirs(infile,exist_ok=True)
+        os.makedirs(outpath,exist_ok=True)
 
         if self.tree is not None:
-            pickle.dump(self.tree,open(os.path.join(infile,'tree.pickle'),'wb'))
-        pickle.dump(self.graph,open(os.path.join(infile,'graph.pickle'),'wb'))
-        pickle.dump(self.cells,open(os.path.join(infile,'cells.pickle'),'wb'))
+            pickle.dump(self.tree,open(os.path.join(outpath,'tree.pickle'),'wb'))
+        pickle.dump(self.graph,open(os.path.join(outpath,'graph.pickle'),'wb'))
+        pickle.dump(self.cells,open(os.path.join(outpath,'cells.pickle'),'wb'))
 
 
 
-    def load_partition_from_pickle(self,infile):
+    def load_partition_from_pickle(self,inpath):
 
         self.logger.info("Load tree, graph and convex cells from file...")
 
-        if os.path.isfile(os.path.join(infile,'tree.pickle')):
-            self.tree = pickle.load(open(os.path.join(infile,'tree.pickle'),'rb'))
-        self.graph = pickle.load(open(os.path.join(infile,'graph.pickle'),'rb'))
-        self.cells = pickle.load(open(os.path.join(infile,'cells.pickle'),'rb'))
+        self.tree = pickle.load(open(os.path.join(inpath,'tree.pickle'),'rb'))
+        self.graph = pickle.load(open(os.path.join(inpath,'graph.pickle'),'rb'))
+        self.cells = pickle.load(open(os.path.join(inpath,'cells.pickle'),'rb'))
 
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
+
+    def load_occupancies(self,inpath):
+
+        occs = np.load(os.path.join(inpath,'occupancies.npz'))["occupancies"]
+        occs = np.hstack((occs,[0,0,0,0,0,0]))
+        occs = np.rint(occs)
+
+        occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+
+        assert len(occs) == len(self.graph.nodes)
+
+        nx.set_node_attributes(self.graph,occs,"occupancy")
+
+
+
+
+        a=5
 
 
 
