@@ -265,12 +265,14 @@ class VertexGroup:
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(np.float32)
         points = data["points"].astype(np.float32)
+        normals = data["normals"].astype(np.float32)
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
         self.plane_colors = data["group_colors"]
         self.polygons = []
         self.polygon_areas = []
         self.points_grouped = []
+        self.normals_grouped = []
         n_hull_points = []
         self.convex_hulls = []
         self.hull_vertices = []
@@ -280,6 +282,7 @@ class VertexGroup:
             vert_group = verts[last:(npp+last)]
             pts = points[vert_group]
             self.points_grouped.append(pts)
+            self.normals_grouped.append(normals[vert_group])
 
             # TODO: i am computing the convex hull twice below; not necessary
 

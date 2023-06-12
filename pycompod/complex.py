@@ -65,6 +65,7 @@ class CellComplex:
         self.plane_colors = vertex_group.plane_colors
         self.halfspaces = vertex_group.halfspaces
         self.points = vertex_group.points_grouped
+        self.point_normals = vertex_group.normals_grouped
         self.hull_vertices = vertex_group.hull_vertices
         self.convex_hulls = vertex_group.convex_hulls
         self.vertex_group_n_fill = vertex_group.n_fill
