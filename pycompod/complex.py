@@ -55,7 +55,7 @@ class CellComplex:
         self.planeExporter = PlaneExporter()
         self.cellComplexExporter = CellComplexExporter(self)
 
-        self.logger = logger if logger else logging.getLogger()
+        self.logger = logger if logger else logging.getLogger("COMPOD")
 
         self.logger.debug('Init cell complex with padding {}'.format(initial_padding))
 

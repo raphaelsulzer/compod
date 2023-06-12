@@ -25,7 +25,7 @@ class VertexGroup:
             Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
         """
 
-        self.logger = logger if logger else logging.getLogger()
+        self.logger = logger if logger else logging.getLogger("COMPOD")
 
 
         self.path = path
@@ -273,6 +273,7 @@ class VertexGroup:
         self.polygon_areas = []
         self.points_grouped = []
         self.normals_grouped = []
+        self.groups = []
         n_hull_points = []
         self.convex_hulls = []
         self.hull_vertices = []
@@ -281,6 +282,7 @@ class VertexGroup:
             ## make the point groups
             vert_group = verts[last:(npp+last)]
             pts = points[vert_group]
+            self.groups.append(vert_group)
             self.points_grouped.append(pts)
             self.normals_grouped.append(normals[vert_group])
 
