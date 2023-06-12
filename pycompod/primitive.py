@@ -27,27 +27,17 @@ class VertexGroup:
 
         self.logger = logger if logger else logging.getLogger("COMPOD")
 
-
         self.path = path
-        self.processed = False
-        self.points = None
-        self.planes = None
-        self.halfspaces = []
-        self.bounds = None
-        self.points_grouped = None
-        self.points_ungrouped = None
         self.prioritise_planes = prioritise_planes
         self.total_sample_count = total_sample_count
-
         self.points_type = points_type
-
         self.device = device
 
         ending = os.path.splitext(self.path)[1]
         if ending == ".npz":
             self._process_npz()
         elif ending == ".vg":
-            self._process()
+            self._process_vg()
             del self.lines # for closing the .vg file
         else:
             print("{} is not a valid file type for planes".format(ending))
@@ -125,7 +115,7 @@ class VertexGroup:
         else:
             raise ValueError(f'unable to load {self.filepath}, expected *.vg or .bvg.')
 
-    def _process(self):
+    def _process_vg(self):
         """
         Start processing vertex group.
         """
@@ -133,7 +123,6 @@ class VertexGroup:
         self._load_vg_file()
         self.points = self._get_points()
         self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self._get_primitives()
-        self.processed = True
 
 
     def _prioritise_planes(self, mode):
@@ -264,8 +253,8 @@ class VertexGroup:
 
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(np.float32)
-        points = data["points"].astype(np.float32)
-        normals = data["normals"].astype(np.float32)
+        self.points = data["points"].astype(np.float32)
+        self.normals = data["normals"].astype(np.float32)
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
         self.plane_colors = data["group_colors"]
@@ -281,10 +270,10 @@ class VertexGroup:
         for i,npp in enumerate(npoints):
             ## make the point groups
             vert_group = verts[last:(npp+last)]
-            pts = points[vert_group]
+            pts = self.points[vert_group]
             self.groups.append(vert_group)
             self.points_grouped.append(pts)
-            self.normals_grouped.append(normals[vert_group])
+            self.normals_grouped.append(self.normals[vert_group])
 
             # TODO: i am computing the convex hull twice below; not necessary
 
@@ -363,13 +352,6 @@ class VertexGroup:
         for i,p in enumerate(self.planes):
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
         self.halfspaces = np.array(self.halfspaces)
-
-        self.points_ungrouped = np.zeros(points.shape[0])
-        self.points_ungrouped[verts] = 1
-        self.points_ungrouped = np.invert(self.points_ungrouped.astype(bool))
-        self.points_ungrouped = points[self.points_ungrouped.astype(int)]
-
-        self.processed = True
 
 
 

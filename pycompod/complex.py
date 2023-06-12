@@ -1938,7 +1938,7 @@ class CellComplex:
         if num_workers > 0:
             pool = multiprocessing.Pool(processes=num_workers)
 
-        pbar = trange(len(self.bounds))
+        pbar = trange(len(self.bounds),file=sys.stdout)
         for i in pbar:  # kinetic for each primitive
             # bounding box intersection test
             # indices of existing cells with potential intersections
