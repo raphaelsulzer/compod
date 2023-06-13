@@ -36,93 +36,20 @@ class VertexGroup:
         ending = os.path.splitext(self.path)[1]
         if ending == ".npz":
             self._process_npz()
-        elif ending == ".vg":
-            self._process_vg()
-            del self.lines # for closing the .vg file
         else:
             print("{} is not a valid file type for planes".format(ending))
             sys.exit(1)
 
+    def _recolor_planes(self):
 
+        bbox = np.vstack((self.points.min(axis=0),self.points.max(axis=0)))
 
-    def _load_vg_file(self):
-        """
-        Load (ascii / binary) vertex group file.
-        """
-        if self.filepath.suffix == '.vg':
-            with open(self.filepath, 'r') as fin:
-                # self.lines=np.array(fin.readlines())
-                # self.lines=np.array(fin.readlines())
-                self.lines = np.array(list(fin))
-
-
-        elif self.filepath.suffix == '.bvg':
-            # define size constants
-            _SIZE_OF_INT = 4
-            _SIZE_OF_FLOAT = 4
-            _SIZE_OF_PARAM = 4
-            _SIZE_OF_COLOR = 3
-
-            vgroup_ascii = ''
-            with open(self.filepath, 'rb') as fin:
-                # points
-                num_points = struct.unpack('i', fin.read(_SIZE_OF_INT))[0]
-                points = struct.unpack('f' * num_points * 3, fin.read(_SIZE_OF_FLOAT * num_points * 3))
-                vgroup_ascii += f'num_points: {num_points}\n'
-                vgroup_ascii += ' '.join(map(str, points)) + '\n'
-
-                # colors
-                num_colors = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                vgroup_ascii += f'num_colors: {num_colors}\n'
-
-                # normals
-                num_normals = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                normals = struct.unpack('f' * num_normals * 3, fin.read(_SIZE_OF_FLOAT * num_normals * 3))
-                vgroup_ascii += f'num_normals: {num_normals}\n'
-                vgroup_ascii += ' '.join(map(str, normals)) + '\n'
-
-                # groups
-                num_groups = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                vgroup_ascii += f'num_groups: {num_groups}\n'
-
-                group_counter = 0
-                while group_counter < num_groups:
-                    group_type = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                    num_group_parameters = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                    group_parameters = struct.unpack("f" * _SIZE_OF_PARAM, fin.read(_SIZE_OF_INT * _SIZE_OF_PARAM))
-                    group_label_size = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                    # be reminded that vg <-> bvg in Mapple does not maintain group order
-                    group_label = struct.unpack("c" * group_label_size, fin.read(group_label_size))
-                    group_color = struct.unpack("f" * _SIZE_OF_COLOR, fin.read(_SIZE_OF_FLOAT * _SIZE_OF_COLOR))
-                    group_num_point = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-                    group_points = struct.unpack("i" * group_num_point, fin.read(_SIZE_OF_INT * group_num_point))
-                    num_children = struct.unpack("i", fin.read(_SIZE_OF_INT))[0]
-
-                    vgroup_ascii += f'group_type: {group_type}\n'
-                    vgroup_ascii += f'num_group_parameters: {num_group_parameters}\n'
-                    vgroup_ascii += 'group_parameters: ' + ' '.join(map(str, group_parameters)) + '\n'
-                    vgroup_ascii += 'group_label: ' + ''.join(map(str, group_label)) + '\n'
-                    vgroup_ascii += 'group_color: ' + ' '.join(map(str, group_color)) + '\n'
-                    vgroup_ascii += f'group_num_point: {group_num_point}\n'
-                    vgroup_ascii += ' '.join(map(str, group_points)) + '\n'
-                    vgroup_ascii += f'num_children: {num_children}\n'
-
-                    group_counter += 1
-
-                # convert vgroup_ascii to list
-                return vgroup_ascii.split('\n')
-
-        else:
-            raise ValueError(f'unable to load {self.filepath}, expected *.vg or .bvg.')
-
-    def _process_vg(self):
-        """
-        Start processing vertex group.
-        """
-        self.logger.debug('processing {}'.format(self.filepath))
-        self._load_vg_file()
-        self.points = self._get_points()
-        self.planes, self.bounds, self.points_grouped, self.points_ungrouped = self._get_primitives()
+        fc=FancyColor(bbox)
+        cols = []
+        for p in self.polygons:
+            pt = copy.deepcopy(p.centroid)
+            cols.append(fc.get_rgb_from_xyz(pt))
+        self.plane_colors = np.array(cols)
 
 
     def _prioritise_planes(self, mode):
@@ -140,6 +67,27 @@ class VertexGroup:
         prioritise_verticals: bool
             Prioritise vertical planes if set True
         """
+
+        def _vertical_planes(slope_threshold=0.9, epsilon=10e-5):
+            """
+            Return vertical planes.
+
+            Parameters
+            ----------
+            slope_threshold: float
+                Slope threshold, above which the planes are considered vertical
+            epsilon: float
+                Trivial term to avoid NaN
+
+            Returns
+            -------
+            as_int: (n,) int
+                Indices of the vertical planar primitives
+            """
+            slope_squared = (self.planes[:, 0] ** 2 + self.planes[:, 1] ** 2) / (self.planes[:, 2] ** 2 + epsilon)
+            return np.where(slope_squared > slope_threshold ** 2)[0]
+
+
         self.logger.debug('Prioritise planar primitive with mode {}'.format(mode))
 
         indices_sorted_planes = np.arange(len(self.planes))
@@ -148,7 +96,7 @@ class VertexGroup:
             np.random.shuffle(indices_sorted_planes)
             return indices_sorted_planes
         elif mode == "vertical":
-            indices_vertical_planes = self._vertical_planes(slope_threshold=0.9)
+            indices_vertical_planes = _vertical_planes(slope_threshold=0.9)
             bool_vertical_planes = np.in1d(indices_sorted_planes, indices_vertical_planes)
             return np.append(indices_sorted_planes[bool_vertical_planes],
                                          indices_sorted_planes[np.invert(bool_vertical_planes)])
@@ -173,25 +121,6 @@ class VertexGroup:
 
 
 
-    def _vertical_planes(self, slope_threshold=0.9, epsilon=10e-5):
-        """
-        Return vertical planes.
-
-        Parameters
-        ----------
-        slope_threshold: float
-            Slope threshold, above which the planes are considered vertical
-        epsilon: float
-            Trivial term to avoid NaN
-
-        Returns
-        -------
-        as_int: (n,) int
-            Indices of the vertical planar primitives
-        """
-        slope_squared = (self.planes[:, 0] ** 2 + self.planes[:, 1] ** 2) / (self.planes[:, 2] ** 2 + epsilon)
-        return np.where(slope_squared > slope_threshold ** 2)[0]
-
 
     def _fill_hull_vertices(self):
 
@@ -207,18 +136,6 @@ class VertexGroup:
 
         self.hull_vertices = np.array(hull_vertices)
 
-        # if self.device == 'gpu':
-        #     import torch
-        #     # self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
-        #     self.hull_vertices = torch.Tensor(np.array(hull_vertices)).to('cuda')
-        # elif self.device == 'cpu':
-        #     self.hull_vertices = np.array(hull_vertices)
-        # else:
-        #     raise NotImplementedError
-
-
-
-
     def _sample_polygons(self):
 
         ## project inliers to plane and get the convex hull
@@ -232,17 +149,6 @@ class VertexGroup:
             # self.convex_hulls[i].all_points = sampled_points
 
         return np.array(all_sampled_points,dtype=object)
-
-    def _recolor_planes(self):
-
-        bbox = np.vstack((self.points.min(axis=0),self.points.max(axis=0)))
-
-        fc=FancyColor(bbox)
-        cols = []
-        for p in self.polygons:
-            pt = copy.deepcopy(p.centroid)
-            cols.append(fc.get_rgb_from_xyz(pt))
-        self.plane_colors = np.array(cols)
 
 
     def _process_npz(self):
@@ -259,12 +165,13 @@ class VertexGroup:
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
         self.plane_colors = data["group_colors"]
+
+        self.halfspaces = []
         self.polygons = []
         self.polygon_areas = []
         self.groups = []
-        n_hull_points = []
-        # self.convex_hulls = []
         self.hull_vertices = []
+        self.n_fill = 0
         last = 0
         for i,npp in enumerate(npoints):
             ## make the point groups
@@ -282,9 +189,12 @@ class VertexGroup:
             self.polygon_areas.append(poly.area)
 
             pch = ProjectedConvexHull(self.planes[i],pts)
-            # self.convex_hulls.append(pch)
             self.hull_vertices.append(vert_group[pch.hull.vertices])
-            n_hull_points.append(len(pch.hull.vertices))
+            n_hull_vertices = len(pch.hull.vertices)
+            if n_hull_vertices > self.n_fill:
+                self.n_fill = n_hull_vertices
+
+            self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(self.planes[i])])
 
             last += npp
 
@@ -295,22 +205,33 @@ class VertexGroup:
         data["group_colors"] = self.plane_colors
         np.savez(self.path,**data)
 
-
-
         self.polygons = np.array(self.polygons)
         self.polygon_areas = np.array(self.polygon_areas)
-        # self.convex_hulls = np.array(self.convex_hulls)
-        # fill the hull array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
-        n_hull_points = np.array(n_hull_points)
-        self.n_fill = n_hull_points.max()*2
-        self._fill_hull_vertices()
 
-        ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
-        self.sample_count_per_area = self.total_sample_count/self.polygon_areas.sum()
 
         if self.points_type == "samples":
             self.logger.info("Sample polygons with {} points".format(self.total_sample_count))
-            self.points_grouped = self._sample_polygons() # changes self.convex_hull
+
+            ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
+            self.sample_count_per_area = self.total_sample_count / self.polygon_areas.sum()
+
+            self.points = []
+            self.normals = None
+            self.groups = []
+            self.hull_vertices = []
+            n_points = 0
+            for i, poly in enumerate(self.polygons):
+                np.random.seed(42)
+                n = 3 + int(self.sample_count_per_area * self.polygon_areas[i])
+                sampled_points = poly.sample(n)
+                sampled_points = np.concatenate((poly.vertices, sampled_points), axis=0, dtype=np.float32)
+                self.points.append(sampled_points)
+                self.groups.append(np.arange(len(sampled_points))+n_points)
+                self.hull_vertices.append(np.arange(len(poly.vertices))+n_points)
+                n_points+=sampled_points.shape[0]
+
+            self.points = np.concatenate(self.points)
+
         elif self.points_type == "inliers":
             self.logger.info("Use {} inlier points of polygons".format(np.concatenate(self.groups).shape[0]))
         else:
@@ -318,6 +239,10 @@ class VertexGroup:
             NotImplementedError
 
 
+        # fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
+        # if torch.nested.nested_tensor ever supports broadcasting and dot products, the code could be simplified a lot.
+        self.n_fill = self.n_fill*2
+        self._fill_hull_vertices()
 
 
         ## export planes and samples
@@ -330,33 +255,24 @@ class VertexGroup:
             order = self._prioritise_planes(self.prioritise_planes)
             self.plane_order = order
             self.planes = self.planes[order]
+            self.halfspaces = list(np.array(self.halfspaces)[order])
             self.groups = list(np.array(self.groups,dtype=object)[order])
-            self.polygons = self.polygons[order]
-            self.polygon_areas = self.polygon_areas[order]
-            self.hull_vertices = self.hull_vertices[order.copy(),:]
-            # self.convex_hulls = self.convex_hulls[order]
+            self.hull_vertices = self.hull_vertices[order]
             self.plane_colors = self.plane_colors[order]
         else:
             self.logger.info("No plane prioritisation applied")
 
+        del self.polygons
+        del self.polygon_areas
+
         self.bounds = []
         for group in self.groups:
             pts = self.points[group]
-            self.bounds.append(self._points_bound(pts))
+            bounds = np.array([np.amin(pts, axis=0), np.amax(pts, axis=0)])
+            self.bounds.append(bounds)
         self.bounds = np.array(self.bounds)
 
-        # make the bounds and halfspace used in the cell complex construction
-        self.halfspaces = []
-        for i,p in enumerate(self.planes):
-            self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
-        # self.halfspaces = np.array(self.halfspaces)
 
-
-
-    def _get_points(self):
-
-        npoints = int(self.lines[0].split(':')[1])
-        return np.genfromtxt(self.lines[1:npoints+1])
 
     def _inequalities(self,plane):
         """
@@ -378,62 +294,3 @@ class VertexGroup:
         negative = [QQ(-element) for element in positive]
         return positive, negative
 
-    def _get_primitives(self):
-        """
-        Get primitives from vertex group.
-
-        Returns
-        ----------
-        params: (n, 4) float
-            Plane parameters
-        bounds: (n, 2, 3) float
-            Bounding box of the primitives
-        groups: (n, m, 3) float
-            Groups of points
-        ungrouped_points: (u, 3) float
-            Points that belong to no group
-        """
-        # is_primitive = [line.startswith('group_num_point') for line in self.vgroup_ascii]
-        is_primitive = [line.startswith('group_type') for line in self.lines]
-
-        primitives = self.lines[np.roll(is_primitive,6)]
-        # primitives = [self.lines[line] for line in np.where(is_primitive)[0] + 6]
-        params = self.lines[np.roll(is_primitive,2)]
-
-
-        # lines of groups in the file
-        params_list = []
-        bounds = []
-        groups = []
-        grouped_indices = set()  # indices of points being grouped
-        for i, p in enumerate(primitives):
-            point_indices = np.fromstring(p, sep=' ').astype(np.int64)
-            grouped_indices.update(point_indices)
-            points = self.points[point_indices]
-            #### this is for fitting planes, which was in original code, but now I just use the plane equations
-            # param = self.fit_plane(points, mode='PCA')
-            # if param is None:
-            #     continue
-            # params.append(param)
-            params_list.append(np.fromstring(params[i].split(':')[1],sep=' '))
-            bounds.append(self._points_bound(points))
-            groups.append(points)
-        ungrouped_indices = set(range(len(self.points))).difference(grouped_indices)
-        ungrouped_points = self.points[list(ungrouped_indices)]  # points that belong to no groups
-        return np.array(params_list), np.array(bounds), np.array(groups, dtype=object), np.array(ungrouped_points)
-
-    @staticmethod
-    def _points_bound(points):
-        """
-        Get bounds (AABB) of the points.
-
-        Parameters
-        ----------
-        points: (n, 3) float
-            Points
-        Returns
-        ----------
-        as_float: (2, 3) float
-            Bounds (AABB) of the points
-        """
-        return np.array([np.amin(points, axis=0), np.amax(points, axis=0)])

@@ -945,8 +945,7 @@ class CellComplex:
 
     def _get_best_split(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
 
-        ## sum calls the get_best_plane function less often than product, but with more planes
-        ## since get_best_planes is O(n^2), it is better to call it more often with smaller n than less often with bigger n
+        # this function could also be written with a single loop and np.tensordot, just like _get_best_split_gpu, but it will make it actually slightly slower
 
         earlystop = False
         if "earlystop" in insertion_order:
@@ -954,10 +953,7 @@ class CellComplex:
 
         planes = self.vg.planes[current_ids]
         hull_verts = self.vg.hull_vertices[current_ids]
-        # points = self.vg.points[hull_verts]
 
-
-        ### find the plane which seperates all other planes without splitting them
         left_right = []
         for i,id in enumerate(current_ids):
             left = 0; right = 0; intersect = 0
@@ -1167,13 +1163,15 @@ class CellComplex:
                     else:
                         new_group = left_point_ids
 
+                    # fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
+                    # if torch.nested.nested_tensor ever supports broadcasting and dot products, the code could be simplified a lot.
                     if new_group.shape[0] <= self.vg.n_fill:
                         fill = self.vg.n_fill - new_group.shape[0]
                         fill = np.random.choice(left_point_ids,fill)
                         new_group = np.concatenate((new_group,fill))
                     else:
                         self.logger.warning(
-                            "Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
+                            "Fill value overflow. Len of hull points = {}, fill value = {}. Increase vg.n_fill in primitive.py for more robustness.".format(new_group.shape[0],self.vg.n_fill))
                         new_group = new_group[:self.vg.n_fill]
 
                     self.vg.hull_vertices = np.vstack((self.vg.hull_vertices,new_group))
@@ -1194,14 +1192,15 @@ class CellComplex:
                     else:
                         new_group = right_point_ids
 
+                    # fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
+                    # if torch.nested.nested_tensor ever supports broadcasting and dot products, the code could be simplified a lot.
                     if new_group.shape[0] <= self.vg.n_fill:
                         fill = self.vg.n_fill - new_group.shape[0]
                         fill = np.random.choice(right_point_ids, fill)
                         new_group = np.concatenate((new_group, fill))
                     else:
                         self.logger.warning(
-                            "Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],
-                                                                                                   self.vertex_group_n_fill))
+                            "Fill value overflow. Len of hull points = {}, fill value = {}. Increase vg.n_fill in primitive.py for more robustness.".format(new_group.shape[0],self.vg.n_fill))
                         new_group = new_group[:self.vg.n_fill]
 
                     self.vg.hull_vertices = np.vstack((self.vg.hull_vertices, new_group))
