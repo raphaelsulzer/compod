@@ -9,6 +9,7 @@ with adaptive binary space partitioning: upon insertion of a primitive
 only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
+import copy
 import os
 import time, multiprocessing, pickle, logging, trimesh
 from pathlib import Path
@@ -55,21 +56,25 @@ class CellComplex:
         self.planeExporter = PlaneExporter()
         self.cellComplexExporter = CellComplexExporter(self)
 
+        self.vg = vertex_group
+        self.vg.input_planes = copy.deepcopy(self.vg.planes)
+
         self.logger = logger if logger else logging.getLogger("COMPOD")
 
         self.logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
-        self.bounds = vertex_group.bounds
-        self.planes = vertex_group.planes
-        self.plane_order = vertex_group.plane_order
-        self.plane_colors = vertex_group.plane_colors
-        self.halfspaces = vertex_group.halfspaces
-        self.points = vertex_group.points_grouped
-        self.point_normals = vertex_group.normals_grouped
-        self.hull_vertices = vertex_group.hull_vertices
-        self.convex_hulls = vertex_group.convex_hulls
-        self.vertex_group_n_fill = vertex_group.n_fill
-        del vertex_group
+        # self.bounds = vertex_group.bounds
+        # self.planes = vertex_group.planes
+        # self.plane_order = vertex_group.plane_order
+        # self.plane_colors = vertex_group.plane_colors
+        # self.halfspaces = vertex_group.halfspaces
+        # self.points = vertex_group.points
+        # self.point_normals = vertex_group.normals
+        # self.groups = vertex_group.groups
+        # self.hull_vertices = vertex_group.hull_vertices
+        # self.convex_hulls = vertex_group.convex_hulls
+        # self.vertex_group_n_fill = vertex_group.n_fill
+        # del vertex_group
 
         self.cells = dict()
         self.tree = None
@@ -94,9 +99,8 @@ class CellComplex:
 
         self.bounding_verts = []
 
-        points = np.concatenate(self.points)
-        pmin = vector([QQ(points[:,0].min()),QQ(points[:,1].min()),QQ(points[:,2].min())])
-        pmax = vector([QQ(points[:,0].max()),QQ(points[:,1].max()),QQ(points[:,2].max())])
+        pmin = vector([QQ(self.vg.points[:,0].min()),QQ(self.vg.points[:,1].min()),QQ(self.vg.points[:,2].min())])
+        pmax = vector([QQ(self.vg.points[:,0].max()),QQ(self.vg.points[:,1].max()),QQ(self.vg.points[:,2].max())])
 
         d = pmax-pmin
         d = d*QQ(padding)
@@ -139,7 +143,8 @@ class CellComplex:
 
     def add_bounding_box_planes(self):
 
-        self.logger.info("Add bounding planes...")
+        self.logger.info("Add bounding box planes...")
+        self.logger.debug("Bounding planes will be appended to self.vg.input_planes")
 
         pmin = vector(self.bounding_poly.bounding_box()[0])
         pmax = vector(self.bounding_poly.bounding_box()[1])
@@ -169,6 +174,9 @@ class CellComplex:
         bb_planes.append([0,0,-1,bb_verts[0][2]])
         bb_planes.append([0,0,1,-bb_verts[1][2]])
         bb_planes = np.array(bb_planes,dtype=object)
+
+        dtype = self.vg.input_planes.dtype
+        self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
 
         for i,plane in enumerate(bb_planes):
 
@@ -281,15 +289,15 @@ class CellComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                # TODO: a better solution instead of using a plane dict is simply to get the ID from the primitive_dict["plane_ids"] array
+                # TODO: a better solution instead of using a plane dict is simply to get the ID from the self.vg.planes_ids array
                 plane_id = self.graph.edges[e0, e1]["supporting_plane_id"]
-                col = self.plane_colors[plane_id] if plane_id > -1 else np.random.randint(100, 255, size=3)
+                col = self.vg.plane_colors[plane_id] if plane_id > -1 else np.array([50,50,50])
                 fcolors.append(col)
 
                 intersection_points = self._get_intersection(e0, e1)
 
                 plane_id = self.graph[e0][e1]["supporting_plane_id"]
-                plane = self.planes[plane_id]
+                plane = self.vg.input_planes[plane_id]
                 correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
 
                 assert (len(intersection_points) == len(correct_order))
@@ -358,7 +366,7 @@ class CellComplex:
                 intersection_points = self._get_intersection(e0,e1)
 
                 plane_id = self.graph[e0][e1]["supporting_plane_id"]
-                plane = self.planes[plane_id]
+                plane = self.vg.input_planes[plane_id]
                 correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
 
                 assert(len(intersection_points)==len(correct_order))
@@ -495,7 +503,7 @@ class CellComplex:
                 intersection_points = self._get_intersection(e0,e1)
 
                 plane_id = self.graph[e0][e1]["supporting_plane_id"]
-                plane = self.planes[plane_id]
+                plane = self.vg.input_planes[plane_id]
                 correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
 
                 assert(len(intersection_points)==len(correct_order))
@@ -769,8 +777,8 @@ class CellComplex:
 
 
             if plane_id > -1:
-                colors.append(self.plane_colors[plane_id])
-                primitive_ids.append([self.plane_order[plane_id]])
+                colors.append(self.vg.plane_colors[plane_id])
+                primitive_ids.append([self.vg.plane_order[plane_id]])
             else:
                 colors.append(np.random.randint(100, 255, size=3))
                 primitive_ids.append([])
@@ -944,19 +952,21 @@ class CellComplex:
         if "earlystop" in insertion_order:
             earlystop = True
 
-        planes = primitive_dict["planes"][current_ids]
-        point_groups = np.array(primitive_dict["point_groups"],dtype=object)[current_ids]
+        planes = self.vg.planes[current_ids]
+        hull_verts = self.vg.hull_vertices[current_ids]
+        # points = self.vg.points[hull_verts]
 
 
         ### find the plane which seperates all other planes without splitting them
         left_right = []
         for i,id in enumerate(current_ids):
             left = 0; right = 0; intersect = 0
-            pls = planes[i]
+            pl = planes[i]
             for j,id2 in enumerate(current_ids):
                 if i == j: continue
-                which_side = np.dot(pls[:3],point_groups[j].transpose())
-                which_side = (which_side < -pls[3])
+                pts = self.vg.points[hull_verts[j]]
+                which_side = np.dot(pl[:3],pts.transpose())
+                which_side = (which_side < -pl[3])
                 tleft = (which_side).all(axis=-1)
                 if tleft:
                     left+=1
@@ -996,43 +1006,26 @@ class CellComplex:
 
     def _get_best_split_gpu(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
 
-        # TODO: in fact left_right has to be computed only one single time per plane and can be stored throughout the algorithm
-        # a simple first try could be to store it for each primitve and simply make a function which sorts it at each insertion according to the current available cell ids
-
-
-        ## sum calls the get_best_plane function less often than product, but with more planes
-        ## since get_best_planes is O(n^2), it is better to call it more often with smaller n than less often with bigger n
-
-
-
-        ### pad the point groups with NaNs to make a numpy array from the variable lenght list
-        ### could maybe better be done with scipy sparse, but would require to rewrite the _get and _split functions used below
-
-        ### the whole thing vectorized. doesn't really work for some reason
-        # UPDATE: should work, first tries where with wrong condition
-        # planes = np.repeat(vertex_group.planes[np.newaxis,current_ids,:],current_ids.shape[0],axis=0)
-        # pgs = np.repeat(point_groups[np.newaxis,current_ids,:,:],current_ids.shape[0],axis=0)
-        #
-        # which_side = planes[:,:,0,np.newaxis] * pgs[:,:,:,0] + planes[:,:,1,np.newaxis] * pgs[:,:,:,1] + planes[:,:,2,np.newaxis] * pgs[:,:,:,2] + planes[:,:,3,np.newaxis]
 
         earlystop = False
         if "earlystop" in insertion_order:
             earlystop = True
 
-        planes = primitive_dict["planes"][current_ids]
-        hull_verts = primitive_dict['hull_vertices'][current_ids]
+        planes = self.vg.planes[current_ids]
+        hull_verts = self.vg.hull_vertices[current_ids]
+        points = self.vg.points[hull_verts]
+        points =  self.torch.from_numpy(points).type(self.torch.float32).to('cuda').transpose(2,0)
         planes = self.torch.from_numpy(planes).type(self.torch.float32).to('cuda')
 
         ### find the plane which seperates all other planes without splitting them
         left_right = []
         for i,id in enumerate(current_ids):
-            pls = planes[i]
+            pl = planes[i]
 
-            pv = hull_verts.transpose(2,0)
-            pv = self.torch.cat((pv[:,:,:i],pv[:,:,i+1:]),axis=2)
+            pts = self.torch.cat((points[:,:,:i],points[:,:,i+1:]),axis=2)    # take out the support points of plane[i]
 
-            which_side = self.torch.tensordot(pls[:3], pv, 1)
-            which_side = which_side < -pls[3]
+            which_side = self.torch.tensordot(pl[:3], pts, 1)
+            which_side = which_side < -pl[3]
             left = which_side.all(axis=0)
             right = (~which_side).all(axis=0)
 
@@ -1067,7 +1060,7 @@ class CellComplex:
         return best_plane_id
 
 
-    def _get_best_plane(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+    def _get_best_plane(self,current_ids,insertion_order="product-earlystop"):
 
         """
         Prioritise certain planes to favour building reconstruction.
@@ -1084,16 +1077,15 @@ class CellComplex:
             Prioritise vertical planes if set True
         """
 
-        # pgs = np.array(primitive_dict["point_groups"], dtype=object)[current_ids]
         pgs = None
 
         if insertion_order == "random":
             return np.random.choice(len(current_ids),size=1)[0]
         elif insertion_order in ["product", "product-earlystop", "sum", "sum-earlystop", "equal", "equal-earlystop", "intersect", "intersect-earlystop"]:
             if self.device == "gpu":
-                return self._get_best_split_gpu(current_ids,primitive_dict,insertion_order)
+                return self._get_best_split_gpu(current_ids,insertion_order)
             elif self.device == "cpu":
-                return self._get_best_split(current_ids,primitive_dict,insertion_order)
+                return self._get_best_split(current_ids,insertion_order)
             else:
                 raise NotImplementedError
         elif insertion_order == "n-points":
@@ -1114,7 +1106,7 @@ class CellComplex:
             return np.argmax(norms)
         elif insertion_order == 'area':
             areas = []
-            for i,plane in enumerate(primitive_dict["planes"][current_ids]):
+            for i,plane in enumerate(self.vg.planes[current_ids]):
                 if pgs[i].shape[0] > 2:
                     mesh = PyPlane(plane).get_trimesh_of_projected_points(pgs[i])
                     areas.append(mesh.area)
@@ -1125,8 +1117,7 @@ class CellComplex:
             raise NotImplementedError
 
 
-    def _split_support_points_gpu(self,best_plane_id,current_ids,primitive_dict, th=1):
-
+    def _split_support_points(self,best_plane_id,current_ids,th=1):
         '''
         :param best_plane_id:
         :param current_ids:
@@ -1138,8 +1129,7 @@ class CellComplex:
 
         assert th >= 0,"Threshold must be >= 0"
 
-        best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
-
+        best_plane = self.vg.planes[current_ids[best_plane_id]]
 
 
         ### now put the planes into the left and right subspace of the best_plane split
@@ -1151,146 +1141,70 @@ class CellComplex:
             if id == current_ids[best_plane_id]:
                 continue
 
-            # polygon_points = primitive_dict["point_groups"][id]
-            polygon_points = primitive_dict["convex_hulls"][id].all_points
+            this_group = self.vg.groups[id]
+            which_side = np.dot(best_plane[:3],self.vg.points[this_group].transpose())
+            left_point_ids = this_group[which_side < -best_plane[3]]
+            right_point_ids = this_group[which_side > -best_plane[3]]
 
-            which_side = np.dot(best_plane[:3],polygon_points.transpose())
-            left_points = polygon_points[which_side < -best_plane[3], :]
-            right_points = polygon_points[which_side > -best_plane[3], :]
-
-            if (polygon_points.shape[0] - left_points.shape[0]) <= th:
+            if (this_group.shape[0] - left_point_ids.shape[0]) <= th:
                 left_plane_ids.append(id)
-            elif(polygon_points.shape[0] - right_points.shape[0]) <= th:
+            elif(this_group.shape[0] - right_point_ids.shape[0]) <= th:
                 right_plane_ids.append(id)
             else:
-                # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
-                if (left_points.shape[0] > th):
-                    left_plane_ids.append(primitive_dict["planes"].shape[0])
-                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
-                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
-                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
-                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
-                    primitive_dict["point_groups"].append(left_points)
-                    
+                if (left_point_ids.shape[0] > th):
+                    left_plane_ids.append(self.vg.planes.shape[0])
+                    self.vg.planes = np.vstack((self.vg.planes, self.vg.planes[id]))
+                    self.vg.planes_ids.append(self.vg.planes_ids[id])
+                    self.vg.halfspaces.append(self.vg.halfspaces[id])
+                    self.vg.groups.append(left_point_ids)
+
                     # if not enough points for making a convex hull we simply keep the points 
                     
                     # get all hull points and  make a new hull on the left side
-                    if left_points.shape[0] > 2:
-                        new_hull = ProjectedConvexHull(primitive_dict["convex_hulls"][id].plane_params,left_points)
+                    if left_point_ids.shape[0] > 2:
+                        new_hull = ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])
+                        new_group = left_point_ids[new_hull.hull.vertices]
                     else:
-                        new_hull = primitive_dict["convex_hulls"][id]
-                        new_hull.hull = None
-                        new_hull.hull_points = left_points
-                        new_hull.all_points = left_points
-                    primitive_dict["convex_hulls"].append(new_hull)
-                    hull_points = new_hull.hull_points
+                        new_group = left_point_ids
 
-                    if hull_points.shape[0] <= self.vertex_group_n_fill:
-                        fill = self.vertex_group_n_fill - hull_points.shape[0]
-                        fill = hull_points[np.random.choice(hull_points.shape[0],fill)]
-                        hull_points=np.concatenate((hull_points,fill))
+                    if new_group.shape[0] <= self.vg.n_fill:
+                        fill = self.vg.n_fill - new_group.shape[0]
+                        fill = np.random.choice(left_point_ids,fill)
+                        new_group = np.concatenate((new_group,fill))
                     else:
-                        self.logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
-                        hull_points = hull_points[:self.vertex_group_n_fill]
-                    primitive_dict["hull_vertices"] = self.torch.cat(
-                        (primitive_dict["hull_vertices"],
-                         self.torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
+                        self.logger.warning(
+                            "Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
+                        new_group = new_group[:self.vg.n_fill]
 
-                if (right_points.shape[0] > th):
-                    right_plane_ids.append(primitive_dict["planes"].shape[0])
-                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
-                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
-                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
-                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
-                    primitive_dict["point_groups"].append(right_points)
+                    self.vg.hull_vertices = np.vstack((self.vg.hull_vertices,new_group))
 
+                if (right_point_ids.shape[0] > th):
+                    right_plane_ids.append(self.vg.planes.shape[0])
+                    self.vg.planes = np.vstack((self.vg.planes, self.vg.planes[id]))
+                    self.vg.planes_ids.append(self.vg.planes_ids[id])
+                    self.vg.halfspaces.append(self.vg.halfspaces[id])
+                    self.vg.groups.append(right_point_ids)
 
-                    # get all hull points and  make a new hull on the left side
-                    if right_points.shape[0] > 2:
-                        new_hull = ProjectedConvexHull(primitive_dict["convex_hulls"][id].plane_params, right_points)
+                    # if not enough points for making a convex hull we simply keep the points
+
+                    # get all hull points and  make a new hull on the right side
+                    if right_point_ids.shape[0] > 2:
+                        new_hull = ProjectedConvexHull(self.vg.planes[id], self.vg.points[right_point_ids])
+                        new_group = right_point_ids[new_hull.hull.vertices]
                     else:
-                        new_hull = primitive_dict["convex_hulls"][id]
-                        new_hull.hull = None
-                        new_hull.hull_points = right_points
-                        new_hull.all_points = right_points
-                    primitive_dict["convex_hulls"].append(new_hull)
-                    hull_points = new_hull.hull_points
+                        new_group = right_point_ids
 
-                    if hull_points.shape[0] <= self.vertex_group_n_fill:
-                        fill = self.vertex_group_n_fill - hull_points.shape[0]
-                        fill = hull_points[np.random.choice(hull_points.shape[0],fill)]
-                        hull_points=np.concatenate((hull_points,fill))
+                    if new_group.shape[0] <= self.vg.n_fill:
+                        fill = self.vg.n_fill - new_group.shape[0]
+                        fill = np.random.choice(right_point_ids, fill)
+                        new_group = np.concatenate((new_group, fill))
                     else:
-                        self.logger.warning("Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],self.vertex_group_n_fill))
-                        hull_points = hull_points[:self.vertex_group_n_fill]
-                    primitive_dict["hull_vertices"] = self.torch.cat(
-                        (primitive_dict["hull_vertices"],
-                         self.torch.Tensor(np.array(hull_points)).to('cuda')[None, :, :]))
+                        self.logger.warning(
+                            "Fill value overflow. Len of hull points = {}, fill value = {}".format(hull_points.shape[0],
+                                                                                                   self.vertex_group_n_fill))
+                        new_group = new_group[:self.vg.n_fill]
 
-
-                self.split_count+=1
-
-                # planes[id, :] = np.nan
-                # point_groups[id][:, :] = np.nan
-
-        return left_plane_ids,right_plane_ids
-
-
-
-
-
-    def _split_support_points(self,best_plane_id,current_ids,primitive_dict, th=1):
-
-        '''
-        :param best_plane_id:
-        :param current_ids:
-        :param planes:
-        :param point_groups: padded 2d array of point groups with NaNs
-        :param n_points_per_plane: real number of points per group (ie plane)
-        :return: left and right planes
-        '''
-
-        best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
-
-        ### now put the planes into the left and right subspace of the best_plane split
-        ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
-        left_plane_ids = []
-        right_plane_ids = []
-        for id in current_ids:
-
-            if id == current_ids[best_plane_id]:
-                continue
-
-            # which_side = best_plane[0] * point_groups[id][:, 0] + best_plane[1] * point_groups[id][:, 1] + best_plane[2] * point_groups[id][:, 2] + best_plane[3]
-            which_side = best_plane[0] * primitive_dict["point_groups"][id][:, 0] + best_plane[1] * primitive_dict["point_groups"][id][:, 1] + best_plane[2] * primitive_dict["point_groups"][id][:, 2]
-            left_points = primitive_dict["point_groups"][id][which_side < -best_plane[3], :]
-            right_points = primitive_dict["point_groups"][id][which_side > -best_plane[3], :]
-            assert (primitive_dict["point_groups"][id].shape[0] > th)  # threshold cannot be bigger than the detection threshold
-
-            if (primitive_dict["point_groups"][id].shape[0] - left_points.shape[0]) <= th:
-                # if left_points.shape[0] > th:
-                left_plane_ids.append(id)
-                primitive_dict["point_groups"][id] = left_points  # update the point group, in case some points got dropped according to threshold
-            elif(primitive_dict["point_groups"][id].shape[0] - right_points.shape[0]) <= th:
-                # if right_points.shape[0] > th:
-                right_plane_ids.append(id)
-                primitive_dict["point_groups"][id] = right_points # update the point group, in case some points got dropped according to threshold
-            else:
-                # print("id:{}: total-left/right: {}-{}/{}".format(current_ids[best_plane_id],n_points_per_plane[id],left_points.shape[0],right_points.shape[0]))
-                if (left_points.shape[0] > th):
-                    left_plane_ids.append(primitive_dict["planes"].shape[0])
-                    primitive_dict["point_groups"].append(left_points)
-                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
-                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
-                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
-                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
-                if (right_points.shape[0] > th):
-                    right_plane_ids.append(primitive_dict["planes"].shape[0])
-                    primitive_dict["point_groups"].append(right_points)
-                    primitive_dict["planes"] = np.vstack((primitive_dict["planes"], primitive_dict["planes"][id]))
-                    primitive_dict["plane_ids"].append(primitive_dict["plane_ids"][id])
-                    primitive_dict["halfspaces"].append(primitive_dict["halfspaces"][id])
-                    primitive_dict["split_count"].append(primitive_dict["split_count"][id]+1)
+                    self.vg.hull_vertices = np.vstack((self.vg.hull_vertices, new_group))
 
                 self.split_count+=1
 
@@ -1359,84 +1273,6 @@ class CellComplex:
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
 
         self.polygons_initialized = False
-
-
-
-
-    # @profile
-    # def simplify_partition(self):
-    #
-    #     ### this is nice and very fast, but it cannot simplify every case. because the tree would need to be restructured.
-    #     ### there are cases where two cells are on the same side of the surface, there union is convex, but they are not siblings in the tree -> they cannot be simplified with this function
-    #
-    #     @profile
-    #     def filter_edge(n0,n1):
-    #         if self.graph.edges[n0, n1]["processed"]:
-    #             return False
-    #         if n0 < 0 or n1 < 0:
-    #             self.graph.edges[n0, n1]["processed"] = True
-    #             return False
-    #         if self.graph.nodes[n0]["occupancy"] != self.graph.nodes[n1]["occupancy"]:
-    #             self.graph.edges[n0, n1]["processed"] = True
-    #             return False
-    #         if not self.tree[n0].is_leaf():
-    #             self.graph.edges[n0, n1]["processed"] = True
-    #             return False
-    #         if not self.tree[n1].is_leaf():
-    #             self.graph.edges[n0, n1]["processed"] = True
-    #             return False
-    #         if len(self.tree.siblings(n0)):
-    #             if self.tree.siblings(n0)[0].identifier == n1:
-    #                 return True
-    #
-    #         if self.graph.nodes[n0]["volume"] is None: self.graph.nodes[n0]["volume"] = self.cells[n0].volume()
-    #         if self.graph.nodes[n1]["volume"] is None: self.graph.nodes[n1]["volume"] = self.cells[n1].volume()
-    #         if self.graph.edges[n0, n1]["union_volume"] is None:
-    #             cx = Polyhedron(vertices=self.cells[n0].vertices_list() + self.cells[n1].vertices_list())
-    #             self.graph.edges[n0, n1]["union_volume"] = cx.volume()
-    #         if self.graph.edges[n0, n1]["union_volume"] == (
-    #                 self.graph.nodes[n0]["volume"] + self.graph.nodes[n1]["volume"]):
-    #             return True
-    #
-    #         self.graph.edges[n0, n1]["processed"] = True
-    #         return False
-    #
-    #     nx.set_node_attributes(self.graph,None,"volume")
-    #     nx.set_edge_attributes(self.graph,None,"union_volume")
-    #     nx.set_edge_attributes(self.graph,False,"processed")
-    #
-    #     before=len(self.graph.nodes)
-    #     edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
-    #     while len(edges):
-    #
-    #         for c0,c1 in edges:
-    #             if not c1 in self.cells:
-    #                 continue
-    #             if not c0 in self.cells:
-    #                 continue
-    #
-    #
-    #             nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-    #
-    #             new_poly = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
-    #             self.cells[c0] = new_poly
-    #             self.graph.nodes[c0]["volume"] = new_poly.volume()
-    #
-    #             del self.cells[c1]
-    #
-    #             self.tree.remove_node(c1)
-    #
-    #             for n0, n1 in self.graph.edges(c0):
-    #                 self.graph.edges[n0, n1]["union_volume"] = None
-    #                 self.graph.edges[n0, n1]["processed"] = False
-    #
-    #         edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
-    #
-    #
-    #     self.logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
-    #
-    #     self.polygons_initialized = False
-
 
 
     def simplify_partition_tree_based(self):
@@ -1610,14 +1446,9 @@ class CellComplex:
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
         if self.debug_export:
             self.logger.warning('\nDebug export activated! Turn off for faster processing.\n')
-        primitive_dict = dict()
-        primitive_dict["planes"] = self.planes
-        primitive_dict["halfspaces"] = list(self.halfspaces)
-        primitive_dict["point_groups"] = list(self.points)
-        primitive_dict["hull_vertices"] = self.hull_vertices
-        primitive_dict["convex_hulls"] = list(self.convex_hulls)
-        primitive_dict["split_count"] = [0]*len(self.planes)
-        primitive_dict["plane_ids"] = list(range(self.planes.shape[0]))
+
+
+        self.vg.planes_ids = list(range(self.vg.planes.shape[0]))
 
         cell_count = 0
         self.split_count = 0
@@ -1628,13 +1459,12 @@ class CellComplex:
 
         ## expand the tree as long as there is at least one plane inside any of the subspaces
         self.tree = Tree()
-        dd = {"plane_ids": np.arange(primitive_dict["planes"].shape[0])}
+        dd = {"plane_ids": np.arange(self.vg.planes.shape[0])}
         self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         self.cells[cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0 # only used for debugging exports
-        n_points_total = np.concatenate(primitive_dict["point_groups"],dtype=object).shape[0]
-        pbar = tqdm(total=n_points_total,file=sys.stdout)
+        pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout)
         best_plane_ids = [] # only used for debugging exports
         for child in children:
 
@@ -1643,25 +1473,26 @@ class CellComplex:
 
             if len(current_ids) == 1:
                 best_plane_id = 0
-                best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
+                best_plane = self.vg.planes[current_ids[best_plane_id]]
                 left_planes = []; right_planes = []
             else:
-                best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids,primitive_dict, insertion_order)
-                best_plane = primitive_dict["planes"][current_ids[best_plane_id]]
+                best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
+                best_plane = self.vg.planes[current_ids[best_plane_id]]
                 ### split the primitives with the best_plane, and append them to the plane array
-                if self.device == 'cpu':
-                    left_planes, right_planes = self._split_support_points(best_plane_id,current_ids,primitive_dict, th)
-                elif self.device == 'gpu':
-                    left_planes, right_planes = self._split_support_points_gpu(best_plane_id,current_ids,primitive_dict, th)
-                else:
-                    raise NotImplementedError
+                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids, th)
+                # if self.device == 'cpu':
+                #     left_planes, right_planes = self._split_support_points(best_plane_id,current_ids, th)
+                # elif self.device == 'gpu':
+                #     left_planes, right_planes = self._split_support_points_gpu(best_plane_id,current_ids, th)
+                # else:
+                #     raise NotImplementedError
 
             ### for debugging
-            best_plane_ids.append(best_plane_id)
-            best_plane_id_input = primitive_dict["plane_ids"][current_ids[best_plane_id]]
+            best_plane_id_input = self.vg.planes_ids[current_ids[best_plane_id]]
+            best_plane_ids.append(best_plane_id_input)
 
             ### progress bar update
-            n_points_processed = len(primitive_dict["point_groups"][current_ids[best_plane_id]])
+            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
 
             ### export best plane
             if self.debug_export:
@@ -1674,8 +1505,8 @@ class CellComplex:
 
 
             ## create the new convexes
-            # hspace_positive, hspace_negative = primitive_dict["halfspaces"][current_ids[best_plane_id],0], primitive_dict["halfspaces"][current_ids[best_plane_id],1]
-            hspace_positive, hspace_negative = primitive_dict["halfspaces"][current_ids[best_plane_id]][0], primitive_dict["halfspaces"][current_ids[best_plane_id]][1]
+            # hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id],0], self.vg.halfspaces[current_ids[best_plane_id],1]
+            hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id]][0], self.vg.halfspaces[current_ids[best_plane_id]][1]
 
             cell_negative = current_cell.intersection(hspace_negative)
             cell_positive = current_cell.intersection(hspace_positive)
@@ -1740,10 +1571,10 @@ class CellComplex:
             self.graph.remove_node(child)
             pbar.update(n_points_processed)
 
-            if self.device == 'gpu':
-                primitive_dict["halfspaces"][current_ids[best_plane_id]] = None
-                primitive_dict["point_groups"][current_ids[best_plane_id]] = None
-                primitive_dict["convex_hulls"][current_ids[best_plane_id]] = None
+            # if self.device == 'gpu':
+            #     self.vg.halfspaces[current_ids[best_plane_id]] = None
+            #     primitive_dict["point_groups"][current_ids[best_plane_id]] = None
+            #     self.vg.convex_hulls[current_ids[best_plane_id]] = None
 
             del self.cells[child]
 
@@ -1751,7 +1582,8 @@ class CellComplex:
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
-        self.logger.info("{} input planes were split {} times, making a total of {} planes now".format(len(self.planes),self.split_count,len(primitive_dict["planes"])))
+        self.logger.debug("Plane insertion order {}".format(best_plane_ids))
+        self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.planes)))
 
         return 0
 

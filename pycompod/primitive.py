@@ -199,20 +199,22 @@ class VertexGroup:
 
         for i,v in enumerate(self.hull_vertices):
 
-            hp = np.array(self.convex_hulls[i].hull_points)
-            fill_vertices = hp[np.random.choice(hp.shape[0],self.n_fill-hp.shape[0])]
-            hp = np.concatenate((hp,fill_vertices))
-            hull_vertices.append(hp)
+            # hp = np.array(self.convex_hulls[i].hull_points)
 
+            fill_vertices = np.random.choice(self.groups[i],self.n_fill-v.shape[0])
+            fhv = np.concatenate((v,fill_vertices))
+            hull_vertices.append(fhv)
 
-        if self.device == 'gpu':
-            import torch
-            # self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
-            self.hull_vertices = torch.Tensor(np.array(hull_vertices)).to('cuda')
-        elif self.device == 'cpu':
-            self.hull_vertices = np.array(hull_vertices)
-        else:
-            raise NotImplementedError
+        self.hull_vertices = np.array(hull_vertices)
+
+        # if self.device == 'gpu':
+        #     import torch
+        #     # self.hull_vertices = torch.HalfTensor(np.array(hull_vertices)).to('cuda')
+        #     self.hull_vertices = torch.Tensor(np.array(hull_vertices)).to('cuda')
+        # elif self.device == 'cpu':
+        #     self.hull_vertices = np.array(hull_vertices)
+        # else:
+        #     raise NotImplementedError
 
 
 
@@ -227,14 +229,13 @@ class VertexGroup:
             sampled_points = poly.sample(n)
             sampled_points = np.concatenate((sampled_points,poly.vertices),axis=0,dtype=np.float32)
             all_sampled_points.append(sampled_points)
-            self.convex_hulls[i].all_points = sampled_points
+            # self.convex_hulls[i].all_points = sampled_points
 
         return np.array(all_sampled_points,dtype=object)
 
     def _recolor_planes(self):
 
-        all_points = np.concatenate(self.points_grouped)
-        bbox = np.vstack((all_points.min(axis=0),all_points.max(axis=0)))
+        bbox = np.vstack((self.points.min(axis=0),self.points.max(axis=0)))
 
         fc=FancyColor(bbox)
         cols = []
@@ -260,11 +261,9 @@ class VertexGroup:
         self.plane_colors = data["group_colors"]
         self.polygons = []
         self.polygon_areas = []
-        self.points_grouped = []
-        self.normals_grouped = []
         self.groups = []
         n_hull_points = []
-        self.convex_hulls = []
+        # self.convex_hulls = []
         self.hull_vertices = []
         last = 0
         for i,npp in enumerate(npoints):
@@ -272,8 +271,6 @@ class VertexGroup:
             vert_group = verts[last:(npp+last)]
             pts = self.points[vert_group]
             self.groups.append(vert_group)
-            self.points_grouped.append(pts)
-            self.normals_grouped.append(self.normals[vert_group])
 
             # TODO: i am computing the convex hull twice below; not necessary
 
@@ -285,9 +282,9 @@ class VertexGroup:
             self.polygon_areas.append(poly.area)
 
             pch = ProjectedConvexHull(self.planes[i],pts)
-            self.convex_hulls.append(pch)
-            self.hull_vertices.append(pch.hull_points)
-            n_hull_points.append(len(pch.hull_points))
+            # self.convex_hulls.append(pch)
+            self.hull_vertices.append(vert_group[pch.hull.vertices])
+            n_hull_points.append(len(pch.hull.vertices))
 
             last += npp
 
@@ -302,7 +299,7 @@ class VertexGroup:
 
         self.polygons = np.array(self.polygons)
         self.polygon_areas = np.array(self.polygon_areas)
-        self.convex_hulls = np.array(self.convex_hulls)
+        # self.convex_hulls = np.array(self.convex_hulls)
         # fill the hull array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
         n_hull_points = np.array(n_hull_points)
         self.n_fill = n_hull_points.max()*2
@@ -315,7 +312,7 @@ class VertexGroup:
             self.logger.info("Sample polygons with {} points".format(self.total_sample_count))
             self.points_grouped = self._sample_polygons() # changes self.convex_hull
         elif self.points_type == "inliers":
-            self.logger.info("Use {} inlier points of polygons".format(np.concatenate(self.points_grouped).shape[0]))
+            self.logger.info("Use {} inlier points of polygons".format(np.concatenate(self.groups).shape[0]))
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             NotImplementedError
@@ -327,31 +324,32 @@ class VertexGroup:
         pe = PlaneExporter()
         pt_file = os.path.splitext(self.path)[0]+"_samples.ply"
         plane_file =  os.path.splitext(self.path)[0]+'.ply'
-        pe.save_points_and_planes([pt_file,plane_file],self.points_grouped,self.planes,colors=self.plane_colors)
+        pe.save_points_and_planes([pt_file,plane_file],self.points, self.groups, self.planes, colors=self.plane_colors)
 
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)
             self.plane_order = order
             self.planes = self.planes[order]
-            self.points_grouped = list(np.array(self.points_grouped,dtype=object)[order])
+            self.groups = list(np.array(self.groups,dtype=object)[order])
             self.polygons = self.polygons[order]
             self.polygon_areas = self.polygon_areas[order]
-            self.hull_vertices = self.hull_vertices[order.copy(),:,:]
-            self.convex_hulls = self.convex_hulls[order]
+            self.hull_vertices = self.hull_vertices[order.copy(),:]
+            # self.convex_hulls = self.convex_hulls[order]
             self.plane_colors = self.plane_colors[order]
         else:
             self.logger.info("No plane prioritisation applied")
 
         self.bounds = []
-        for pg in self.points_grouped:
-            self.bounds.append(self._points_bound(pg))
+        for group in self.groups:
+            pts = self.points[group]
+            self.bounds.append(self._points_bound(pts))
         self.bounds = np.array(self.bounds)
 
         # make the bounds and halfspace used in the cell complex construction
         self.halfspaces = []
         for i,p in enumerate(self.planes):
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(p)])
-        self.halfspaces = np.array(self.halfspaces)
+        # self.halfspaces = np.array(self.halfspaces)
 
 
 
