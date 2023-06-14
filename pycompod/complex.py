@@ -15,11 +15,10 @@ import time, multiprocessing, pickle, logging, trimesh
 from pathlib import Path
 from fractions import Fraction
 
-import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import trange
 import networkx as nx
-from sage.all import QQ, Polyhedron, vector, arctan2
+from sage.all import QQ, RDF, ZZ, Polyhedron, vector, arctan2
 from treelib import Tree
 from tqdm import tqdm
 import open3d as o3d
@@ -63,19 +62,6 @@ class CellComplex:
 
         self.logger.debug('Init cell complex with padding {}'.format(initial_padding))
 
-        # self.bounds = vertex_group.bounds
-        # self.planes = vertex_group.planes
-        # self.plane_order = vertex_group.plane_order
-        # self.plane_colors = vertex_group.plane_colors
-        # self.halfspaces = vertex_group.halfspaces
-        # self.points = vertex_group.points
-        # self.point_normals = vertex_group.normals
-        # self.groups = vertex_group.groups
-        # self.hull_vertices = vertex_group.hull_vertices
-        # self.convex_hulls = vertex_group.convex_hulls
-        # self.vertex_group_n_fill = vertex_group.n_fill
-        # del vertex_group
-
         self.cells = dict()
         self.tree = None
         self.graph = None
@@ -93,6 +79,10 @@ class CellComplex:
         self.bounding_poly = self._init_bounding_box(padding=self.initial_padding)
 
         self.debug_export = debug_export
+
+        if self.debug_export:
+            self.logger.warning('Debug export activated. Turn off for faster processing.')
+
 
 
     def _init_bounding_box(self,padding):
@@ -935,10 +925,90 @@ class CellComplex:
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
 
-    def label_partition_with_point_cloud(self):
 
-        for node in self.graph.nodes:
-            pass
+
+
+
+
+
+
+
+
+
+    def label_partition_with_point_normals(self, outpath, n_test_points=50,graph_cut=True):
+
+        # def convex_contains(convex, points):
+        #     ineqs = np.array(convex.inequalities()).astype(np.float64)
+        #     ineqs = ineqs/np.linalg.norm(ineqs)
+        #     c = ineqs[:,0,np.newaxis]
+        #     a = ineqs[:,1,np.newaxis]
+        #     b = ineqs[:,2,np.newaxis]
+        #     x = points[np.newaxis,:,0]
+        #     y = points[np.newaxis,:,1]
+        #
+        #     k = (a*x+b*y)>=-c
+        #
+        #     return k.all(axis=0)
+
+
+        def convex_contains(convex, points):
+            ineqs = np.array(convex.inequalities())
+            # ineqs = np.array(convex.inequalities()).astype(np.float64)
+            # ineqs = ineqs/np.linalg.norm(ineqs)
+            c = ineqs[:,0,np.newaxis]
+            a = ineqs[:,1,np.newaxis]
+            b = ineqs[:,2,np.newaxis]
+            x = points[np.newaxis,:,0]
+            y = points[np.newaxis,:,1]
+
+            k = (a*x+b*y)>=-c
+
+            return k.all(axis=0)
+
+
+
+        count = -1
+        for e0,e1 in tqdm(self.graph.edges):
+
+            count+=1
+
+            edge = self.graph.edges[e0,e1]
+            if edge["intersection"] is None:
+                continue
+            if edge["supporting_plane_id"] < 0:
+                continue
+
+
+            polygon = edge["intersection"].affine_hull_projection()
+
+            point_ids = []
+            group = self.vg.groups[edge["supporting_plane_id"]]
+
+            contain = convex_contains(polygon,self.vg.projected_points[group])
+
+            col = np.random.randint(0,255,size=3)
+
+            pts = self.vg.points[group[contain]]
+            if len(pts):
+                self.cellComplexExporter.write_facet(self.model, edge["intersection"], count=count, color=col)
+                self.cellComplexExporter.write_points(self.model,pts,count=count,color=col)
+
+            # print(contain.sum())
+
+
+
+            # for point_id in group:
+            #     if polygon.contains(self.vg.projected_points[point_id]):
+            #         point_ids.append(point_id)
+            #         # print("yes")
+
+
+
+            a=5
+
+
+
+
 
 
 
@@ -1443,9 +1513,6 @@ class CellComplex:
         :return:
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
-        if self.debug_export:
-            self.logger.warning('\nDebug export activated! Turn off for faster processing.\n')
-
 
         self.vg.planes_ids = list(range(self.vg.planes.shape[0]))
 
@@ -1477,14 +1544,9 @@ class CellComplex:
             else:
                 best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
                 best_plane = self.vg.planes[current_ids[best_plane_id]]
-                ### split the primitives with the best_plane, and append them to the plane array
+                ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
                 left_planes, right_planes = self._split_support_points(best_plane_id, current_ids, th)
-                # if self.device == 'cpu':
-                #     left_planes, right_planes = self._split_support_points(best_plane_id,current_ids, th)
-                # elif self.device == 'gpu':
-                #     left_planes, right_planes = self._split_support_points_gpu(best_plane_id,current_ids, th)
-                # else:
-                #     raise NotImplementedError
+
 
             ### for debugging
             best_plane_id_input = self.vg.planes_ids[current_ids[best_plane_id]]
@@ -1496,10 +1558,11 @@ class CellComplex:
             ### export best plane
             if self.debug_export:
                 plane_count += 1
-                epoints = primitive_dict["point_groups"][current_ids[best_plane_id]]
-                epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
+                epoints = self.vg.groups[current_ids[best_plane_id]]
+                epoints = self.vg.points[epoints]
+                # epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
                 if epoints.shape[0]>3:
-                    color = self.plane_colors[best_plane_id_input]
+                    color = self.vg.plane_colors[best_plane_id_input]
                     self.planeExporter.save_plane(os.path.dirname(self.model["planes"]), best_plane, epoints,count=str(plane_count),color=color)
 
 
@@ -1537,8 +1600,8 @@ class CellComplex:
 
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
 
-                self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=None, vertices=[],
-                               supporting_plane_id=best_plane_id_input, bounding_box_edge=False)
+                self.graph.add_edge(neg_cell_id, pos_cell_id, intersection = None, vertices = [], point_ids = self.vg.groups[-1],
+                               supporting_plane_id = best_plane_id_input, bounding_box_edge = False)
                 if self.debug_export:
                     new_intersection = cell_negative.intersection(cell_positive)
                     self.cellComplexExporter.write_facet(self.model,new_intersection,count=plane_count)
@@ -1624,10 +1687,6 @@ class CellComplex:
 
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
-
-
-
-        a=5
 
 
 

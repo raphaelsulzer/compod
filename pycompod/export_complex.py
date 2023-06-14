@@ -102,13 +102,9 @@ class CellComplexExporter:
         f.close()
 
 
-
-
-
     def write_facet(self,m,facet,subfolder="facets",count=0, color=None):
 
-        c = color if color is not None else np.random.random(size=3)
-        c = (c*255).astype(int)
+        c = color if color is not None else np.random.randint(0,255,size=3)
 
         path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
@@ -125,6 +121,7 @@ class CellComplexExporter:
             f.write(fa+"\n")
 
         f.close()
+
 
     def write_graph_edge(self,m,graph,e0,e1):
 
@@ -187,16 +184,18 @@ class CellComplexExporter:
 
         f.close()
 
-    def write_points(self,m,points,filename="points",count=0, color=None):
+    def write_points(self,m,points,subfolder="points",count=0, color=None):
 
-        path = os.path.join(os.path.dirname(m['planes']))
-        filename = os.path.join(path,'{}.off'.format(filename))
+        path = os.path.join(os.path.dirname(m['planes']),subfolder)
+        os.makedirs(path,exist_ok=True)
+        filename = os.path.join(path,str(count)+'.off')
+
 
         f = open(filename, 'w')
-        f.write("OFF\n")
+        f.write("COFF\n")
         f.write("{} 0 0\n".format(points.shape[0]))
         for p in points:
-            f.write("{:.3f} {:.3f} {:.3f}\n".format(p[0],p[1],p[2]))
+            f.write("{:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],color[0],color[1],color[2]))
         f.close()
 
     def write_surface_to_off(self,filename,points,facets):

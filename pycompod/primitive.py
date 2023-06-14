@@ -169,6 +169,7 @@ class VertexGroup:
         self.halfspaces = []
         self.polygons = []
         self.polygon_areas = []
+        self.projected_points = np.zeros(shape=(self.points.shape[0],2))
         self.groups = []
         self.hull_vertices = []
         self.n_fill = 0
@@ -176,6 +177,7 @@ class VertexGroup:
         for i,npp in enumerate(npoints):
             ## make the point groups
             vert_group = verts[last:(npp+last)]
+            assert vert_group.dtype == np.int32
             pts = self.points[vert_group]
             self.groups.append(vert_group)
 
@@ -189,6 +191,7 @@ class VertexGroup:
             self.polygon_areas.append(poly.area)
 
             pch = ProjectedConvexHull(self.planes[i],pts)
+            self.projected_points[vert_group] = pch.all_projected_points_2d
             self.hull_vertices.append(vert_group[pch.hull.vertices])
             n_hull_vertices = len(pch.hull.vertices)
             if n_hull_vertices > self.n_fill:
@@ -198,6 +201,7 @@ class VertexGroup:
 
             last += npp
 
+        assert self.points.shape[0] == self.projected_points.shape[0]
 
         self._recolor_planes()
         # save with new colors
@@ -256,7 +260,7 @@ class VertexGroup:
             self.plane_order = order
             self.planes = self.planes[order]
             self.halfspaces = list(np.array(self.halfspaces)[order])
-            self.groups = list(np.array(self.groups,dtype=object)[order])
+            self.groups = list(np.array(self.groups,dtype=object).astype(np.int32)[order])
             self.hull_vertices = self.hull_vertices[order]
             self.plane_colors = self.plane_colors[order]
         else:
