@@ -67,10 +67,19 @@ class CellComplexExporter:
 
 
 
-    def write_cell(self, m, polyhedron, points=None, filename=None, subfolder="partitions",count=0, color=None, inside_vert_count=0, to_ply=False):
-
-        c = color if color is not None else np.random.random(size=3)
-        c = (c*255).astype(int)
+    def write_cell(self, m, polyhedron, points=None, normals=None, filename=None, subfolder="partitions", count=0, color=None, inside_vert_count=0):
+        """
+        :param m: A model from dataset
+        :param polyhedron: A sage polyhedron
+        :param points: A point set
+        :param normals: A normal set
+        :param filename:
+        :param subfolder:
+        :param count:
+        :param color:
+        :param inside_vert_count:
+        """
+        c = color if color is not None else np.random.randint(0,255,size=3)
 
         path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
@@ -86,8 +95,12 @@ class CellComplexExporter:
         ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
 
         verts = ss[2]
-        for v in verts:
-            f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
+        if normals is not None:
+            for v in verts:
+                f.write(v + " 0 0 0 {} {} {}\n".format(c[0],c[1],c[2]))
+        else:
+            for v in verts:
+                f.write(v + " {} {} {}\n".format(c[0],c[1],c[2]))
         faces = ss[3]
         for fa in faces:
             f.write(fa[0] + " ")
@@ -95,8 +108,13 @@ class CellComplexExporter:
                 f.write(str(int(ffa)+inside_vert_count)+" ")
             f.write("\n")
 
-        if points is not None:
-            for p in points:
+
+        if points is not None and normals is not None:
+            for i,p in enumerate(points):
+                n = normals[i]
+                f.write("v {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],n[0],n[1],n[2],c[0],c[1],c[2]))
+        elif points is not None and normals is None:
+            for i,p in enumerate(points):
                 f.write("v {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
 
         f.close()
@@ -184,7 +202,9 @@ class CellComplexExporter:
 
         f.close()
 
-    def write_points(self,m,points,subfolder="points",count=0, color=None):
+    def write_points(self,m,points,normals=None,subfolder="points",count=0, color=None):
+
+        c = color if color is not None else np.random.randint(0,255,size=3)
 
         path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
@@ -192,10 +212,19 @@ class CellComplexExporter:
 
 
         f = open(filename, 'w')
-        f.write("COFF\n")
+        if normals is None:
+            f.write("COFF\n")
+        else:
+            f.write("CNOFF\n")
         f.write("{} 0 0\n".format(points.shape[0]))
-        for p in points:
-            f.write("{:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],color[0],color[1],color[2]))
+        if normals is None:
+            for p in points:
+                f.write("{:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0],p[1],p[2],c[0],c[1],c[2]))
+        else:
+            assert len(points) == len(normals)
+            for i,p in enumerate(points):
+                n=normals[i]
+                f.write("{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2]))
         f.close()
 
     def write_surface_to_off(self,filename,points,facets):

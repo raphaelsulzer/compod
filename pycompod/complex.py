@@ -924,90 +924,141 @@ class CellComplex:
 
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
-
-
-
-
-
-
-
-
-
-
-
-    def label_partition_with_point_normals(self, outpath, n_test_points=50,graph_cut=True):
-
-        # def convex_contains(convex, points):
-        #     ineqs = np.array(convex.inequalities()).astype(np.float64)
-        #     ineqs = ineqs/np.linalg.norm(ineqs)
-        #     c = ineqs[:,0,np.newaxis]
-        #     a = ineqs[:,1,np.newaxis]
-        #     b = ineqs[:,2,np.newaxis]
-        #     x = points[np.newaxis,:,0]
-        #     y = points[np.newaxis,:,1]
-        #
-        #     k = (a*x+b*y)>=-c
-        #
-        #     return k.all(axis=0)
-
-
+    @profile
+    def _collect_facet_points(self):
+        @profile
         def convex_contains(convex, points):
+            """
+            If point is left of all support lines, it is contained by the convex
+            :param convex:
+            :param points:
+            :return:
+            """
             ineqs = np.array(convex.inequalities())
-            # ineqs = np.array(convex.inequalities()).astype(np.float64)
-            # ineqs = ineqs/np.linalg.norm(ineqs)
-            c = ineqs[:,0,np.newaxis]
-            a = ineqs[:,1,np.newaxis]
-            b = ineqs[:,2,np.newaxis]
-            x = points[np.newaxis,:,0]
-            y = points[np.newaxis,:,1]
-
-            k = (a*x+b*y)>=-c
-
+            c = ineqs[:, 0, np.newaxis]
+            a = ineqs[:, 1, np.newaxis]
+            b = ineqs[:, 2, np.newaxis]
+            x = points[np.newaxis, :, 0]
+            y = points[np.newaxis, :, 1]
+            k = (a * x + b * y) >= -c
             return k.all(axis=0)
+        # def convex_contains(point, vertices):
+        #     def get_side(a, b):
+        #         x = cosine_sign(a, b)
+        #         if x < 0:
+        #             return LEFT
+        #         elif x > 0:
+        #             return RIGHT
+        #         else:
+        #             return None
+        #
+        #     def v_sub(a, b):
+        #         return (a[0] - b[0], a[1] - b[1])
+        #
+        #     def cosine_sign(a, b):
+        #         return a[0] * b[1] - a[1] * b[0]
+        #
+        #     previous_side = None
+        #     n_vertices = len(vertices)
+        #     for n in xrange(n_vertices):
+        #         a, b = vertices[n], vertices[(n + 1) % n_vertices]
+        #         affine_segment = v_sub(b, a)
+        #         affine_point = v_sub(point, a)
+        #         current_side = get_side(affine_segment, affine_point)
+        #         if current_side is None:
+        #             return False  # outside or over an edge
+        #         elif previous_side is None:  # first segment
+        #             previous_side = current_side
+        #         elif previous_side != current_side:
+        #             return False
+        #     return True
 
 
 
-        count = -1
-        for e0,e1 in tqdm(self.graph.edges):
+        point_ids_dict = dict()
+        for e0, e1 in self.graph.edges:
 
-            count+=1
-
-            edge = self.graph.edges[e0,e1]
-            if edge["intersection"] is None:
+            edge = self.graph.edges[e0, e1]
+            if edge["supporting_plane_id"] < 0:  # bounding box planes have no associated points, so skip them
+                point_ids_dict[(e0, e1)] = np.empty(shape=0,dtype=np.int32)
                 continue
-            if edge["supporting_plane_id"] < 0:
-                continue
-
 
             polygon = edge["intersection"].affine_hull_projection()
+            # polygon = edge["intersection"]
 
-            point_ids = []
-            group = self.vg.groups[edge["supporting_plane_id"]]
+            group = self.vg.groups[edge["group_id"]]
+            # my own containes function because no need to do this with QQ bqse_ring and changing it to RDF is not robust.
+            contain = convex_contains(polygon, self.vg.projected_points[group])
 
-            contain = convex_contains(polygon,self.vg.projected_points[group])
+            point_ids_dict[(e0, e1)] = group[contain]
 
-            col = np.random.randint(0,255,size=3)
+            if self.debug_export:
+                pts = self.vg.points[group[contain]]
+                count += 1
+                col = np.random.randint(0, 255, size=3)
+                if len(pts):
+                    self.cellComplexExporter.write_points(self.model, pts, count=str(count) + "c", color=col)
+                    self.cellComplexExporter.write_facet(self.model, edge["intersection"], count=count, color=col)
 
-            pts = self.vg.points[group[contain]]
-            if len(pts):
-                self.cellComplexExporter.write_facet(self.model, edge["intersection"], count=count, color=col)
-                self.cellComplexExporter.write_points(self.model,pts,count=count,color=col)
+        nx.set_edge_attributes(self.graph,point_ids_dict,"point_ids")
 
-            # print(contain.sum())
+    @profile
+    def _collect_node_votes(self):
+        occupancy_dict = dict()
+        for node in self.graph.nodes:
+
+            if node < 0:
+                occupancy_dict[node] = (0,1000)
+                continue
+
+            centroid = np.array(self.cells[node].vertices()).mean(axis=0)
+            inside_weight = 0; outside_weight = 0
+            cell_points = []
+            cell_normals = []
+            for edge in self.graph.edges(node):
+                edge = self.graph.edges[edge]
+                pts = self.vg.points[edge["point_ids"]]
+                if not len(pts):
+                    continue
+                inside_vectors = centroid - pts
+                normal_vectors = self.vg.normals[edge["point_ids"]]
+                if self.debug_export:
+                    cell_points.append(pts)
+                    cell_normals.append(normal_vectors)
+                dp=(normal_vectors * inside_vectors).sum(axis=1)
+                inside_weight+=(dp<0).sum()
+                outside_weight+=(dp>0).sum()
 
 
 
-            # for point_id in group:
-            #     if polygon.contains(self.vg.projected_points[point_id]):
-            #         point_ids.append(point_id)
-            #         # print("yes")
+
+            if self.debug_export:
+                st = "in" if inside_weight <= outside_weight else "out"
+                color = np.random.randint(0, 255, size=3)
+                self.cellComplexExporter.write_cell(self.model,self.cells[node],
+                                                    count=str(node)+st,subfolder="labelling",color=color)
+                self.cellComplexExporter.write_points(self.model, color=color, count=str(node)+st,
+                                                      points=np.concatenate(cell_points),normals=np.concatenate(cell_normals),
+                                                      subfolder="labelling")
+
+            occupancy_dict[node] = (inside_weight,outside_weight)
+
+        nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
 
 
+    @profile
+    def label_partition_with_point_normals(self, outpath, n_test_points=50,graph_cut=True):
 
-            a=5
+        self._collect_facet_points()
+        self._collect_node_votes()
 
-
-
+        for node in self.graph.nodes:
+            node = self.graph.nodes[node]
+            occ = node["occupancy"]
+            if occ[0]>occ[1]:
+                node["occupancy"] = int(1)
+            else:
+                node["occupancy"] = int(0)
 
 
 
@@ -1378,14 +1429,18 @@ class CellComplex:
 
                 parent = self.tree.parent(c0)
                 parent_parent = self.tree.parent(parent.identifier)
+                if parent_parent is None:
+                    continue
 
                 self.tree.remove_node(parent.identifier)
 
                 dd = {"plane_ids": parent.data["plane_ids"]}
                 self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
                 del self.cells[c1]
-                self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=parent_parent.identifier)
-
+                try:
+                    self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=parent_parent.identifier)
+                except:
+                    a=4
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
 
@@ -1600,10 +1655,10 @@ class CellComplex:
 
             if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
 
-                self.graph.add_edge(neg_cell_id, pos_cell_id, intersection = None, vertices = [], point_ids = self.vg.groups[-1],
+                new_intersection = cell_negative.intersection(cell_positive)
+                self.graph.add_edge(neg_cell_id, pos_cell_id, intersection = new_intersection, vertices = [], group_id = current_ids[best_plane_id],
                                supporting_plane_id = best_plane_id_input, bounding_box_edge = False)
                 if self.debug_export:
-                    new_intersection = cell_negative.intersection(cell_positive)
                     self.cellComplexExporter.write_facet(self.model,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
@@ -1624,10 +1679,10 @@ class CellComplex:
                     p_nonempty = positive_intersection.dim()==2
                 # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
                 if n_nonempty:
-                    self.graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[],
+                    self.graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[], group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
                                    supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
                 if p_nonempty:
-                    self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
+                    self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[], group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
                                    supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
 
             self.graph.remove_node(child)
@@ -1660,6 +1715,8 @@ class CellComplex:
             pickle.dump(self.tree,open(os.path.join(outpath,'tree.pickle'),'wb'))
         pickle.dump(self.graph,open(os.path.join(outpath,'graph.pickle'),'wb'))
         pickle.dump(self.cells,open(os.path.join(outpath,'cells.pickle'),'wb'))
+        pickle.dump(self.vg.groups,open(os.path.join(outpath,'groups.pickle'),'wb'))
+
 
 
 
@@ -1670,6 +1727,7 @@ class CellComplex:
         self.tree = pickle.load(open(os.path.join(inpath,'tree.pickle'),'rb'))
         self.graph = pickle.load(open(os.path.join(inpath,'graph.pickle'),'rb'))
         self.cells = pickle.load(open(os.path.join(inpath,'cells.pickle'),'rb'))
+        self.vg.groups = pickle.load(open(os.path.join(inpath,'groups.pickle'),'rb'))
 
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 

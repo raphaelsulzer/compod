@@ -184,14 +184,18 @@ class VertexGroup:
             # TODO: i am computing the convex hull twice below; not necessary
 
             ## make the polys
-            ## make a trimesh of each input polygon
+            ## make a trimesh of each input polygon, used for getting the area of each input poly for area based sorting
             pl = PyPlane(self.planes[i])
             poly = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
             self.polygons.append(poly)
             self.polygon_areas.append(poly.area)
 
+            ## this is used for finding points associated to facets of the partition for normal based occupancy voting
+            self.projected_points[vert_group] = pl.project_points_to_plane(pts)[:,:2]
+
+            ## this is used for _get_best_plane function
             pch = ProjectedConvexHull(self.planes[i],pts)
-            self.projected_points[vert_group] = pch.all_projected_points_2d
+            # self.projected_points[vert_group] = pch.all_projected_points_2d
             self.hull_vertices.append(vert_group[pch.hull.vertices])
             n_hull_vertices = len(pch.hull.vertices)
             if n_hull_vertices > self.n_fill:
@@ -253,7 +257,7 @@ class VertexGroup:
         pe = PlaneExporter()
         pt_file = os.path.splitext(self.path)[0]+"_samples.ply"
         plane_file =  os.path.splitext(self.path)[0]+'.ply'
-        pe.save_points_and_planes([pt_file,plane_file],self.points, self.groups, self.planes, colors=self.plane_colors)
+        pe.save_points_and_planes([pt_file,plane_file],self.points, self.normals, self.groups, self.planes, colors=self.plane_colors)
 
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)
@@ -264,6 +268,7 @@ class VertexGroup:
             self.hull_vertices = self.hull_vertices[order]
             self.plane_colors = self.plane_colors[order]
         else:
+            self.plane_order = np.arange(len(self.planes))
             self.logger.info("No plane prioritisation applied")
 
         del self.polygons
