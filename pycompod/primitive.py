@@ -257,7 +257,7 @@ class VertexGroup:
         pe = PlaneExporter()
         pt_file = os.path.splitext(self.path)[0]+"_samples.ply"
         plane_file =  os.path.splitext(self.path)[0]+'.ply'
-        pe.save_points_and_planes([pt_file,plane_file],self.points, self.normals, self.groups, self.planes, colors=self.plane_colors)
+        pe.save_points_and_planes([pt_file,plane_file],points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
 
         if self.prioritise_planes:
             order = self._prioritise_planes(self.prioritise_planes)

@@ -24,6 +24,7 @@ from tqdm import tqdm
 import open3d as o3d
 from collections import defaultdict
 from copy import deepcopy
+import gco # pip install gco-wrapper
 
 from .export_complex import CellComplexExporter
 from .imports import *
@@ -168,6 +169,7 @@ class CellComplex:
         dtype = self.vg.input_planes.dtype
         self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
 
+        max_node_id = max(list(self.graph.nodes))
         for i,plane in enumerate(bb_planes):
 
 
@@ -177,17 +179,18 @@ class CellComplex:
             if self.debug_export:
                 self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
 
-            self.cells[-(i+1)] = op
-            self.graph.add_node(-(i+1), occupancy=0.0)
-
+            # self.cells[-(i+1)] = op
+            # self.graph.add_node(-(i+1), occupancy=0.0)
+            self.cells[i+1+max_node_id] = op
+            self.graph.add_node(i+1+max_node_id, bounding_box=True)
 
             for cell_id in list(self.graph.nodes):
 
                 intersection = op.intersection(self.cells.get(cell_id))
 
                 if intersection.dim() == 2:
-                    self.graph.add_edge(-(i+1),cell_id,intersection=None, vertices=[],
-                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box_edge=True)
+                    self.graph.add_edge(i+1+max_node_id,cell_id, intersection=None, vertices=[],
+                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=True)
 
 
 
@@ -549,7 +552,7 @@ class CellComplex:
             sm.saveMesh(filename)
         elif backend == "python":
             if triangulate:
-                self.logger.warning("Mesh will not be triangulated")
+                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' instead.")
             pset = set(all_points)
             pset = np.array(list(pset),dtype=object)
             facets = []
@@ -561,7 +564,7 @@ class CellComplex:
             self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
         elif backend == "trimesh":
             if not triangulate:
-                self.logger.warning("Mesh will be triangulated")
+                self.logger.warning("Mesh will be triangulated. Choose backend 'python' or 'cgal' instead.")
             def _triangulate_points(v):
                 n = len(v)
                 triangles = []
@@ -853,57 +856,89 @@ class CellComplex:
         f.close()
 
 
-    def graph_cut(self):
+    def _graph_cut(self,occs,binary_weight=0.2):
 
-        self.logger.info("Apply label regularization with graph-cut...")
+        graph = nx.convert_node_labels_to_integers(self.graph)
 
-        dtype = np.int64
+        labels = (occs[:,0]<occs[:,1]).astype(np.int32)
+
+
+        self.logger.info("Apply occupancy regularization with graph cut (λ={:.2g})...".format(binary_weight))
+
+        assert len(occs) == len(graph.nodes)
+
+        dtype = np.float64
         # Internally, in the pyGCO code datatype is always converted to np.int32
         # I would need to use my own version of GCO (or modify the one used by pyGCO) to change that
         # Should probably be done at some point to avoid int32 overflow for larger scenes.
 
 
-
         gc = gco.GCO()
-        gc.create_general_graph(len(self.graph.nodes) + 1, 2, energy_is_float=False)
+        gc.create_general_graph(len(graph.nodes), 2, energy_is_float=True)
         # data_cost = F.softmax(prediction, dim=-1)
-        prediction[:, [0, 1]] = prediction[:, [1, 0]]
-        data_cost = (prediction * clf.graph_cut.unary_weight).round()
+
         # data_cost = prediction
-        data_cost = np.array(data_cost, dtype=dtype)
+        data_cost = np.array(occs, dtype=dtype)*4
+
         ### append high cost for inside for infinite cell
         # data_cost = np.append(data_cost, np.array([[-10000, 10000]]), axis=0)
         gc.set_data_cost(data_cost)
         smooth = (1 - np.eye(2)).astype(dtype)
         gc.set_smooth_cost(smooth)
-        if (not clf.graph_cut.binary_type):
-            edge_weight = np.ones(edges.shape[0], dtype=dtype)
-        else:
-            # TODO: retrieve the beta-skeleton and area value from the features to weight the binaries
-            edge_weight = np.ones(edges.shape[0], dtype=dtype)
 
-        gc.set_all_neighbors(edges[:, 0], edges[:, 1], edge_weight * clf.graph_cut.binary_weight)
+        edges = np.array(graph.edges)
+
+        edge_weight = np.ones(edges.shape[0], dtype=dtype)*4/edges.shape[0]
+
+        gc.set_all_neighbors(edges[:, 0], edges[:, 1], edge_weight * binary_weight)
 
         for i, l in enumerate(labels):
             gc.init_label_at_site(i, l)
 
-        # print("before smooth: ",gc.compute_smooth_energy())
-        # print("before data: ", gc.compute_data_energy())
-        # print("before: ", gc.compute_smooth_energy()+gc.compute_data_energy())
+        self.logger.debug("Energy before GC (D + λ*S): {:.2g} + {:.2g}*{:.2g} = {:.2g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
+                                                            gc.compute_data_energy()+gc.compute_smooth_energy()))
 
         gc.expansion()
-
-        # print("after: ", gc.compute_smooth_energy()+gc.compute_data_energy())
-
-        # print("after smooth: ",gc.compute_smooth_energy())
-        # print("after data: ", gc.compute_data_energy())
+        self.logger.debug("Energy after GC (D + λ*S): {:.2g} + {:.2g}*{:.2g} = {:.2g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
+                                                            gc.compute_data_energy() + gc.compute_smooth_energy()))
 
         labels = gc.get_labels()
 
         return labels
 
+    def label_partition(self,outpath=None,**args):
 
-    def label_partition_with_mesh(self, outpath, n_test_points=50,graph_cut=True):
+        self.logger.info('Label {} cells...'.format(len(self.graph.nodes)))
+
+        if args["type"] == "pc":
+            occs = self.label_partition_with_point_normals()
+        elif args["type"] == "mesh":
+            occs = self.label_partition_with_mesh(args["n_test_points"])
+        else:
+            self.logger.error("{} is not a valid labelling type. Choose either 'pc' or 'mesh'.".format(args["type"]))
+            raise NotImplementedError
+
+
+        if outpath is not None:
+            # save occupancies to file
+            np.savez(os.path.join(outpath,"occupancies.npz"),occupancies=occs,type=args["type"])
+
+        # foccs = dict(zip(self.graph.nodes, occs))
+        # nx.set_node_attributes(self.graph,occs,"float_occupancy")
+        #
+        if args["graph_cut"]:
+            # occs = self.graph_cut(occs)
+            occs = self._graph_cut(occs,args["binary_weight"])
+        else:
+            occs = occs[:,0]>occs[:,1]
+        
+        assert len(occs) == len(self.graph.nodes), "Number of cccupancy labels and graph nodes is not the same."
+        occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+
+        nx.set_node_attributes(self.graph,occs,"occupancy")
+
+
+    def label_partition_with_mesh(self, n_test_points=50):
         """
         Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
         :param m:
@@ -920,7 +955,9 @@ class CellComplex:
         points_len = []
         # for i,id in enumerate(list(self.graph.nodes)):
         for id,cell in self.cells.items():
-            if id < 0:  continue # skip the bounding box cells
+            # if id < 0:  continue # skip the bounding box cells
+            bb = self.graph.nodes[id].get("bounding_box",0)
+            if bb:  continue # skip the bounding box cells
             # cell = self.cells.get(id)
             if self.debug_export:
                 self.cellComplexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
@@ -934,23 +971,14 @@ class CellComplex:
         occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
         del pl
 
-        # save occupancies to file
-        np.savez(os.path.join(outpath,"occupancies.npz"),occupancies=occs)
+        occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
+        occs = np.array([occs,1-occs]).transpose()
 
-        # foccs = dict(zip(self.graph.nodes, occs))
-        # nx.set_node_attributes(self.graph,occs,"float_occupancy")
-        #
-        if graph_cut:
-            # occs = self.graph_cut(occs)
-            occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
-        else:
-            occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+        return occs
 
-        nx.set_node_attributes(self.graph,occs,"occupancy")
 
-    @profile
+
     def _collect_facet_points(self):
-        # @profile
         # def convex_contains1(convex, points):
         #     """
         #     If point is left of all support lines, it is contained by the convex
@@ -966,8 +994,13 @@ class CellComplex:
         #     y = points[np.newaxis, :, 1]
         #     k = (a * x + b * y) >= -c
         #     return k.all(axis=0)
-        @profile
         def convex_contains2(vertices, points):
+            """
+            Check if points are contained in a convex polygon.
+            :param vertices: The vertices of the convex polygon.
+            :param points: The points array.
+            :return:
+            """
             sides = []
             n = len(vertices)
             for i in range(n):
@@ -979,7 +1012,7 @@ class CellComplex:
 
             sides = np.array(sides)
             sides1 = sides < 0
-            sides2 = ~sides1
+            sides2 = ~sides1 # orientation of the facet is unknown, so need to check for both sides
             sides1 = sides1.all(axis=0)
             sides2 = sides2.all(axis=0)
             sides = np.logical_or(sides1,sides2)
@@ -996,14 +1029,15 @@ class CellComplex:
                 point_ids_dict[(e0, e1)] = np.empty(shape=0,dtype=np.int32)
                 continue
 
+            group = self.vg.groups[edge["group_id"]]
+
+            ## use my own contains functions because no need to do this with QQ bqse_ring and changing it to RDF is not robust.
+            ## this works but is slow
             # polygon = edge["intersection"].affine_hull_projection()
+            # contain = convex_contains1(polygon, self.vg.projected_points[group])
+            ## this is much faster and gives the same result
             vertices = np.array(edge["intersection"].vertices())
             vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
-            # vertices = vertices[self._sort_vertex_indices_by_angle_exact(vertices,self.vg.planes[edge["supporting_plane_id"]])][:,:2]
-
-            group = self.vg.groups[edge["group_id"]]
-            # my own containes function because no need to do this with QQ bqse_ring and changing it to RDF is not robust.
-            # contain = convex_contains1(polygon, self.vg.projected_points[group])
             contain = convex_contains2(vertices, self.vg.projected_points[group])
 
             point_ids_dict[(e0, e1)] = group[contain]
@@ -1018,13 +1052,14 @@ class CellComplex:
 
         nx.set_edge_attributes(self.graph,point_ids_dict,"point_ids")
 
-    @profile
     def _collect_node_votes(self):
-        occupancy_dict = dict()
+        # occupancy_dict = dict()
+        occs = []
         for node in self.graph.nodes:
 
-            if node < 0:
-                occupancy_dict[node] = (0,1000)
+            if self.graph.nodes[node].get("bounding_box",0):
+                # occupancy_dict[node] = (0,1000)
+                occs.append([0,1000])
                 continue
 
             centroid = np.array(self.cells[node].vertices()).mean(axis=0)
@@ -1045,9 +1080,6 @@ class CellComplex:
                 inside_weight+=(dp<0).sum()
                 outside_weight+=(dp>0).sum()
 
-
-
-
             if self.debug_export:
                 if len(cell_points):
                     st = "in" if inside_weight <= outside_weight else "out"
@@ -1058,12 +1090,14 @@ class CellComplex:
                                                           points=np.concatenate(cell_points),normals=np.concatenate(cell_normals),
                                                           subfolder="labelling_cells")
 
-            occupancy_dict[node] = (inside_weight,outside_weight)
+            # occupancy_dict[node] = (inside_weight,outside_weight)
+            occs.append([inside_weight,outside_weight])
 
-        nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
+        return np.array(occs)/(2*len(self.vg.points))
+        # nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
 
 
-    def label_partition_with_point_normals(self, outpath, graph_cut=True):
+    def label_partition_with_point_normals(self):
         """
         Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
         :param outpath:
@@ -1072,15 +1106,8 @@ class CellComplex:
         """
 
         self._collect_facet_points()
-        self._collect_node_votes()
+        return self._collect_node_votes()
 
-        for node in self.graph.nodes:
-            node = self.graph.nodes[node]
-            occ = node["occupancy"]
-            if occ[0]>occ[1]:
-                node["occupancy"] = int(1)
-            else:
-                node["occupancy"] = int(0)
 
 
     def _get_best_split(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
@@ -1420,8 +1447,10 @@ class CellComplex:
         self.logger.info('Simplify partition (tree-based) with iterative sibling collapse...')
 
         def filter_edge(n0,n1):
-            if n0 < 0 or n1 < 0:
+            if self.graph.edges[n0,n1].get("bounding_box",0):
                 return False
+            # if n0 < 0 or n1 < 0:
+            #     return False
             if not self.tree[n0].is_leaf():
                 return False
             if not self.tree[n1].is_leaf():
