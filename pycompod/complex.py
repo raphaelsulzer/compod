@@ -1063,8 +1063,13 @@ class CellComplex:
         nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
 
 
-    @profile
-    def label_partition_with_point_normals(self, outpath, n_test_points=50,graph_cut=True):
+    def label_partition_with_point_normals(self, outpath, graph_cut=True):
+        """
+        Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
+        :param outpath:
+        :param graph_cut:
+        :return:
+        """
 
         self._collect_facet_points()
         self._collect_node_votes()
@@ -1078,12 +1083,16 @@ class CellComplex:
                 node["occupancy"] = int(0)
 
 
-
-
-
     def _get_best_split(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+        """
+        CPU version of _get_best_split_gpu().
+        Note: This function could also be written with a single loop and np.tensordot, just like _get_best_split_gpu, but it will make it actually slightly slower.
 
-        # this function could also be written with a single loop and np.tensordot, just like _get_best_split_gpu, but it will make it actually slightly slower
+        :param current_ids:
+        :param primitive_dict:
+        :param insertion_order:
+        :return:
+        """
 
         earlystop = False
         if "earlystop" in insertion_order:
@@ -1195,23 +1204,14 @@ class CellComplex:
 
 
     def _get_best_plane(self,current_ids,insertion_order="product-earlystop"):
-
         """
-        Prioritise certain planes to favour building reconstruction.
-
-        First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
-        to avoid incomplete partitioning due to missing data about building facades.
-        Second, in the same priority class, planar primitives with larger areas are assigned higher priority
-        than smaller ones, to make the final cell complex as compact as possible.
-        Note that this priority setting is designed exclusively for building models.
-
-        Parameters
-        ----------
-        prioritise_verticals: bool
-            Prioritise vertical planes if set True
+        Get the best plane from the planes in the current cell (ie from current_ids).
+        :param current_ids: The planes in the current cell.
+        :param insertion_order: The insertion order type.
+        :return: The ID of the best plane in the current cell according to insertion order type. The ID is relativ to the current_ids, ie for getting the global id do current_ids[ID].
         """
 
-        pgs = None
+        pgs = None # this probably has to be self.vg.groups[current_ids] but never tested these functions
 
         if insertion_order == "random":
             return np.random.choice(len(current_ids),size=1)[0]
