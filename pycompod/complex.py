@@ -214,7 +214,31 @@ class CellComplex:
 
         return np.argsort(radians)
 
+    def _sorted_vertex_indices(self,adjacency_matrix):
+        """
+        Return sorted vertex indices.
 
+        Parameters
+        ----------
+        adjacency_matrix: matrix
+            Adjacency matrix
+
+        Returns
+        -------
+        sorted_: list of int
+            Sorted vertex indices
+        """
+        pointer = 0
+        sorted_ = [pointer]
+        for _ in range(len(adjacency_matrix[0]) - 1):
+            connected = np.where(adjacency_matrix[pointer])[0]  # two elements
+            if connected[0] not in sorted_:
+                pointer = connected[0]
+                sorted_.append(connected[0])
+            else:
+                pointer = connected[1]
+                sorted_.append(connected[1])
+        return sorted_
 
     def _orient_polygon_exact(self, points, outside):
         # check for left or right orientation
@@ -926,56 +950,45 @@ class CellComplex:
 
     @profile
     def _collect_facet_points(self):
+        # @profile
+        # def convex_contains1(convex, points):
+        #     """
+        #     If point is left of all support lines, it is contained by the convex
+        #     :param convex:
+        #     :param points:
+        #     :return:
+        #     """
+        #     ineqs = np.array(convex.inequalities())
+        #     c = ineqs[:, 0, np.newaxis]
+        #     a = ineqs[:, 1, np.newaxis]
+        #     b = ineqs[:, 2, np.newaxis]
+        #     x = points[np.newaxis, :, 0]
+        #     y = points[np.newaxis, :, 1]
+        #     k = (a * x + b * y) >= -c
+        #     return k.all(axis=0)
         @profile
-        def convex_contains(convex, points):
-            """
-            If point is left of all support lines, it is contained by the convex
-            :param convex:
-            :param points:
-            :return:
-            """
-            ineqs = np.array(convex.inequalities())
-            c = ineqs[:, 0, np.newaxis]
-            a = ineqs[:, 1, np.newaxis]
-            b = ineqs[:, 2, np.newaxis]
-            x = points[np.newaxis, :, 0]
-            y = points[np.newaxis, :, 1]
-            k = (a * x + b * y) >= -c
-            return k.all(axis=0)
-        # def convex_contains(point, vertices):
-        #     def get_side(a, b):
-        #         x = cosine_sign(a, b)
-        #         if x < 0:
-        #             return LEFT
-        #         elif x > 0:
-        #             return RIGHT
-        #         else:
-        #             return None
-        #
-        #     def v_sub(a, b):
-        #         return (a[0] - b[0], a[1] - b[1])
-        #
-        #     def cosine_sign(a, b):
-        #         return a[0] * b[1] - a[1] * b[0]
-        #
-        #     previous_side = None
-        #     n_vertices = len(vertices)
-        #     for n in xrange(n_vertices):
-        #         a, b = vertices[n], vertices[(n + 1) % n_vertices]
-        #         affine_segment = v_sub(b, a)
-        #         affine_point = v_sub(point, a)
-        #         current_side = get_side(affine_segment, affine_point)
-        #         if current_side is None:
-        #             return False  # outside or over an edge
-        #         elif previous_side is None:  # first segment
-        #             previous_side = current_side
-        #         elif previous_side != current_side:
-        #             return False
-        #     return True
+        def convex_contains2(vertices, points):
+            sides = []
+            n = len(vertices)
+            for i in range(n):
+                x0 = vertices[i, 0]
+                x1 = vertices[(i + 1) % n, 0]
+                y0 = vertices[i, 1]
+                y1 = vertices[(i + 1) % n, 1]
+                sides.append((points[:, 1] - y0) * (x1 - x0) - (points[:, 0] - x0) * (y1 - y0))
+
+            sides = np.array(sides)
+            sides1 = sides < 0
+            sides2 = ~sides1
+            sides1 = sides1.all(axis=0)
+            sides2 = sides2.all(axis=0)
+            sides = np.logical_or(sides1,sides2)
+            return sides
 
 
 
         point_ids_dict = dict()
+        count=0
         for e0, e1 in self.graph.edges:
 
             edge = self.graph.edges[e0, e1]
@@ -983,12 +996,15 @@ class CellComplex:
                 point_ids_dict[(e0, e1)] = np.empty(shape=0,dtype=np.int32)
                 continue
 
-            polygon = edge["intersection"].affine_hull_projection()
-            # polygon = edge["intersection"]
+            # polygon = edge["intersection"].affine_hull_projection()
+            vertices = np.array(edge["intersection"].vertices())
+            vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
+            # vertices = vertices[self._sort_vertex_indices_by_angle_exact(vertices,self.vg.planes[edge["supporting_plane_id"]])][:,:2]
 
             group = self.vg.groups[edge["group_id"]]
             # my own containes function because no need to do this with QQ bqse_ring and changing it to RDF is not robust.
-            contain = convex_contains(polygon, self.vg.projected_points[group])
+            # contain = convex_contains1(polygon, self.vg.projected_points[group])
+            contain = convex_contains2(vertices, self.vg.projected_points[group])
 
             point_ids_dict[(e0, e1)] = group[contain]
 
@@ -997,8 +1013,8 @@ class CellComplex:
                 count += 1
                 col = np.random.randint(0, 255, size=3)
                 if len(pts):
-                    self.cellComplexExporter.write_points(self.model, pts, count=str(count) + "c", color=col)
-                    self.cellComplexExporter.write_facet(self.model, edge["intersection"], count=count, color=col)
+                    self.cellComplexExporter.write_points(self.model, pts, subfolder="labelling_facets", count=str(count) + "c", color=col)
+                    # self.cellComplexExporter.write_facet(self.model, edge["intersection"], subfolder="labelling_facets", count=count, color=col)
 
         nx.set_edge_attributes(self.graph,point_ids_dict,"point_ids")
 
@@ -1033,13 +1049,14 @@ class CellComplex:
 
 
             if self.debug_export:
-                st = "in" if inside_weight <= outside_weight else "out"
-                color = np.random.randint(0, 255, size=3)
-                self.cellComplexExporter.write_cell(self.model,self.cells[node],
-                                                    count=str(node)+st,subfolder="labelling",color=color)
-                self.cellComplexExporter.write_points(self.model, color=color, count=str(node)+st,
-                                                      points=np.concatenate(cell_points),normals=np.concatenate(cell_normals),
-                                                      subfolder="labelling")
+                if len(cell_points):
+                    st = "in" if inside_weight <= outside_weight else "out"
+                    color = np.random.randint(0, 255, size=3)
+                    self.cellComplexExporter.write_cell(self.model,self.cells[node],
+                                                        count=str(node)+st,subfolder="labelling_cells",color=color)
+                    self.cellComplexExporter.write_points(self.model, color=color, count=str(node)+st,
+                                                          points=np.concatenate(cell_points),normals=np.concatenate(cell_normals),
+                                                          subfolder="labelling_cells")
 
             occupancy_dict[node] = (inside_weight,outside_weight)
 
