@@ -1,9 +1,7 @@
 import os
 import numpy as np
-import open3d as o3d
-from pathlib import Path
 
-class CellComplexExporter:
+class PolyhedralComplexExporter:
     """
     Class of cell complex from planar primitive arrangement.
     """

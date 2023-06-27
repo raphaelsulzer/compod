@@ -1,4 +1,4 @@
-__all__ = ['CellComplex','CellComplexExporter', 'VertexGroup', 'AdjacencyGraph']
+__all__ = ['PolyhedralComplex','PolyhedralComplexExporter', 'VertexGroup']
 
 from .complex import *
 from .export_complex import *

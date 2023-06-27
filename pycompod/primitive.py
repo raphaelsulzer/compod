@@ -1,20 +1,19 @@
-import os, sys, struct
+import os, sys
 from pathlib import Path
 import numpy as np
 from sage.all import polytopes, QQ, Polyhedron
 from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
 from pyplane.export import PlaneExporter
-from fancycolor.color import FancyColor
 import copy
+import logging
 
 class VertexGroup:
     """
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, path, prioritise_planes = None,
-                 points_type="inliers", total_sample_count=100000,
-                 device='gpu', logger=None):
+    def __init__(self, input_file, prioritise = None,
+                 points_type="inliers", total_sample_count=100000, recolor=False, logger=None):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -27,20 +26,22 @@ class VertexGroup:
 
         self.logger = logger if logger else logging.getLogger("COMPOD")
 
-        self.path = path
-        self.prioritise_planes = prioritise_planes
+        self.input_file = input_file
+        self.prioritise = prioritise
         self.total_sample_count = total_sample_count
         self.points_type = points_type
-        self.device = device
+        self.recolor = recolor
 
-        ending = os.path.splitext(self.path)[1]
+        ending = os.path.splitext(self.input_file)[1]
         if ending == ".npz":
             self._process_npz()
         else:
-            print("{} is not a valid file type for planes".format(ending))
+            self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
             sys.exit(1)
 
     def _recolor_planes(self):
+
+        from fancycolor.color import FancyColor
 
         bbox = np.vstack((self.points.min(axis=0),self.points.max(axis=0)))
 
@@ -156,7 +157,7 @@ class VertexGroup:
         Start processing vertex group.
         """
 
-        data = np.load(self.path)
+        data = np.load(self.input_file)
 
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(np.float32)
@@ -207,11 +208,12 @@ class VertexGroup:
 
         assert self.points.shape[0] == self.projected_points.shape[0]
 
-        self._recolor_planes()
-        # save with new colors
-        data = dict(data)
-        data["group_colors"] = self.plane_colors
-        np.savez(self.path,**data)
+        if self.recolor:
+            self._recolor_planes()
+            # save with new colors
+            data = dict(data)
+            data["group_colors"] = self.plane_colors
+            np.savez(self.input_file,**data)
 
         self.polygons = np.array(self.polygons)
         self.polygon_areas = np.array(self.polygon_areas)
@@ -255,11 +257,11 @@ class VertexGroup:
 
         ## export planes and samples
         pe = PlaneExporter()
-        pt_file = os.path.splitext(self.path)[0]+"_samples.ply"
-        plane_file =  os.path.splitext(self.path)[0]+'.ply'
+        pt_file = os.path.splitext(self.input_file)[0]+"_samples.ply"
+        plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
         pe.save_points_and_planes([pt_file,plane_file],points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
 
-        if self.prioritise_planes:
+        if self.prioritise:
             order = self._prioritise_planes(self.prioritise_planes)
             self.plane_order = order
             self.planes = self.planes[order]

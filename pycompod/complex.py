@@ -9,24 +9,22 @@ with adaptive binary space partitioning: upon insertion of a primitive
 only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
-import copy
-import os
-import time, multiprocessing, pickle, logging, trimesh
+
+import time, multiprocessing, pickle, logging, trimesh, copy, warnings
 from pathlib import Path
-from fractions import Fraction
 
 import numpy as np
-from tqdm import trange
+from tqdm import trange, tqdm
 import networkx as nx
 from sage.all import QQ, RDF, ZZ, Polyhedron, vector, arctan2
 from treelib import Tree
-from tqdm import tqdm
-import open3d as o3d
 from collections import defaultdict
-from copy import deepcopy
-import gco # pip install gco-wrapper
 
-from .export_complex import CellComplexExporter
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    import gco # pip install gco-wrapper
+
+from .export_complex import PolyhedralComplexExporter
 from .imports import *
 import libPyLabeler as PL
 import libSoup2Mesh as s2m
@@ -34,11 +32,11 @@ from pyplane.export import PlaneExporter
 from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
 from fancycolor.color import FancyColor
 
-class CellComplex:
+class PolyhedralComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, model, vertex_group, initial_padding=0.02, device='cpu', logger=None, debug_export=False):
+    def __init__(self, vertex_group, padding=0.02, device='cpu', logger=None, debug_export=False, model=None):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -52,16 +50,15 @@ class CellComplex:
         points: (n, ) object of float
             Points grouped into primitives, points[any]: (m, 3)
         """
-        self.model = model
         self.planeExporter = PlaneExporter()
-        self.cellComplexExporter = CellComplexExporter(self)
+        self.complexExporter = PolyhedralComplexExporter(self)
 
         self.vg = vertex_group
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
 
         self.logger = logger if logger else logging.getLogger("COMPOD")
 
-        self.logger.debug('Init cell complex with padding {}'.format(initial_padding))
+        self.logger.debug('Init cell complex with padding {}'.format(padding))
 
         self.cells = dict()
         self.tree = None
@@ -74,12 +71,19 @@ class CellComplex:
             self.torch = None
 
         self.polygons_initialized = False
+        self.polygons_constructed = False
 
         # init the bounding box
-        self.initial_padding = initial_padding
-        self.bounding_poly = self._init_bounding_box(padding=self.initial_padding)
+        self.padding = padding
+        self.bounding_poly = self._init_bounding_box(padding=self.padding)
+
 
         self.debug_export = debug_export
+        if self.debug_export and model is None:
+            self.logger.warning('Debug export only works if dataset model is passed.')
+            self.debug_export = False
+        else:
+            self.model = model
 
         if self.debug_export:
             self.logger.warning('Debug export activated. Turn off for faster processing.')
@@ -140,7 +144,7 @@ class CellComplex:
         pmin = vector(self.bounding_poly.bounding_box()[0])
         pmax = vector(self.bounding_poly.bounding_box()[1])
         d = pmax-pmin
-        d = d*QQ(self.initial_padding*10)
+        d = d*QQ(self.padding*10)
         pmin = pmin-d
         pmax = pmax+d
 
@@ -177,7 +181,7 @@ class CellComplex:
             op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
 
             if self.debug_export:
-                self.cellComplexExporter.write_cell(self.model,op,count=-(i+1))
+                self.complexExporter.write_cell(self.model,op,count=-(i+1))
 
             # self.cells[-(i+1)] = op
             # self.graph.add_node(-(i+1), occupancy=0.0)
@@ -289,7 +293,7 @@ class CellComplex:
         return intersection_points
 
 
-    def save_colored_soup(self, filename):
+    def save_colored_soup(self, out_file):
 
         self.logger.info('Save colored surface soup...')
 
@@ -337,24 +341,173 @@ class CellComplex:
                 n_points += len(intersection_points)
 
         all_points = np.array(all_points, dtype=float)
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.logger.debug('Save colored polygon soup to {}'.format(filename))
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        self.logger.debug('Save colored polygon soup to {}'.format(out_file))
 
-        self.cellComplexExporter.write_colored_soup_to_ply(filename, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
+        self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
 
 
-    def save_simplified_surface(self, filename, backend = "python", triangulate = False):
+    # def save_simplified_surface(self, out_file, backend="python", triangulate=False):
+    #
+    #     """
+    #     This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
+    #     Result is that some simplified meshes are not watertight.
+    #
+    #     :param out_file:
+    #     :param backend:
+    #     :param triangulate:
+    #     :return:
+    #     """
+    #
+    #     # TODO: maybe it can work to do a simplified mesh, by using the graph I can obtain from
+    #     # mesh = trimesh.submesh(face_ids) and the fact that vertices I need are vertices that come from the intersection of at least 3 planes
+    #     # next, only submeshes with holes need to be triangulated
+    #
+    #     def _triangulate_points(v, attribute):
+    #         n = len(v)
+    #         triangles = []
+    #         attributes = []
+    #         for i in range(n - 2):
+    #             tri = [0, i % n + 1, i % n + 2]
+    #             triangles.append(v[tri])
+    #             attributes.append(attribute)
+    #
+    #         return triangles, attributes
+    #
+    #     self.logger.info('Save simplified surface mesh ({})...'.format(backend))
+    #
+    #     all_points = []
+    #     all_triangles = []
+    #     all_triangle_plane_ids = []
+    #     n_points = 0
+    #     for e0, e1 in self.graph.edges:
+    #
+    #         c0 = self.graph.nodes[e0]
+    #         c1 = self.graph.nodes[e1]
+    #
+    #         if c0["occupancy"] != c1["occupancy"]:
+    #
+    #             intersection_points = self._get_intersection(e0, e1)
+    #
+    #             plane_id = self.graph[e0][e1]["supporting_plane_id"]
+    #             plane = self.vg.input_planes[plane_id]
+    #             correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points, plane)
+    #
+    #             assert (len(intersection_points) == len(correct_order))
+    #             intersection_points = intersection_points[correct_order]
+    #
+    #             ## orient polygon
+    #             ## here we want facets coming from the same plane to be oriented the same
+    #
+    #             outside = vector(intersection_points[0]) + vector([QQ(plane[1]), QQ(plane[2]), QQ(plane[3])])
+    #             if self._orient_polygon_exact(intersection_points, outside):
+    #                 intersection_points = np.flip(intersection_points, axis=0)
+    #
+    #             all_points.append(intersection_points)
+    #
+    #             polys = np.arange(len(intersection_points)) + n_points
+    #
+    #             tris, plane_ids = _triangulate_points(polys, plane_id)
+    #             all_triangles.append(tris)
+    #             all_triangle_plane_ids.append(plane_ids)
+    #
+    #             n_points += len(intersection_points)
+    #
+    #     os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    #     self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend, out_file))
+    #
+    #     ## make a mesh, where each face of the partition is a triangulated face of the mesh
+    #     all_points = np.concatenate(all_points).astype(float)
+    #     all_triangles = np.concatenate(all_triangles)
+    #     all_triangle_plane_ids = np.concatenate(all_triangle_plane_ids)
+    #     atpd = {}
+    #     for i, id in enumerate(all_triangle_plane_ids):
+    #         atpd[i] = id
+    #     mesh = trimesh.Trimesh(vertices=all_points, faces=all_triangles, face_attributes=atpd)
+    #     mesh.merge_vertices()
+    #
+    #
+    #     vertex_faces = mesh.vertex_faces
+    #     extreme_vert = dict()
+    #     vcols = []
+    #     face_region = np.array(list(mesh.face_attributes.values()))
+    #     for i,vf in enumerate(vertex_faces):
+    #
+    #         vf = vf[vf > -1]
+    #         t = set(face_region[vf])
+    #         extreme_vert[i] = len(t) > 2
+    #         vcols.append([255, 0, 0] if len(t) > 2 else [0, 255, 0])
+    #
+    #     emesh = copy.deepcopy(mesh)
+    #     emesh.visual.vertex_colors = np.array(vcols)
+    #     emesh.face_attributes = dict()
+    #     emesh.export(out_file[:-4] + "_trimesh.ply")
+    #
+    #     ## collect the regions of the mesh, ie facets that came from the same plane
+    #     region_dict = defaultdict(list)
+    #     for i, f in enumerate(mesh.face_attributes.values()):
+    #         region_dict[f] += [i]
+    #
+    #     polygons = []
+    #     polygon_lens = []
+    #
+    #     from triangle import triangulate
+    #
+    #     ## apply a constrained delaunay triangulation to the regions
+    #     for plane_id, faces in region_dict.items():
+    #
+    #         region_faces = mesh.faces[faces]
+    #         # region_verts = np.concatenate(mesh.vertices[region_faces])
+    #         # region_attr = dict()
+    #         # region_attr["vertex_index"] = np.concatenate(region_faces)
+    #         this_region_mesh = trimesh.Trimesh(vertices=mesh.vertices,faces=region_faces,process=False)
+    #
+    #         # TODO: now I need to turn the unique edges of a closed path only containing the extreme verts
+    #         # if there is more than one closed path, the region must be triangulated.
+    #
+    #         poly = []
+    #         for edge in this_region_mesh.edges_unique:
+    #             if extreme_vert[edge[0]]:
+    #                 poly.append(edge[0])
+    #
+    #
+    #
+    #         a=5
+    #
+    #
+    #
+    #
+    #     verts = np.array(mesh.vertices)
+    #
+    #     if backend == "cgal":
+    #         sm = s2m.Soup2Mesh()
+    #         sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
+    #         sm.makeMesh(True)
+    #         sm.saveMesh(out_file)
+    #     elif backend == "python":
+    #         mesh = trimesh.Trimesh(vertices=verts, faces=np.concatenate(polygons))
+    #         mesh.export(out_file)
+    #     else:
+    #         raise NotImplementedError
+
+
+
+    def save_simplified_surface(self, out_file, backend = "python", triangulate = False):
 
         """
         This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
         Result is that some simplified meshes are not watertight.
 
-        :param filename:
+        :param out_file:
         :param backend:
         :param triangulate:
         :return:
         """
+
+        # TODO: maybe it can work to do a simplified mesh, by using the graph I can obtain from
+        # mesh = trimesh.submesh(face_ids) and the fact that vertices I need are vertices that come from the intersection of at least 3 planes
+        # next, only submeshes with holes need to be triangulated
 
         def _triangulate_points(v, attribute):
             n = len(v)
@@ -398,9 +551,9 @@ class CellComplex:
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 all_points.append(intersection_points)
-                
+
                 polys = np.arange(len(intersection_points))+n_points
-                
+
                 tris, plane_ids = _triangulate_points(polys,plane_id)
                 all_triangles.append(tris)
                 all_triangle_plane_ids.append(plane_ids)
@@ -409,9 +562,9 @@ class CellComplex:
                 n_points+=len(intersection_points)
 
 
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,filename))
-        
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend,out_file))
+
         ## make a mesh, where each face of the partition is a triangulated face of the mesh
         all_points = np.concatenate(all_points).astype(float)
         all_triangles = np.concatenate(all_triangles)
@@ -423,14 +576,14 @@ class CellComplex:
         mesh.merge_vertices()
         emesh = deepcopy(mesh)
         emesh.face_attributes = dict()
-        emesh.export(filename[:-4]+"_trimesh.ply")
+        emesh.export(out_file[:-4]+"_trimesh.ply")
 
 
         ## collect the regions of the mesh, ie facets that came from the same plane
         region_dict = defaultdict(list)
         for i,f in enumerate(mesh.face_attributes.values()):
             region_dict[f]+=[i]
-            
+
         polygons = []
         polygon_lens = []
 
@@ -487,30 +640,29 @@ class CellComplex:
             sm = s2m.Soup2Mesh()
             sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
             sm.makeMesh(True)
-            sm.saveMesh(filename)
+            sm.saveMesh(out_file)
         elif backend == "python":
             mesh = trimesh.Trimesh(vertices=verts,faces=np.concatenate(polygons))
-            mesh.export(filename)
+            mesh.export(out_file)
         else:
             raise NotImplementedError
 
 
-    def save_surface(self, filename, backend = "python", triangulate = False):
+    def save_surface(self, out_file, backend = "python", triangulate = False):
+
+        if not self.polygons_constructed:
+            self.construct_polygons()
 
         self.logger.info('Save surface mesh ({})...'.format(backend))
 
 
         tris = []
-        colors = []
         all_points = []
         # for cgal export
         faces = []
         face_lens = []
         n_points = 0
         for e0, e1 in self.graph.edges:
-
-            # if e0 > e1:
-            #     continue
 
             c0 = self.graph.nodes[e0]
             c1 = self.graph.nodes[e1]
@@ -543,13 +695,13 @@ class CellComplex:
                 face_lens.append(len(intersection_points))
                 n_points+=len(intersection_points)
 
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
         if backend == "cgal":
             sm = s2m.Soup2Mesh()
             sm.loadSoup(np.array(all_points,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
             sm.makeMesh(triangulate)
-            sm.saveMesh(filename)
+            sm.saveMesh(out_file)
         elif backend == "python":
             if triangulate:
                 self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' instead.")
@@ -561,7 +713,7 @@ class CellComplex:
                 for pt in tri:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
-            self.cellComplexExporter.write_surface_to_off(filename,points=np.array(pset,dtype=np.float32),facets=facets)
+            self.complexExporter.write_surface_to_off(out_file,points=np.array(pset,dtype=np.float32),facets=facets)
         elif backend == "trimesh":
             if not triangulate:
                 self.logger.warning("Mesh will be triangulated. Choose backend 'python' or 'cgal' instead.")
@@ -577,17 +729,17 @@ class CellComplex:
             for fa in faces:
                 tris.append(_triangulate_points(fa))
             mesh = trimesh.Trimesh(vertices=all_points,faces=np.concatenate(tris))
-            mesh.export(filename)
+            mesh.export(out_file)
         else:
             raise NotImplementedError
 
 
-    def save_in_cells_explode(self,filename,shrink_percentage=0.01):
+    def save_in_cells_explode(self,out_file,shrink_percentage=0.01):
 
         self.logger.info('Save exploded inside cells...')
 
-        os.makedirs(os.path.dirname(filename),exist_ok=True)
-        f = open(filename,'w')
+        os.makedirs(os.path.dirname(out_file),exist_ok=True)
+        f = open(out_filer,'w')
 
         def filter_node(node_id):
             return self.graph.nodes[node_id]["occupancy"]
@@ -668,12 +820,12 @@ class CellComplex:
         f.close()
 
 
-    def save_in_cells(self,filename):
+    def save_in_cells(self,out_file):
 
         self.logger.info('Save inside cells...')
 
-        os.makedirs(os.path.dirname(filename),exist_ok=True)
-        f = open(filename,'w')
+        os.makedirs(os.path.dirname(out_file),exist_ok=True)
+        f = open(out_file,'w')
 
         def filter_node(node_id):
             return self.graph.nodes[node_id]["occupancy"]
@@ -906,22 +1058,31 @@ class CellComplex:
 
         return labels
 
-    def label_partition(self,outpath=None,**args):
+    def label_partition(self,mesh_file=None,out_path=None,n_test_points=50,**args):
 
         self.logger.info('Label {} cells...'.format(len(self.graph.nodes)))
 
         if args["type"] == "pc":
             occs = self.label_partition_with_point_normals()
         elif args["type"] == "mesh":
-            occs = self.label_partition_with_mesh(args["n_test_points"])
+            if mesh_file is None:
+                self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
+                return 1
+            occs = self.label_partition_with_mesh(mesh_file,n_test_points)
+        elif args["type"] == "load":
+            occ_file = os.path.join(out_path,'occupancies.npz')
+            if not os.path.isfile(occ_file):
+                self.logger.error("{} does not exist.".format(occ_file))
+                return 1
+            occs = np.load(occ_file)["occupancies"]
         else:
-            self.logger.error("{} is not a valid labelling type. Choose either 'pc' or 'mesh'.".format(args["type"]))
+            self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(args["type"]))
             raise NotImplementedError
 
 
-        if outpath is not None:
+        if not args["type"] == "load" and out_path is not None:
             # save occupancies to file
-            np.savez(os.path.join(outpath,"occupancies.npz"),occupancies=occs,type=args["type"])
+            np.savez(os.path.join(out_path,"occupancies.npz"),occupancies=occs,type=args["type"])
 
         # foccs = dict(zip(self.graph.nodes, occs))
         # nx.set_node_attributes(self.graph,occs,"float_occupancy")
@@ -937,8 +1098,10 @@ class CellComplex:
 
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
+        return 0
 
-    def label_partition_with_mesh(self, n_test_points=50):
+
+    def label_partition_with_mesh(self, mesh_file, n_test_points=50):
         """
         Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
         :param m:
@@ -949,7 +1112,7 @@ class CellComplex:
         """
 
         pl=PL.PyLabeler(n_test_points)
-        if pl.loadMesh(self.model["mesh"]):
+        if pl.loadMesh(mesh_file):
             return 1
         points = []
         points_len = []
@@ -960,7 +1123,7 @@ class CellComplex:
             if bb:  continue # skip the bounding box cells
             # cell = self.cells.get(id)
             if self.debug_export:
-                self.cellComplexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
+                self.complexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
             pts = np.array(cell.vertices())
             points.append(pts)
             # print(pts)
@@ -1047,8 +1210,7 @@ class CellComplex:
                 count += 1
                 col = np.random.randint(0, 255, size=3)
                 if len(pts):
-                    self.cellComplexExporter.write_points(self.model, pts, subfolder="labelling_facets", count=str(count) + "c", color=col)
-                    # self.cellComplexExporter.write_facet(self.model, edge["intersection"], subfolder="labelling_facets", count=count, color=col)
+                    self.complexExporter.write_points(self.model, pts, subfolder="labelling_facets", count=str(count) + "c", color=col)
 
         nx.set_edge_attributes(self.graph,point_ids_dict,"point_ids")
 
@@ -1084,9 +1246,9 @@ class CellComplex:
                 if len(cell_points):
                     st = "in" if inside_weight <= outside_weight else "out"
                     color = np.random.randint(0, 255, size=3)
-                    self.cellComplexExporter.write_cell(self.model,self.cells[node],
+                    self.complexExporter.write_cell(self.model,self.cells[node],
                                                         count=str(node)+st,subfolder="labelling_cells",color=color)
-                    self.cellComplexExporter.write_points(self.model, color=color, count=str(node)+st,
+                    self.complexExporter.write_points(self.model, color=color, count=str(node)+st,
                                                           points=np.concatenate(cell_points),normals=np.concatenate(cell_normals),
                                                           subfolder="labelling_cells")
 
@@ -1535,7 +1697,6 @@ class CellComplex:
 
         self.logger.info("Construct polygons...")
 
-        polygon_dict = defaultdict(trimesh.Trimesh)
 
         for c0,c1 in list(self.graph.edges):
 
@@ -1560,6 +1721,8 @@ class CellComplex:
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
                     # this_edge["vertices"] += facet_intersection.vertices_list()
+
+        self.polygons_constructed = True
 
 
     def partition_from_tree(self, model):
@@ -1603,7 +1766,7 @@ class CellComplex:
 
 
 
-    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop", device='cpu'):
+    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop"):
         """
         1. construct the partition
         :param m:
@@ -1678,7 +1841,7 @@ class CellComplex:
             ## and update graph with new nodes
             if(cell_negative.dim() == 3):
                 if self.debug_export:
-                    self.cellComplexExporter.write_cell(self.model,cell_negative,count=str(cell_count+1)+"n")
+                    self.complexExporter.write_cell(self.model,cell_negative,count=str(cell_count+1)+"n")
                 dd = {"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_id = cell_count
@@ -1688,7 +1851,7 @@ class CellComplex:
 
             if(cell_positive.dim() == 3):
                 if self.debug_export:
-                    self.cellComplexExporter.write_cell(self.model,cell_positive,count=str(cell_count+1)+"p")
+                    self.complexExporter.write_cell(self.model,cell_positive,count=str(cell_count+1)+"p")
                 dd = {"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_id = cell_count
@@ -1705,7 +1868,7 @@ class CellComplex:
                 self.graph.add_edge(neg_cell_id, pos_cell_id, intersection = new_intersection, vertices = [], group_id = current_ids[best_plane_id],
                                supporting_plane_id = best_plane_id_input, bounding_box_edge = False)
                 if self.debug_export:
-                    self.cellComplexExporter.write_facet(self.model,new_intersection,count=plane_count)
+                    self.complexExporter.write_facet(self.model,new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors_of_old_cell = list(self.graph[child])
@@ -1779,17 +1942,20 @@ class CellComplex:
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
-    def load_occupancies(self,inpath):
-
-        occs = np.load(os.path.join(inpath,'occupancies.npz'))["occupancies"]
-        occs = np.hstack((occs,[0,0,0,0,0,0]))
-        occs = np.rint(occs)
-
-        occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
-
-        assert len(occs) == len(self.graph.nodes)
-
-        nx.set_node_attributes(self.graph,occs,"occupancy")
+    # def _load_occupancies(self,inpath):
+    #
+    #     occs = np.load(os.path.join(inpath,'occupancies.npz'))["occupancies"]
+    #
+    #
+    #
+    #     occs = np.hstack((occs,[0,0,0,0,0,0]))
+    #     occs = np.rint(occs)
+    #
+    #     occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
+    #
+    #     assert len(occs) == len(self.graph.nodes)
+    #
+    #     nx.set_node_attributes(self.graph,occs,"occupancy")
 
 
 
