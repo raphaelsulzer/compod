@@ -1,3 +1,4 @@
+import logging
 import os, sys
 from pathlib import Path
 import numpy as np
@@ -5,7 +6,7 @@ from sage.all import polytopes, QQ, Polyhedron
 from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
 from pyplane.export import PlaneExporter
 import copy
-import logging
+from .logger import make_logger
 
 class VertexGroup:
     """
@@ -13,7 +14,7 @@ class VertexGroup:
     """
 
     def __init__(self, input_file, prioritise = None,
-                 points_type="inliers", total_sample_count=100000, recolor=False, logger=None):
+                 points_type="inliers", total_sample_count=100000, recolor=False, logging_level=logging.ERROR):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -24,7 +25,7 @@ class VertexGroup:
             Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
         """
 
-        self.logger = logger if logger else logging.getLogger("COMPOD")
+        self.logger = make_logger(name="COMPOD",level=logging_level)
 
         self.input_file = input_file
         self.prioritise = prioritise
@@ -261,12 +262,12 @@ class VertexGroup:
         plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
         pe.save_points_and_planes([pt_file,plane_file],points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
 
-        if self.prioritise:
-            order = self._prioritise_planes(self.prioritise_planes)
+        if self.prioritise is not None:
+            order = self._prioritise_planes(self.prioritise)
             self.plane_order = order
             self.planes = self.planes[order]
             self.halfspaces = list(np.array(self.halfspaces)[order])
-            self.groups = list(np.array(self.groups,dtype=object).astype(np.int32)[order])
+            self.groups = list(np.array(self.groups,dtype=object)[order])
             self.hull_vertices = self.hull_vertices[order]
             self.plane_colors = self.plane_colors[order]
         else:
