@@ -3,7 +3,7 @@ from pycompod import PolyhedralComplex, VertexGroup
 
 
 
-model = "bunny"
+model = "anchor"
 
 
 file = "../../../cpp/psdr/example/data/{}/convexes_detected/file.npz".format(model)
@@ -32,5 +32,5 @@ cc.load_partition_from_pickle("data/{}/partition".format(model))
 
 cc.save_in_cells(out_file="data/{}/in_cells/file.ply".format(model))
 cc.save_surface(out_file="data/{}/polygon_mesh/file.off".format(model), backend="python", triangulate=False)
-# cc.save_simplified_surface(out_file="data/{}/triangle_mesh/file.off".format(model), backend="python", triangulate=False)
+cc.save_simplified_surface(out_file="data/{}/triangle_mesh/file.off".format(model), backend="cgal", triangulate=False)
 

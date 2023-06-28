@@ -25,6 +25,10 @@ class VertexGroup:
             Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
         """
 
+
+        # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
+        np.random.seed(42)
+
         self.logger = make_logger(name="COMPOD",level=logging_level)
 
         self.input_file = input_file
@@ -39,6 +43,8 @@ class VertexGroup:
         else:
             self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
             sys.exit(1)
+
+
 
     def _recolor_planes(self):
 
@@ -138,21 +144,6 @@ class VertexGroup:
 
         self.hull_vertices = np.array(hull_vertices)
 
-    def _sample_polygons(self):
-
-        ## project inliers to plane and get the convex hull
-        all_sampled_points = []
-        for i,poly in enumerate(self.polygons):
-            np.random.seed(42)
-            n = 3+int(self.sample_count_per_area*poly.area)
-            sampled_points = poly.sample(n)
-            sampled_points = np.concatenate((sampled_points,poly.vertices),axis=0,dtype=np.float32)
-            all_sampled_points.append(sampled_points)
-            # self.convex_hulls[i].all_points = sampled_points
-
-        return np.array(all_sampled_points,dtype=object)
-
-
     def _process_npz(self):
         """
         Start processing vertex group.
@@ -232,7 +223,6 @@ class VertexGroup:
             self.hull_vertices = []
             n_points = 0
             for i, poly in enumerate(self.polygons):
-                np.random.seed(42)
                 n = 3 + int(self.sample_count_per_area * self.polygon_areas[i])
                 sampled_points = poly.sample(n)
                 sampled_points = np.concatenate((poly.vertices, sampled_points), axis=0, dtype=np.float32)
@@ -247,7 +237,7 @@ class VertexGroup:
             self.logger.info("Use {} inlier points of polygons".format(np.concatenate(self.groups).shape[0]))
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
-            NotImplementedError
+            raise NotImplementedError
 
 
         # fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications

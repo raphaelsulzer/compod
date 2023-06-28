@@ -38,18 +38,18 @@ class PolyhedralComplex:
     """
     def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, model=None, logging_level=logging.ERROR):
         """
-        Init CellComplex.
-        Class of cell complex from planar primitive arrangement.
+        Init PolyhedralComplex.
+        Class of polyhedral complex from planar primitive arrangement.
 
         Parameters
         ----------
-        planes: (n, 4) float
-            Plana parameters
-        bounds: (n, 2, 3) float
-            Corresponding bounding box bounds of the planar primitives
-        points: (n, ) object of float
-            Points grouped into primitives, points[any]: (m, 3)
+        vertex_group: The input primitives.
+        padding: Padding of bounding box of primitives.
         """
+
+        # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
+        np.random.seed(42)
+
         self.planeExporter = PlaneExporter()
         self.complexExporter = PolyhedralComplexExporter(self)
 
@@ -87,6 +87,8 @@ class PolyhedralComplex:
 
         if self.debug_export:
             self.logger.warning('Debug export activated. Turn off for faster processing.')
+
+
 
 
 
@@ -235,6 +237,7 @@ class PolyhedralComplex:
         sorted_: list of int
             Sorted vertex indices
         """
+
         pointer = 0
         sorted_ = [pointer]
         for _ in range(len(adjacency_matrix[0]) - 1):
@@ -295,6 +298,13 @@ class PolyhedralComplex:
 
     def save_colored_soup(self, out_file):
 
+        """
+        Extracts a polygon soup from the labelled polyhedral complex. Has to be a .ply file.
+
+        :param out_file: File to store the soup.
+
+        """
+
         self.logger.info('Save colored surface soup...')
 
         fcolors = []
@@ -336,7 +346,7 @@ class PolyhedralComplex:
                 for pt in intersection_points:
                     all_points.append(pt)
                     pcolors.append(col)
-                # for cgal export
+
                 faces.append(np.arange(len(intersection_points)) + n_points)
                 n_points += len(intersection_points)
 
@@ -347,196 +357,19 @@ class PolyhedralComplex:
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
 
-
-    # def save_simplified_surface(self, out_file, backend="python", triangulate=False):
-    #
-    #     """
-    #     This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
-    #     Result is that some simplified meshes are not watertight.
-    #
-    #     :param out_file:
-    #     :param backend:
-    #     :param triangulate:
-    #     :return:
-    #     """
-    #
-    #     # TODO: maybe it can work to do a simplified mesh, by using the graph I can obtain from
-    #     # mesh = trimesh.submesh(face_ids) and the fact that vertices I need are vertices that come from the intersection of at least 3 planes
-    #     # next, only submeshes with holes need to be triangulated
-    #
-    #     def _triangulate_points(v, attribute):
-    #         n = len(v)
-    #         triangles = []
-    #         attributes = []
-    #         for i in range(n - 2):
-    #             tri = [0, i % n + 1, i % n + 2]
-    #             triangles.append(v[tri])
-    #             attributes.append(attribute)
-    #
-    #         return triangles, attributes
-    #
-    #     self.logger.info('Save simplified surface mesh ({})...'.format(backend))
-    #
-    #     all_points = []
-    #     all_triangles = []
-    #     all_triangle_plane_ids = []
-    #     n_points = 0
-    #     for e0, e1 in self.graph.edges:
-    #
-    #         c0 = self.graph.nodes[e0]
-    #         c1 = self.graph.nodes[e1]
-    #
-    #         if c0["occupancy"] != c1["occupancy"]:
-    #
-    #             intersection_points = self._get_intersection(e0, e1)
-    #
-    #             plane_id = self.graph[e0][e1]["supporting_plane_id"]
-    #             plane = self.vg.input_planes[plane_id]
-    #             correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points, plane)
-    #
-    #             assert (len(intersection_points) == len(correct_order))
-    #             intersection_points = intersection_points[correct_order]
-    #
-    #             ## orient polygon
-    #             ## here we want facets coming from the same plane to be oriented the same
-    #
-    #             outside = vector(intersection_points[0]) + vector([QQ(plane[1]), QQ(plane[2]), QQ(plane[3])])
-    #             if self._orient_polygon_exact(intersection_points, outside):
-    #                 intersection_points = np.flip(intersection_points, axis=0)
-    #
-    #             all_points.append(intersection_points)
-    #
-    #             polys = np.arange(len(intersection_points)) + n_points
-    #
-    #             tris, plane_ids = _triangulate_points(polys, plane_id)
-    #             all_triangles.append(tris)
-    #             all_triangle_plane_ids.append(plane_ids)
-    #
-    #             n_points += len(intersection_points)
-    #
-    #     os.makedirs(os.path.dirname(out_file), exist_ok=True)
-    #     self.logger.debug('Save polygon with backend {} mesh to {}'.format(backend, out_file))
-    #
-    #     ## make a mesh, where each face of the partition is a triangulated face of the mesh
-    #     all_points = np.concatenate(all_points).astype(float)
-    #     all_triangles = np.concatenate(all_triangles)
-    #     all_triangle_plane_ids = np.concatenate(all_triangle_plane_ids)
-    #     atpd = {}
-    #     for i, id in enumerate(all_triangle_plane_ids):
-    #         atpd[i] = id
-    #     mesh = trimesh.Trimesh(vertices=all_points, faces=all_triangles, face_attributes=atpd)
-    #     mesh.merge_vertices()
-    #
-    #
-    #     vertex_faces = mesh.vertex_faces
-    #     extreme_vert = dict()
-    #     vcols = []
-    #     face_region = np.array(list(mesh.face_attributes.values()))
-    #     for i,vf in enumerate(vertex_faces):
-    #
-    #         vf = vf[vf > -1]
-    #         t = set(face_region[vf])
-    #         extreme_vert[i] = len(t) > 2
-    #         vcols.append([255, 0, 0] if len(t) > 2 else [0, 255, 0])
-    #
-    #     emesh = copy.deepcopy(mesh)
-    #     emesh.visual.vertex_colors = np.array(vcols)
-    #     emesh.face_attributes = dict()
-    #     emesh.export(out_file[:-4] + "_trimesh.ply")
-    #
-    #     ## collect the regions of the mesh, ie facets that came from the same plane
-    #     region_dict = defaultdict(list)
-    #     for i, f in enumerate(mesh.face_attributes.values()):
-    #         region_dict[f] += [i]
-    #
-    #     polygons = []
-    #     polygon_lens = []
-    #
-    #     from triangle import triangulate
-    #
-    #     ## apply a constrained delaunay triangulation to the regions
-    #     for plane_id, face_ids in region_dict.items():
-    #
-    #         # region_faces = mesh.faces[faces]
-    #         # region_verts = np.concatenate(mesh.vertices[region_faces])
-    #         # region_attr = dict()
-    #         # region_attr["vertex_index"] = np.concatenate(region_faces)
-    #
-    #         edges = mesh.edges_sorted.reshape(
-    #             (-1, 6))[face_ids].reshape((-1, 2))
-    #         # an edge which occurs onely once is on the boundary
-    #         unique_edges = trimesh.base.grouping.group_rows(
-    #             edges, require_count=1)
-    #
-    #         unique_edges = edges[unique_edges]
-    #
-    #
-    #         # this_region_mesh = trimesh.Trimesh(vertices=mesh.vertices,faces=region_faces,process=False)
-    #         # graph = this_region_mesh.vertex_adjacency_graph
-    #
-    #         # TODO: now I need to turn the unique edges of a closed path only containing the extreme verts
-    #         # if there is more than one closed path, the region must be triangulated.
-    #
-    #
-    #
-    #         poly = []
-    #         processed_edges = []
-    #         while len(poly) < 2 or poly[0] != poly[-1]:
-    #             for edge1 in unique_edges:
-    #                 if tuple(edge1) in processed_edges:
-    #                     continue
-    #                 # if extreme_vert[edge1[0]]:
-    #                 #     poly.append(edge1[0])
-    #                 for edge2 in unique_edges:
-    #                     if tuple(edge1) == tuple(edge2):
-    #                         continue
-    #                     if edge1[1] == edge2[0] or edge1[0] == edge2[1] and tuple(edge2) not in processed_edges:
-    #                         processed_edges.append(tuple(edge1))
-    #                         processed_edges.append(tuple(edge2))
-    #                         # if extreme_vert[edge2[0]]:
-    #                         poly.append(edge2[0])
-    #                         break
-    #                     else:
-    #                         continue
-    #                     break
-    #
-    #
-    #
-    #         a=5
-    #
-    #
-    #
-    #
-    #     verts = np.array(mesh.vertices)
-    #
-    #     if backend == "cgal":
-    #         try:
-    #             import libSoup2Mesh as s2m
-    #         except:
-    #             self.logger.error("Could not import Soup2Mesh. Use either 'python' or 'trimesh' as surface export backend.")
-    #             raise ModuleNotFoundError
-    #         sm = s2m.Soup2Mesh()
-    #         sm.loadSoup(verts, np.concatenate(polygon_lens, dtype=int), np.concatenate(polygons, dtype=int).flatten())
-    #         sm.makeMesh(True)
-    #         sm.saveMesh(out_file)
-    #     elif backend == "python":
-    #         mesh = trimesh.Trimesh(vertices=verts, faces=np.concatenate(polygons))
-    #         mesh.export(out_file)
-    #     else:
-    #         raise NotImplementedError
-
-
-
-    def save_simplified_surface(self, out_file, backend = "trimesh", triangulate = False):
+    def save_simplified_surface(self, out_file, backend="python", triangulate = False):
 
         """
+        Extracts a simplified surface mesh from the labelled polyhedral complex.
         This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
-        Result is that some simplified meshes are not watertight.
+        Result is that simplified mesh is usually not watertight, ie has holes.
 
-        :param out_file:
-        :param backend:
-        :param triangulate:
-        :return:
+        :param out_file: File to store the mesh.
+
+        :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
+                        'python' is slow, 'trimesh' is faster but can only export triangulated mesh. 'cgal' is the fastest and can export polygon and triangle mesh.
+
+        :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
         """
 
         # TODO: maybe it can work to do a simplified mesh, by using the graph I can obtain from
@@ -618,7 +451,7 @@ class PolyhedralComplex:
             region_dict[f]+=[i]
 
         ### the idea is to split regions with 2 different orientations, but for some reason this breaks most faces in the final mesh
-        # # split regions with diferrent orientation
+        ### split regions with diferrent orientation
         # for plane_id, face_ids in region_dict.items():
         #
         #     face_normals = mesh.face_normals[face_ids]
@@ -641,15 +474,12 @@ class PolyhedralComplex:
         ## apply a constrained delaunay triangulation to the regions
         for plane_id,face_ids in region_dict.items():
 
-
             face_ids = [face_ids]
 
             for fids in face_ids:
 
                 if not len(fids):
                     continue
-
-
 
                 ## get outlines of the region
                 outline3d = mesh.outline(face_ids=fids)
@@ -663,49 +493,42 @@ class PolyhedralComplex:
                 outline2d.remove_unreferenced_vertices()
 
                 ## collect holes per outline
-                points_inside_holes = []
 
                 # plot for debugging etc like this: trimesh.scene.scene.Scene(geometry=[mesh,outline3d]).show(flags={'cull': False})
                 for exterior_id, interior_ids in outline2d.enclosure_shell.items():
 
-                    if not outline2d.entities[exterior_id].closed:  # here is the bug mentioned in the header of this function. All outlines should be closed, but self-intersecting ones are not.
-                        self.logger.warning("Skipping self-intersecting face")
-                        continue
+                    if not len(interior_ids):
+                        if outline2d.entities[exterior_id].closed:
+                            polygons.append(referenced_vertices[outline2d.entities[exterior_id].nodes[:, 0]])
+                            polygon_lens.append(len(outline2d.entities[exterior_id].nodes[:, 0]))
+                        else:
+                            # here is the bug mentioned in the header of this function. All outlines should be closed, but self-intersecting ones are not.
+                            self.logger.debug("Skipping self-intersecting face")
+                    else:
 
-                    polygons.append(referenced_vertices[outline2d.entities[0].nodes[:,0]])
-                    polygon_lens.append(len(outline2d.entities[0].nodes[:,0]))
+                        points_inside_holes = []
+                        # this is simply for finding a point inside the hole, so I can pass it to the constrained delaunay triangulator
+                        for iid in interior_ids:
+                            ent = outline2d.entities[iid]
+                            hpts = outline2d.vertices[ent.points, :]
+                            tridict = {"vertices": hpts}
+                            if not ent.closed: # here is the bug mentioned in the header of this function. All outlines should be closed, but self-intersecting ones are not.
+                                self.logger.debug("Skipping self-intersection whole")
+                                continue
+                            hole = ttri(tridict)
+                            pts = hole['vertices'][hole["triangles"][0]]
+                            points_inside_holes.append(pts.mean(axis=0))
 
+                        # if there is a whole, face has to be triangulated
+                        points_inside_holes = np.array(points_inside_holes)
+                        if len(points_inside_holes):
+                            tridict = {"vertices": outline2d.vertices, "segments": outline2d.vertex_nodes, "holes": points_inside_holes}
+                            tri = ttri(tridict,'p')  # 'p' means make a Delaunay triangulation constraint to the passed segments
+                            triangles = tri['triangles']
+                            triangles = referenced_vertices[triangles]
 
-                    # this is simply for finding a point inside the hole, so I can pass it to the constrained delaunay triangulator
-                    for iid in interior_ids:
-                        ent = outline2d.entities[iid]
-                        hpts = outline2d.vertices[ent.points, :]
-                        tridict = {"vertices": hpts}
-                        if not ent.closed: # here is the bug mentioned in the header of this function. All outlines should be closed, but self-intersecting ones are not.
-                            self.logger.warning("Skipping self-intersection whole")
-                            continue
-                        hole = ttri(tridict)
-                        pts = hole['vertices'][hole["triangles"][0]]
-                        points_inside_holes.append(pts.mean(axis=0))
-
-                # if there is a whole, face has to be triangulated
-                points_inside_holes = np.array(points_inside_holes)
-                if len(points_inside_holes):
-                    tridict = {"vertices": outline2d.vertices, "segments": outline2d.vertex_nodes, "holes": points_inside_holes}
-                    try:
-                        tri = ttri(tridict,'p')  # 'p' means make a Delaunay triangulation constraint to the passed segments
-                    except:
-                        continue
-                    triangles = tri['triangles']
-                    triangles = referenced_vertices[triangles]
-
-                    # polygons.append(triangles)
-                    # polygon_lens.append(np.zeros(triangles.shape[0], dtype=int) + 3)
-                    polygons.extend(list(triangles))
-                    polygon_lens+=list(np.zeros(triangles.shape[0], dtype=int) + 3)
-
-
-
+                            polygons.extend(list(triangles))
+                            polygon_lens.extend(list(np.zeros(triangles.shape[0], dtype=int) + 3))
 
 
         verts=np.array(mesh.vertices)
@@ -733,7 +556,19 @@ class PolyhedralComplex:
             raise NotImplementedError
 
 
-    def save_surface(self, out_file, backend = "python", triangulate = False):
+    def save_surface(self, out_file, backend="python", triangulate=False):
+
+        """
+        Extracts a watertight surface mesh from the labelled polyhedral complex.
+
+        :param out_file: File to store the mesh.
+
+        :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
+                        'python' is slow, 'trimesh' is faster but can only export triangulated mesh. 'cgal' is the fastest and can export polygon and triangle mesh.
+
+        :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
+        """
+
 
         if not self.polygons_constructed:
             self.construct_polygons()
@@ -1539,13 +1374,14 @@ class PolyhedralComplex:
 
 
     def _split_support_points(self,best_plane_id,current_ids,th=1):
+
         '''
-        :param best_plane_id:
-        :param current_ids:
-        :param planes:
-        :param point_groups: padded 2d array of point groups with NaNs
-        :param n_points_per_plane: real number of points per group (ie plane)
-        :return: left and right planes
+        Split all primitive (ie 2D convex hulls) in the current cell with the best plane.
+
+        :param best_plane_id: The best plane in the current cell, according to self._get_best_plane().
+        :param current_ids: All planes in the current cell.
+        :param th: Threshold for minimum number of points of a primitive to be inserted.
+        :return: IDs of primitives falling left and right of the best plane.
         '''
 
         assert th >= 0,"Threshold must be >= 0"
