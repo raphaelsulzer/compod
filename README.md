@@ -1,47 +1,83 @@
-## Introduction
+# COMPOD: Compact Polyhedral Decomposition from Polygons
+
+One GIF of rotating bunny. Start with point cloud, detect polygons, insert polygon one by one in complex, extract decomposition, 
+make it explode, put it back together and show compact surface. 
 
 
-Compact Polyhedral Complex for Surface Reconstruction and Convex Decomposition 
+This repository contains the official implementation of COMPOD: Compact Polyhedral Decomposition from Polygons.
+Given a set of input polygons the resulting polyhedral complex can be used for polygon mesh reconstruction and convex decomposition. 
 
-## Installation
 
-### Install requirements
+# Features
 
-All dependencies except for [SageMath](https://www.sagemath.org/) can be easily installed with [PyPI](https://pypi.org/):
+- Reading of vertex groups ([.vg](https://abspy.readthedocs.io/en/latest/vertexgroup.html), .npz) as input (e.g. from [here](https://github.com/raphaelsulzer/psdr/tree/main))
+- Fast and memory efficient compact polyhedral complex construction (see evaluation)
+- Storing of the complex as a binary space partitioning tree (BSP-tree)
+- Interior / exterior labelling of the complex using point normals or a closed surface mesh
+- Further simplification of the complex based on a careful analysis of the BSP-tree 
+- Extraction of a compact convex decomposition (i.e. interior cells of the complex), or a compact polygon surface mesh (i.e. interface polygons between interior amd exterior cells of the complex). 
 
-```bash
-git clone https://github.com/chenzhaiyu/abspy && cd abspy
-pip install -r requirements.txt
+# Installation
+
+Simply clone the repository and install in a new conda environment using pip:
+
+```
+git clone https://github.com/raphaelsulzer/compod.git
+cd compod
+conda create --name compod
+conda activate compod
+bash install dependencies.sh    # this step may take some time
+pip install . 
 ```
 
-Optionally, install [pyglet](https://github.com/pyglet/pyglet) and [pyembree](https://github.com/adam-grant-hendry/pyembree) for better visualisation and ray-tracing, respectively:
+You are now ready to use COMPOD.
 
-```bash
-pip install pyglet pyembree
+
+# Usage
+
+```
+from pypsdr import psdr
+
+# initialise a planar shape detector and load input points                                              
+ps = psdr(verbosity=1)                                               
+ps.load_points(example/data/anchor/pointcloud.ply)
+
+# detect planar shapes with default values
+ps.detect(min_inliers=20,epsilon=0.02,normal_th=0.8,knn=10)
+
+# refine planar shape configuration until convergence (i.e. no limit on number of iterations)
+ps.refine(max_iter=-1)
+
+# export planar shapes and vertex groups  
+ps.save(example/data/anchor/convexes.ply,"convex")                  
+ps.save(example/data/anchor/rectangles.ply,"rectangles")            
+ps.save(example/data/anchor/alpha_shapes.ply,"alpha")               
+ps.save(example/data/anchor/groups.vg)                              
+ps.save(example/data/anchor/groups.npz)                             
 ```
 
-### Install SageMath
+# Examples
 
-For Linux and macOS users, the easiest is to install from [conda-forge](https://conda-forge.org/):
+Please see the `example/` folder.
 
-```bash
-conda config --add channels conda-forge
-conda install sage
+<p float="left">
+  <img style="width:800px;" src="./media/city.gif">
+</p>
+
+
+
+# References
+
+If you use this work please consider citing:
+
+```bibtex
+@article{1,
+  title={Creating large-scale city models from 3D-point clouds: a robust approach with hybrid representation},
+  author={Lafarge, Florent and Mallet, Cl{\'e}ment},
+  journal={International journal of computer vision},
+  volume={99},
+  pages={69--85},
+  year={2012},
+  publisher={Springer}
+}
 ```
-
-Alternatively, you can use [mamba](https://github.com/mamba-org/mamba) for faster parsing and package installation:
-
-```bash
-conda install mamba
-mamba install sage
-```
-
-
-
-### Install compod
-
-
-## Quick start
-
-Here is an example of loading a point cloud in `VertexGroup` (`.vg`), partitioning the ambient space into candidate convexes, creating the adjacency graph, and extracting the outer surface of the object.
-

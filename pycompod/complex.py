@@ -72,6 +72,8 @@ class PolyhedralComplex:
 
         self.polygons_initialized = False
         self.polygons_constructed = False
+        self.partition_labelled = False
+        self.tree_simplified = False
 
         # init the bounding box
         self.padding = padding
@@ -320,7 +322,6 @@ class PolyhedralComplex:
 
             if c0["occupancy"] != c1["occupancy"]:
 
-                # TODO: a better solution instead of using a plane dict is simply to get the ID from the self.vg.planes_ids array
                 plane_id = self.graph.edges[e0, e1]["supporting_plane_id"]
                 col = self.vg.plane_colors[plane_id] if plane_id > -1 else np.array([50,50,50])
                 fcolors.append(col)
@@ -1026,6 +1027,8 @@ class PolyhedralComplex:
 
         nx.set_node_attributes(self.graph,occs,"occupancy")
 
+        self.partition_labelled = True
+
         return 0
 
 
@@ -1476,6 +1479,13 @@ class PolyhedralComplex:
 
     def simplify_partition_graph_based(self):
 
+        if not self.partition_labelled:
+            self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
+            return 0
+
+        if not self.tree_simplified:
+            self.logger.warning("This function is slow. It is recommended to call simplify_tree_based first.")
+
         # TODO: incooperate the function above into this one. everytime I deal with siblings, I do not have to compute the volume
             # simply need to update the tree with the correct node_id, how it is already done in simplify_partition_tree_based
             # furthermore, the case that I previously drew and found to be unsolveable with tree traversal is also solveable with tree traversal
@@ -1537,6 +1547,10 @@ class PolyhedralComplex:
 
     def simplify_partition_tree_based(self):
 
+        if not self.partition_labelled:
+            self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
+            return 0
+
         ### this is nice and very fast, but it cannot simplify every case. because the tree would need to be restructured.
         ### there are cases where two cells are on the same side of the surface, there union is convex, but they are not siblings in the tree -> they cannot be simplified with this function
 
@@ -1588,6 +1602,7 @@ class PolyhedralComplex:
 
         self.logger.info("Simplified partition from {} to {} cells".format(before,len(self.graph.nodes)))
         self.polygons_initialized = False
+        self.tree_simplified = True
 
 
     def _init_polygons(self):

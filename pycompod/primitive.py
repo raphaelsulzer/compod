@@ -212,7 +212,7 @@ class VertexGroup:
 
 
         if self.points_type == "samples":
-            self.logger.info("Sample polygons with {} points".format(self.total_sample_count))
+            self.logger.info("Sample a total of {} points on {} polygons".format(self.total_sample_count,len(self.polygons)))
 
             ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
             self.sample_count_per_area = self.total_sample_count / self.polygon_areas.sum()
@@ -234,7 +234,7 @@ class VertexGroup:
             self.points = np.concatenate(self.points)
 
         elif self.points_type == "inliers":
-            self.logger.info("Use {} inlier points of polygons".format(np.concatenate(self.groups).shape[0]))
+            self.logger.info("Use {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0],len(self.planes)))
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             raise NotImplementedError
