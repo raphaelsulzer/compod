@@ -836,6 +836,7 @@ class PolyhedralComplex:
 
 
         self.logger.info('Save partition...')
+        self.logger.debug("to {}".format(filepath))
 
 
         # create the dir if not exists
@@ -878,7 +879,9 @@ class PolyhedralComplex:
 
             if plane_id > -1:
                 colors.append(self.vg.plane_colors[plane_id])
-                primitive_ids.append([self.vg.plane_order[plane_id]])
+                # primitive_ids.append([self.vg.plane_order[plane_id]])
+                pid = self.vg.plane_order[plane_id]
+                primitive_ids.append(list(self.vg.polygons_from_plane[pid]))
             else:
                 colors.append(np.random.randint(100, 255, size=3))
                 primitive_ids.append([])
@@ -989,13 +992,13 @@ class PolyhedralComplex:
 
         return labels
 
-    def label_partition(self,mesh_file=None,out_path=None,n_test_points=50,**args):
+    def label_partition(self,mode,mesh_file=None,n_test_points=50,**args):
 
         self.logger.info('Label {} cells...'.format(len(self.graph.nodes)))
 
-        if args["type"] == "normals":
+        if mode == "normals":
             occs = self.label_partition_with_point_normals()
-        elif args["type"] == "mesh":
+        elif mode == "mesh":
             if mesh_file is None:
                 self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
                 raise ValueError
@@ -1007,7 +1010,7 @@ class PolyhedralComplex:
         #         raise ValueError
         #     occs = np.load(occ_file)["occupancies"]
         else:
-            self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(args["type"]))
+            self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(mode))
             raise NotImplementedError
 
 
@@ -1376,7 +1379,7 @@ class PolyhedralComplex:
             raise NotImplementedError
 
 
-    def _split_support_points(self,best_plane_id,current_ids,th=1):
+    def _split_support_points(self,best_plane_id,current_ids,th=0):
 
         '''
         Split all primitive (ie 2D convex hulls) in the current cell with the best plane.
@@ -1411,6 +1414,13 @@ class PolyhedralComplex:
             elif(this_group.shape[0] - right_point_ids.shape[0]) <= th:
                 right_plane_ids.append(id)
             else:
+
+                # TODO: to make the partition exact, I need to add the intersection of 'best plane' with the current convex hull, ie 'ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])'
+                # one way to do this would be to:
+                    # 1. compute the line of 'best_plane' intersect 'self.vg.planes[id]'
+                    # 2. project the line to self.vg.planes[id]
+                    # 3. intersect the line with the convex hull: https://stackoverflow.com/questions/30486312/intersection-of-nd-line-with-convex-hull-in-python
+
                 if (left_point_ids.shape[0] > th):
                     left_plane_ids.append(self.vg.planes.shape[0])
                     self.vg.planes = np.vstack((self.vg.planes, self.vg.planes[id]))
@@ -1715,7 +1725,21 @@ class PolyhedralComplex:
 
 
 
-    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop"):
+    def apply_subdivision(self, x=1, y=1, z=1):
+
+        pass
+
+
+
+
+
+
+
+
+
+
+
+    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop",subdivison=None):
         """
         1. construct the partition
         :param m:
@@ -1745,6 +1769,11 @@ class PolyhedralComplex:
         plane_count = 0 # only used for debugging exports
         pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout)
         best_plane_ids = [] # only used for debugging exports
+
+        if subdivison:
+            self.apply_subdivision(subdivison[0],subdivison[1],subdivison[2])
+
+
         for child in children:
 
             current_ids = self.tree[child].data["plane_ids"]
@@ -1866,6 +1895,7 @@ class PolyhedralComplex:
     def save_partition_to_pickle(self,outpath):
 
         self.logger.info("Save partition to pickle...")
+        self.logger.debug("to {}".format(outpath))
 
         os.makedirs(outpath,exist_ok=True)
 

@@ -1,5 +1,5 @@
 import os
-from pycompod import PolyhedralComplex, VertexGroup
+from pycompod import VertexGroup, PolyhedralComplex
 
 model = "city"
 model = "anchor"

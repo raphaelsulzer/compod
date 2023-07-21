@@ -267,6 +267,17 @@ class VertexGroup:
         del self.polygons
         del self.polygon_areas
 
+        # here we collect for each polygon the polygons that come from the same plane
+        # currently this is only used in evaluation where we need to know which input polygon created a facet:
+        # if two input polygons come from the same plane, one of the input polygons may not be used in the
+        # construct_partition function (see daratech for an example.)
+        # this may lead to the problem that in evaluation this polygon has no coverage / completeness
+        # however, it is perfectly covered by facets created by its 'twin' polygon from the same plane
+        # thus we also allow pairing with that
+        self.polygons_from_plane = []
+        for p in self.planes:
+            self.polygons_from_plane.append(np.where((p==self.planes).all(axis=1))[0])
+
         self.bounds = []
         for group in self.groups:
             pts = self.points[group]
