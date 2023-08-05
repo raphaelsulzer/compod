@@ -31,6 +31,9 @@ from .logger import make_logger
 from pyplane.export import PlaneExporter
 from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
 
+from pypdse import pdse
+
+
 
 class PolyhedralComplex:
     """
@@ -358,12 +361,95 @@ class PolyhedralComplex:
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
 
-    def save_simplified_surface(self, out_file, backend="python", triangulate = False):
+    def save_simplified_surface(self, out_file, triangulate = False):
 
         """
         Extracts a simplified surface mesh from the labelled polyhedral complex.
         This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
         Result is that simplified mesh is usually not watertight, ie has holes.
+
+        # TODO: will now try to implement the whole thing in CGAL using this function (https://doc.cgal.org/latest/Polygon_mesh_processing/group__PkgPolygonMeshProcessingRef.html#gafa9b682528c5dc2a4821d01193518d14)
+        # on exact 2D polygon meshes created by soup to mesh from facets grouped per plane
+
+        :param out_file: File to store the mesh.
+
+        :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
+                        'python' is slow, 'trimesh' is faster but can only export triangulated mesh. 'cgal' is the fastest and can export polygon and triangle mesh.
+
+        :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
+        """
+
+        # TODO: maybe it can work to do a simplified mesh, by using the graph I can obtain from
+        # mesh = trimesh.submesh(face_ids) and the fact that vertices I need are vertices that come from the intersection of at least 3 planes
+        # next, only submeshes with holes need to be triangulated
+
+
+        if not self.polygons_constructed:
+            self.construct_polygons()
+
+        self.logger.info('Save simplified surface mesh...')
+
+        points = []
+        polygons = []
+        polygon_regions = []
+        for e0, e1 in self.graph.edges:
+
+            c0 = self.graph.nodes[e0]
+            c1 = self.graph.nodes[e1]
+
+            if c0["occupancy"] != c1["occupancy"]:
+
+                intersection_points = self._get_intersection(e0,e1)
+
+                plane_id = self.graph[e0][e1]["supporting_plane_id"]
+                plane = self.vg.input_planes[plane_id]
+                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
+
+                intersection_points = intersection_points[correct_order]
+
+                outside = vector(intersection_points[0])+vector([QQ(plane[1]),QQ(plane[2]),QQ(plane[3])])
+                if self._orient_polygon_exact(intersection_points,outside):
+                    intersection_points = np.flip(intersection_points, axis=0)
+
+                # points
+                points.append(intersection_points)
+                # polygons
+                polygons.append(len(intersection_points))
+                # polygon_region
+                polygon_regions.append(plane_id)
+
+
+        # now do the unpacking simply in C++
+
+        points = np.concatenate(points).astype(float)
+        polygons = np.array(polygons).astype(np.int32)
+        polygon_regions = np.array(polygon_regions).astype(np.int32)
+
+        polygon_regions[polygon_regions < 0] += len(self.vg.input_planes)
+
+        np.savez(out_file[:-4]+".npz",points=points,polygons=polygons,polygon_regions=polygon_regions,planes=self.vg.input_planes,colors=self.vg.plane_colors)
+
+        # ss=pdse(2)
+        # ss.load_soup(points, polygons, polygon_regions)
+        # ss.soup_to_mesh(0)
+        # ss.simplify_mesh_cgal(0)
+        # ss.save_mesh(out_file)
+
+
+
+
+
+
+
+    def save_simplified_surface2(self, out_file, backend="python", triangulate = False):
+
+        """
+        Extracts a simplified surface mesh from the labelled polyhedral complex.
+        This code works, but there is a bug in trimesh.Trimesh.outline(). See GitHub issue: https://github.com/mikedh/trimesh/issues/1934
+        Result is that simplified mesh is usually not watertight, ie has holes.
+
+        # TODO: will now try to implement the whole thing in CGAL using this function (https://doc.cgal.org/latest/Polygon_mesh_processing/group__PkgPolygonMeshProcessingRef.html#gafa9b682528c5dc2a4821d01193518d14)
+        # on exact 2D polygon meshes created by soup to mesh from facets grouped per plane
 
         :param out_file: File to store the mesh.
 
@@ -994,7 +1080,7 @@ class PolyhedralComplex:
 
     def label_partition(self,mode,mesh_file=None,n_test_points=50,**args):
 
-        self.logger.info('Label {} cells...'.format(len(self.graph.nodes)))
+        self.logger.info('Label {} cells with {}...'.format(len(self.graph.nodes),mode))
 
         if mode == "normals":
             occs = self.label_partition_with_point_normals()
@@ -1415,7 +1501,7 @@ class PolyhedralComplex:
                 right_plane_ids.append(id)
             else:
 
-                # TODO: to make the partition exact, I need to add the intersection of 'best plane' with the current convex hull, ie 'ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])'
+                # TODO: to make the partition exact (within floating point precision), I need to add the intersection of 'best plane' with the current convex hull, ie 'ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])'
                 # one way to do this would be to:
                     # 1. compute the line of 'best_plane' intersect 'self.vg.planes[id]'
                     # 2. project the line to self.vg.planes[id]
@@ -1724,21 +1810,6 @@ class PolyhedralComplex:
 
 
 
-
-    def apply_subdivision(self, x=1, y=1, z=1):
-
-        pass
-
-
-
-
-
-
-
-
-
-
-
     def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop",subdivison=None):
         """
         1. construct the partition
@@ -1904,6 +1975,7 @@ class PolyhedralComplex:
         pickle.dump(self.graph,open(os.path.join(outpath,'graph.pickle'),'wb'))
         pickle.dump(self.cells,open(os.path.join(outpath,'cells.pickle'),'wb'))
         pickle.dump(self.vg.groups,open(os.path.join(outpath,'groups.pickle'),'wb'))
+        pickle.dump(self.vg.input_planes,open(os.path.join(outpath,'planes.pickle'),'wb'))
 
 
 
@@ -1916,6 +1988,7 @@ class PolyhedralComplex:
         self.graph = pickle.load(open(os.path.join(inpath,'graph.pickle'),'rb'))
         self.cells = pickle.load(open(os.path.join(inpath,'cells.pickle'),'rb'))
         self.vg.groups = pickle.load(open(os.path.join(inpath,'groups.pickle'),'rb'))
+        self.vg.input_planes = pickle.load(open(os.path.join(inpath,'planes.pickle'),'rb'))
 
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 
@@ -2077,18 +2150,18 @@ class PolyhedralComplex:
         if num_workers > 0:
             pool = multiprocessing.Pool(processes=num_workers)
 
-        pbar = trange(len(self.bounds),file=sys.stdout)
+        pbar = trange(len(self.vg.bounds),file=sys.stdout)
         for i in pbar:  # kinetic for each primitive
             # bounding box intersection test
             # indices of existing cells with potential intersections
-            indices_cells = _intersect_bound_plane(self.bounds[i], self.planes[i], exhaustive)
+            indices_cells = _intersect_bound_plane(self.vg.bounds[i], self.vg.planes[i], exhaustive)
             assert len(indices_cells), 'intersection failed! check the initial bound'
 
             # half-spaces defined by inequalities
             # no change_ring() here (instead, QQ() in _inequalities) speeds up 10x
             # init before the loop could possibly speed up a bit
             hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-                                                self._inequalities(self.planes[i])]
+                                                self._inequalities(self.vg.planes[i])]
 
 
             # partition the intersected cells and their bounds while doing mesh slice plane
