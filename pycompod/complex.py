@@ -361,7 +361,7 @@ class PolyhedralComplex:
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
 
-    def save_simplified_surface(self, out_file, triangulate = False):
+    def save_simplified_surface_cgal(self, out_file, triangulate = False):
 
         """
         Extracts a simplified surface mesh from the labelled polyhedral complex.
@@ -407,7 +407,8 @@ class PolyhedralComplex:
 
                 intersection_points = intersection_points[correct_order]
 
-                outside = vector(intersection_points[0])+vector([QQ(plane[1]),QQ(plane[2]),QQ(plane[3])])
+                ## orient polygon
+                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
                 if self._orient_polygon_exact(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
 
@@ -437,11 +438,7 @@ class PolyhedralComplex:
 
 
 
-
-
-
-
-    def save_simplified_surface2(self, out_file, backend="python", triangulate = False):
+    def save_simplified_surface(self, out_file, triangulate = False):
 
         """
         Extracts a simplified surface mesh from the labelled polyhedral complex.
@@ -498,10 +495,6 @@ class PolyhedralComplex:
                 assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
 
-
-                ## orient polygon
-                ## here we want facets coming from the same plane to be oriented the same
-
                 outside = vector(intersection_points[0])+vector([QQ(plane[1]),QQ(plane[2]),QQ(plane[3])])
                 if self._orient_polygon_exact(intersection_points,outside):
                     intersection_points = np.flip(intersection_points, axis=0)
@@ -529,6 +522,9 @@ class PolyhedralComplex:
         for i,id in enumerate(all_triangle_plane_ids):
             atpd[i] = id
         mesh = trimesh.Trimesh(vertices=all_points,faces=all_triangles,face_attributes=atpd)
+
+
+
         mesh.merge_vertices()
 
 
@@ -663,8 +659,9 @@ class PolyhedralComplex:
         self.logger.info('Save surface mesh ({})...'.format(backend))
 
 
-        tris = []
-        all_points = []
+        polygons_exact = []
+        points_exact = []
+        polygons = []
         # for cgal export
         faces = []
         face_lens = []
@@ -695,8 +692,14 @@ class PolyhedralComplex:
                     intersection_points = np.flip(intersection_points, axis=0)
 
                 for i in range(intersection_points.shape[0]):
-                    all_points.append(tuple(intersection_points[i,:]))
-                tris.append(intersection_points)
+                    points_exact.append(tuple(intersection_points[i,:]))
+                polygons_exact.append(intersection_points)
+
+                polygons.append(intersection_points.astype(np.float64))
+
+
+
+
                 # for cgal export
                 faces.append(np.arange(len(intersection_points))+n_points)
                 face_lens.append(len(intersection_points))
@@ -711,21 +714,37 @@ class PolyhedralComplex:
                 self.logger.error("Could not import Soup2Mesh. Use either 'python' or 'trimesh' as surface export backend.")
                 raise ModuleNotFoundError
             sm = s2m.Soup2Mesh()
-            sm.loadSoup(np.array(all_points,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
+            sm.loadSoup(np.array(points_exact,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
             sm.makeMesh(triangulate)
             sm.saveMesh(out_file)
+
         elif backend == "python":
             if triangulate:
                 self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' instead.")
-            pset = set(all_points)
+            points = np.concatenate(polygons).astype(np.float64)
+            points = np.unique(points, axis=0)
+
+            facets = []
+            for poly in polygons:
+                face = []
+                for pt in poly:
+                    face.append(np.argwhere((np.equal(points, pt, dtype=object)).all(-1))[0][0])
+                facets.append(face)
+            self.complexExporter.write_surface_to_off(out_file, points=points, facets=facets)
+
+        elif backend == "python_exact":
+            if triangulate:
+                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' instead.")
+            pset = set(points_exact)
             pset = np.array(list(pset),dtype=object)
             facets = []
-            for tri in tris:
+            for poly in polygons_exact:
                 face = []
-                for pt in tri:
+                for pt in poly:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
             self.complexExporter.write_surface_to_off(out_file,points=np.array(pset,dtype=np.float32),facets=facets)
+
         elif backend == "trimesh":
             if not triangulate:
                 self.logger.warning("Mesh will be triangulated. Choose backend 'python' or 'cgal' instead.")
@@ -740,8 +759,9 @@ class PolyhedralComplex:
             tris = []
             for fa in faces:
                 tris.append(_triangulate_points(fa))
-            mesh = trimesh.Trimesh(vertices=all_points,faces=np.concatenate(tris))
+            mesh = trimesh.Trimesh(vertices=points_exact,faces=np.concatenate(tris))
             mesh.export(out_file)
+
         else:
             self.logger.error("{} is not a valid surface extraction backend. Choose either 'cgal', 'trimesh' or 'python'.".format(backend))
             raise NotImplementedError
