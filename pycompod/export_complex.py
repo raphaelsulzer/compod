@@ -225,10 +225,15 @@ class PolyhedralComplexExporter:
                 f.write("{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2]))
         f.close()
 
-    def write_surface_to_off(self,filename,points,facets):
+    def write_surface_to_off(self,filename,points,facets,fcolor=[]):
 
         f = open(filename[:-3]+"off",'w')
-        f.write("OFF\n")
+
+        if len(fcolor):
+            f.write("COFF\n")
+        else:
+            f.write("OFF\n")
+
         f.write("{} {} 0\n".format(points.shape[0],len(facets)))
         for p in points:
             f.write("{:6f} {:6f} {:6f}\n".format(p[0],p[1],p[2]))
@@ -236,6 +241,8 @@ class PolyhedralComplexExporter:
             f.write("{}".format(len(face)))
             for v in face:
                 f.write(" {}".format(v))
+            for c in fcolor:
+                f.write(" {}".format(c))
             f.write('\n')
         f.close()
 
