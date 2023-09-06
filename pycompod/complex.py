@@ -535,6 +535,8 @@ class PolyhedralComplex:
         region_facets = []
         for region in region_to_polygons.items():
 
+            this_region_facets = []
+
             boundary = _get_region_borders(region)
 
             # TODO: now do tiernan all cycles
@@ -542,12 +544,18 @@ class PolyhedralComplex:
 
             i = 0
             while i < len(cycles):
-                region_facets.append(cycles[i])
+                this_region_facets.append(cycles[i])
                 i+=2
 
+            ## TODO: in stead of simply saying > 1, check if there are inside and outside domains, ie holes, and if not, keep the polygons. Ie only use triangulation if there are holes.
+            if len(this_region_facets) > 1:
+                plane = PyPlane(self.vg.planes[region[0]])
+                points2d = plane.to_2d(points)
+                triangle_region_facets = ss.get_cdt_of_regions_with_holes(points2d, this_region_facets)
+                region_facets += triangle_region_facets
+            else:
+                region_facets.append(this_region_facets[0][:-1])
 
-
-            b=5
 
         self.complexExporter.write_surface_to_off(out_file, points=points, facets=region_facets)
 
