@@ -304,9 +304,9 @@ class PolyhedralComplex:
     def save_colored_soup(self, out_file):
 
         """
-        Extracts a polygon soup from the labelled polyhedral complex. Has to be a .ply file.
+        Extracts a polygon soup from the labelled polyhedral complex. Polygons are colored according to the planar region they belong to.
 
-        :param out_file: File to store the soup.
+        :param out_file: File to store the soup (has to be a .ply file).
 
         """
 
@@ -364,14 +364,12 @@ class PolyhedralComplex:
     def save_simplified_surface_cgal(self, out_file, triangulate = False):
 
         """
+        DEPRECATED
         Extracts a simplified surface mesh from the labelled polyhedral complex.
         This code works, but because the CGAL polygon mesh does not allow non-manifold edges, watertightness is sometimes broken to fix non-manifoldness.
         Result is that simplified mesh is usually not watertight, ie has holes.
 
         :param out_file: File to store the mesh.
-
-        :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
-                        'python' is slow, 'trimesh' is faster but can only export triangulated mesh. 'cgal' is the fastest and can export polygon and triangle mesh.
 
         :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
         """
@@ -431,16 +429,13 @@ class PolyhedralComplex:
         # ss.save_mesh(out_file)
 
 
-
-    def save_simplified_surface(self, out_file, triangulate = False):
+    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True):
 
         """
-        Extracts a watertight surface mesh from the labelled polyhedral complex.
+        Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
+        mesh is either triangulate (if it contains holes) or represented as one (region with one connected component) or several (region with multiple connected components) polygons.
 
         :param out_file: File to store the mesh.
-
-        :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
-                        'python' is slow, 'trimesh' is faster but can only export triangulated mesh. 'cgal' is the fastest and can export polygon and triangle mesh.
 
         :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
         """
@@ -476,17 +471,14 @@ class PolyhedralComplex:
             return np.array(region_edges)[(count==1)[inverse]]
 
 
-
-
-
         if not self.polygons_constructed:
             self.construct_polygons()
 
-        self.logger.info('Save surface mesh...')
-
+        self.logger.info('Save simplified surface mesh...')
 
         region_to_polygons = defaultdict(list)
         polygons = []
+        polygon_to_region = []
         npolygons = 0
         for e0, e1 in self.graph.edges:
 
@@ -514,53 +506,77 @@ class PolyhedralComplex:
                 # region_to_polygons
                 region_to_polygons[plane_id].append(npolygons)
 
+                # polygon_to_region
+                polygon_to_region.append(plane_id)
+
                 npolygons+=1
 
         points = np.concatenate(polygons).astype(np.float64)
         points = np.unique(points, axis=0)
 
-        # index the facets of the mesh
+        ## index the facets of the mesh
         facets = []
         for poly in polygons:
             face = []
             for pt in poly:
                 face.append(np.argwhere((np.equal(points, pt, dtype=object)).all(-1))[0][0])
             facets.append(face)
-        self.complexExporter.write_surface_to_off(out_file, points=points, facets=facets)
-
         assert(len(facets)==len(polygons))
 
-        ss=pdse(2)
+        ## debug export the unsimplified surface
+        # self.complexExporter.write_surface_to_off(out_file, points=points, facets=facets)
 
+        ## mark corner vertices
+        vertex_is_corner = defaultdict(set)
+        for i,face in enumerate(facets):
+            for vertex in face:
+                vertex_is_corner[vertex].add(polygon_to_region[i])
+
+        # pcolors = np.zeros(shape=points.shape)
+        # pcolors+=[0,0,255]
+        # for i,regions in vertex_is_corner.items():
+        #     if len(regions) > 2:
+        #         pcolors[i] = [255,0,0]
+        #
+        # pcolors = np.array(pcolors,dtype=int)
+
+        ss=pdse(2)
         region_facets = []
         for region in region_to_polygons.items():
-
             this_region_facets = []
-
             boundary = _get_region_borders(region)
-
-            # TODO: now do tiernan all cycles
+            # ss.get_cycles returns every single twice, once in each region.
             cycles = ss.get_cycles(boundary)
-
             i = 0
             while i < len(cycles):
-                this_region_facets.append(cycles[i])
+                if simplify_edges:
+                    this_cycle = []
+                    for c in cycles[i]:
+                        if len(vertex_is_corner[c]) > 2:
+                            this_cycle.append(c)
+                    this_region_facets.append(this_cycle)
+                else:
+                    this_region_facets.append(cycles[i])
                 i+=2
 
-            ## TODO: in stead of simply saying > 1, check if there are inside and outside domains, ie holes, and if not, keep the polygons. Ie only use triangulation if there are holes.
-            if len(this_region_facets) > 1:
+            if triangulate:
                 plane = PyPlane(self.vg.planes[region[0]])
                 points2d = plane.to_2d(points)
-                triangle_region_facets = ss.get_cdt_of_regions_with_holes(points2d, this_region_facets)
+                triangle_region_facets, region_has_hole = ss.get_cdt_of_regions_with_holes(points2d, this_region_facets)
                 region_facets += triangle_region_facets
+            elif len(this_region_facets) > 1:
+                    plane = PyPlane(self.vg.planes[region[0]])
+                    points2d = plane.to_2d(points)
+                    triangle_region_facets, region_has_hole = ss.get_cdt_of_regions_with_holes(points2d, this_region_facets)
+                    if not region_has_hole:
+                        triangle_region_facets = this_region_facets
+                    region_facets += triangle_region_facets
             else:
                 region_facets.append(this_region_facets[0][:-1])
-
 
         self.complexExporter.write_surface_to_off(out_file, points=points, facets=region_facets)
 
 
-        a=5
 
     def save_surface(self, out_file, backend="python", triangulate=False):
 
@@ -570,9 +586,9 @@ class PolyhedralComplex:
         :param out_file: File to store the mesh.
 
         :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
-                        'python' is slow, 'trimesh' is faster but can only export triangulated mesh. 'cgal' is the fastest and can export polygon and triangle mesh.
+                        'python' is slow; 'trimesh' is faster but can only export a triangle mesh; 'cgal' is the fastest and can export a polygon and a triangle mesh.
 
-        :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
+        :param triangulate: Flag that controls if mesh should be triangulated or not. Only taken into account for backend == 'cgal'.
         """
 
 
