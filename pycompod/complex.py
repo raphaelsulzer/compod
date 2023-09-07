@@ -31,7 +31,7 @@ from .logger import make_logger
 from pyplane.export import PlaneExporter
 from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
 
-from pypdse import pdse
+from pypd import pdse
 
 
 
@@ -540,13 +540,13 @@ class PolyhedralComplex:
         #
         # pcolors = np.array(pcolors,dtype=int)
 
-        ss=pdse(2)
+        se=pdse(0)
         region_facets = []
         for region in region_to_polygons.items():
             this_region_facets = []
             boundary = _get_region_borders(region)
             # ss.get_cycles returns every single twice, once in each region.
-            cycles = ss.get_cycles(boundary)
+            cycles = se.get_cycles(boundary)
             i = 0
             while i < len(cycles):
                 if simplify_edges:
@@ -562,12 +562,12 @@ class PolyhedralComplex:
             if triangulate:
                 plane = PyPlane(self.vg.planes[region[0]])
                 points2d = plane.to_2d(points)
-                triangle_region_facets, region_has_hole = ss.get_cdt_of_regions_with_holes(points2d, this_region_facets)
+                triangle_region_facets, region_has_hole = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
                 region_facets += triangle_region_facets
             elif len(this_region_facets) > 1:
                     plane = PyPlane(self.vg.planes[region[0]])
                     points2d = plane.to_2d(points)
-                    triangle_region_facets, region_has_hole = ss.get_cdt_of_regions_with_holes(points2d, this_region_facets)
+                    triangle_region_facets, region_has_hole = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
                     if not region_has_hole:
                         triangle_region_facets = this_region_facets
                     region_facets += triangle_region_facets
@@ -578,17 +578,21 @@ class PolyhedralComplex:
 
 
 
-    def save_surface(self, out_file, backend="python", triangulate=False):
+    def save_surface(self, out_file, backend="python", triangulate=False, stitch_borders=True):
 
         """
         Extracts a watertight surface mesh from the labelled polyhedral complex.
 
         :param out_file: File to store the mesh.
 
-        :param backend: Backend for surface assembly. 'python', 'trimesh' or 'cgal'.
-                        'python' is slow; 'trimesh' is faster but can only export a triangle mesh; 'cgal' is the fastest and can export a polygon and a triangle mesh.
+        :param backend: Backend for surface extraction: 'python_exact','python', 'trimesh' or 'cgal'.
+                        'python_exact': Extracts a polygon mesh. Works with an exact number type (SAGE rational). It guarantees to extract a watertight surface. The surface may have non-manifold edges. The extraction is slow due to the use of exact numbers.
+                        'python': Extracts a polygon mesh. Similar to 'python_exact', but converts from exact to floating point numbers before surface assembly. This speeds up the extraction a lot but may lead to non-watertightness in rare cases.
+                        'trimesh': Extracts a triangle mesh. Similar to 'python', but uses trimesh for assembling and storing the mesh.
+                        'cgal': Can extract a polygon or triangle mesh. It is the fastest backend. Because the CGAL polygon mesh does not allow non-manifold edges, they are repair. This may lead to non-watertightness in some cases, especially if the mesh is not triangulated.
 
         :param triangulate: Flag that controls if mesh should be triangulated or not. Only taken into account for backend == 'cgal'.
+        :param stitch_borders: Flag that controls if border edges should be stitch. Only taken into account for backend == 'cgal'.
         """
 
 
@@ -639,16 +643,17 @@ class PolyhedralComplex:
 
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
+        ## TODO: replace the CGAL backend with PDSE and add PDSE to COMPOD.
         if backend == "cgal":
             try:
-                import libSoup2Mesh as s2m
+                from pypd import pdse
             except:
-                self.logger.error("Could not import Soup2Mesh. Use either 'python' or 'trimesh' as surface export backend.")
+                self.logger.error("Could not import pyPDSE. Use either 'python' or 'trimesh' as surface export backend.")
                 raise ModuleNotFoundError
-            sm = s2m.Soup2Mesh()
-            sm.loadSoup(np.array(points_exact,dtype=float), np.array(face_lens,dtype=int), np.concatenate(faces,dtype=int))
-            sm.makeMesh(triangulate)
-            sm.saveMesh(out_file)
+            se = pdse(verbosity=0,debug_export=False)
+            se.load_soup(np.array(points_exact,dtype=np.float64), np.array(face_lens,dtype=int))
+            se.soup_to_mesh(triangulate=triangulate,stitch_borders=True)
+            se.save_mesh(out_file)
 
         elif backend == "python":
             if triangulate:
@@ -1041,28 +1046,16 @@ class PolyhedralComplex:
                 self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
                 raise ValueError
             occs = self.label_partition_with_mesh(mesh_file,n_test_points)
-        # elif args["type"] == "load":
-        #     occ_file = os.path.join(out_path,'occupancies.npz')
-        #     if not os.path.isfile(occ_file):
-        #         self.logger.error("{} does not exist.".format(occ_file))
-        #         raise ValueError
-        #     occs = np.load(occ_file)["occupancies"]
         else:
             self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(mode))
             raise NotImplementedError
-
-
-        # if not args["type"] == "load" and out_path is not None:
-        #     # save occupancies to file
-        #     np.savez(os.path.join(out_path,"occupancies.npz"),occupancies=occs,type=args["type"])
-
 
         if args["graph_cut"]:
             # occs = self.graph_cut(occs)
             occs = self._graph_cut(occs,args["binary_weight"])
         else:
             occs = occs[:,0]>occs[:,1]
-        
+
         assert len(occs) == len(self.graph.nodes), "Number of cccupancy labels and graph nodes is not the same."
         occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
 
@@ -1083,14 +1076,11 @@ class PolyhedralComplex:
         :return:
         """
         try:
-            import libPyLabeler as PL
+            from pypd import pdl
         except:
             self.logger.error("Could not import PyLabeler. Use 'normals' for labeling partition.")
             raise ModuleNotFoundError
 
-        pl=PL.PyLabeler(n_test_points)
-        if pl.loadMesh(mesh_file):
-            return 1
         points = []
         points_len = []
         # for i,id in enumerate(list(self.graph.nodes)):
@@ -1108,7 +1098,10 @@ class PolyhedralComplex:
 
 
         # assert(isinstance(points[0].dtype,np.float32))
-        occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
+        pl=pdl(n_test_points)
+        if pl.load_mesh(mesh_file):
+            return 1
+        occs = pl.label_cells(np.array(points_len),np.concatenate(points,axis=0))
         del pl
 
         occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
@@ -1116,25 +1109,52 @@ class PolyhedralComplex:
 
         return occs
 
-
+    # def label_partition_with_mesh(self, mesh_file, n_test_points=50):
+    #     """
+    #     Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
+    #     :param m:
+    #     :param n_test_points:
+    #     :param graph_cut:
+    #     :param export:
+    #     :return:
+    #     """
+    #     try:
+    #         import libPyLabeler as PL
+    #     except:
+    #         self.logger.error("Could not import PyLabeler. Use 'normals' for labeling partition.")
+    #         raise ModuleNotFoundError
+    #
+    #     pl=PL.PyLabeler(n_test_points)
+    #     if pl.loadMesh(mesh_file):
+    #         return 1
+    #     points = []
+    #     points_len = []
+    #     # for i,id in enumerate(list(self.graph.nodes)):
+    #     for id,cell in self.cells.items():
+    #         # if id < 0:  continue # skip the bounding box cells
+    #         bb = self.graph.nodes[id].get("bounding_box",0)
+    #         if bb:  continue # skip the bounding box cells
+    #         # cell = self.cells.get(id)
+    #         if self.debug_export:
+    #             self.complexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
+    #         pts = np.array(cell.vertices())
+    #         points.append(pts)
+    #         # print(pts)
+    #         points_len.append(pts.shape[0])
+    #
+    #
+    #     # assert(isinstance(points[0].dtype,np.float32))
+    #     occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
+    #     del pl
+    #
+    #     occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
+    #     occs = np.array([occs,1-occs]).transpose()
+    #
+    #     return occs
 
     def _collect_facet_points(self):
-        # def convex_contains1(convex, points):
-        #     """
-        #     If point is left of all support lines, it is contained by the convex
-        #     :param convex:
-        #     :param points:
-        #     :return:
-        #     """
-        #     ineqs = np.array(convex.inequalities())
-        #     c = ineqs[:, 0, np.newaxis]
-        #     a = ineqs[:, 1, np.newaxis]
-        #     b = ineqs[:, 2, np.newaxis]
-        #     x = points[np.newaxis, :, 0]
-        #     y = points[np.newaxis, :, 1]
-        #     k = (a * x + b * y) >= -c
-        #     return k.all(axis=0)
-        def convex_contains2(vertices, points):
+
+        def convex_contains(vertices, points):
             """
             Check if points are contained in a convex polygon.
             :param vertices: The vertices of the convex polygon.
@@ -1178,7 +1198,7 @@ class PolyhedralComplex:
             ## this is much faster and gives the same result
             vertices = np.array(edge["intersection"].vertices())
             vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
-            contain = convex_contains2(vertices, self.vg.projected_points[group])
+            contain = convex_contains(vertices, self.vg.projected_points[group])
 
             point_ids_dict[(e0, e1)] = group[contain]
 
@@ -1239,9 +1259,6 @@ class PolyhedralComplex:
     def label_partition_with_point_normals(self):
         """
         Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
-        :param outpath:
-        :param graph_cut:
-        :return:
         """
 
         self._collect_facet_points()
