@@ -225,11 +225,11 @@ class PolyhedralComplexExporter:
                 f.write("{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2]))
         f.close()
 
-    def write_surface_to_off(self,filename,points,facets,pcolor=[],fcolor=[]):
+    def write_surface_to_off(self,filename,points,facets,pcolors=[],fcolors=[]):
 
         f = open(filename[:-3]+"off",'w')
 
-        if len(fcolor) or len(pcolor):
+        if len(fcolors) or len(pcolors):
             f.write("COFF\n")
         else:
             f.write("OFF\n")
@@ -237,7 +237,7 @@ class PolyhedralComplexExporter:
         f.write("{} {} 0\n".format(points.shape[0],len(facets)))
         for i,p in enumerate(points):
             f.write("{:6f} {:6f} {:6f}".format(p[0], p[1], p[2]))
-            if len(pcolor):
+            if len(pcolors):
                 c = pcolor[i]
                 f.write(" {} {} {}".format(c[0], c[1], c[2]))
             f.write("\n")
@@ -246,10 +246,65 @@ class PolyhedralComplexExporter:
             f.write("{}".format(len(face)))
             for v in face:
                 f.write(" {}".format(v))
-            for c in fcolor:
+            for c in fcolors:
                 f.write(" {}".format(c))
             f.write('\n')
         f.close()
+
+
+    def write_surface_to_ply(self,filename,points,facets,pnormals=[],pcolors=[],fcolors=[]):
+
+        # TODO: write this function so I can export point normals
+
+        f = open(filename[:-3]+"ply",'w')
+
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write("element vertex {}\n".format(len(points)))
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        if len(pnormals):
+            f.write("property float nx\n")
+            f.write("property float ny\n")
+            f.write("property float nz\n")
+        if len(pcolors):
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+        f.write("element face {}\n".format(len(facets)))
+        f.write("property list uchar int vertex_indices\n")
+        if len(fcolors):
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+        f.write("end_header\n")
+
+        for i,v in enumerate(points):
+            f.write("{:6f} {:6f} {:6f}".format(v[0], v[1], v[2]))
+            if len(pnormals):
+                n = pnormals[i]
+                f.write(" {:6f} {:6f} {:6f}".format(n[0], n[1], n[2]))
+            if len(pcolors):
+                c = pcolors[i]
+                f.write(" {} {} {}".format(c[0], c[1], c[2]))
+            f.write("\n")
+
+        for i,fa in enumerate(facets):
+            f.write("{}".format(len(fa)))
+            for v in fa:
+                f.write(" {}".format(v))
+            if len(fcolors):
+                c = fcolors[i]
+                f.write("{} {} {}".format(c[0],c[1],c[2]))
+            f.write("\n")
+
+        f.close()
+
+
+
+
+
 
     def write_colored_soup_to_ply(self, filename, points, facets, pcolors=None, fcolors=None):
 

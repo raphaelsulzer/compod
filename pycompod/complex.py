@@ -255,7 +255,7 @@ class PolyhedralComplex:
                 sorted_.append(connected[1])
         return sorted_
 
-    def _orient_polygon_exact(self, points, outside):
+    def _orient_polygon_exact(self, points, outside, return_orientation = False):
         # check for left or right orientation
         # https://math.stackexchange.com/questions/2675132/how-do-i-determine-whether-the-orientation-of-a-basis-is-positive-or-negative-us
 
@@ -278,7 +278,10 @@ class PolyhedralComplex:
         # cross = cross/cross.norm()
         dot = cross.dot_product(c)
 
-        return dot < 0
+        if return_orientation:
+            return dot < 0, cross
+        else:
+            return dot < 0
 
 
     def _get_intersection(self, e0, e1):
@@ -433,17 +436,20 @@ class PolyhedralComplex:
 
         """
         Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
-        mesh is either triangulate (if it contains holes) or represented as one (region with one connected component) or several (region with multiple connected components) polygons.
+        mesh is either triangulated (if it contains holes) or represented as one (region with one connected component)
+        or several (region with multiple connected components) polygons.
 
         :param out_file: File to store the mesh.
 
-        :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
+        :param triangulate: Flag that controls if all regions should be triangulated or not.
+
+        :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
 
         def _get_region_borders(region):
 
             """
-            Get all border edges of region
+            Get all border edges of region.
 
             :param region: Tuple of region id and region polygons.
             :return: All unsorted edges of a region.
@@ -470,6 +476,31 @@ class PolyhedralComplex:
             unique, inverse, count = np.unique(np.sort(region_edges),return_inverse=True,return_counts=True,axis=0)
             return np.array(region_edges)[(count==1)[inverse]]
 
+        def _orient_facets(facets):
+            """
+            Orient facets by checking if the current orientation is the same as the one of the region.
+            :param facets:
+            :return:
+            """
+
+            a = points[facets[0][0]]
+            b = points[facets[0][1]]
+            c = points[facets[0][2]]
+
+            cross = np.cross(a-b,c-b)
+            normal = np.array(region_normals[region[0]])
+            for facet in this_region_facets:
+                for vertex in facet:
+                    point_normals[vertex] = normal
+
+            if np.dot(cross,normal) > 0:
+                t = []
+                for i,face in enumerate(facets):
+                    t.append(np.flip(face))
+                return t
+            else:
+                return facets
+
 
         if not self.polygons_constructed:
             self.construct_polygons()
@@ -477,6 +508,7 @@ class PolyhedralComplex:
         self.logger.info('Save simplified surface mesh...')
 
         region_to_polygons = defaultdict(list)
+        region_normals = dict()
         polygons = []
         polygon_to_region = []
         npolygons = 0
@@ -498,8 +530,11 @@ class PolyhedralComplex:
 
                 ## orient polygon
                 outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                if self._orient_polygon_exact(intersection_points,outside):
+                flip, normal = self._orient_polygon_exact(intersection_points,outside,return_orientation=True)
+                if flip:
                     intersection_points = np.flip(intersection_points, axis=0)
+                    normal = -normal
+                region_normals[plane_id] = normal
 
                 polygons.append(intersection_points.astype(np.float64))
 
@@ -524,28 +559,25 @@ class PolyhedralComplex:
         assert(len(facets)==len(polygons))
 
         ## debug export the unsimplified surface
-        # self.complexExporter.write_surface_to_off(out_file, points=points, facets=facets)
+        if self.debug_export:
+            self.complexExporter.write_surface_to_off(out_file[:-4]+"_debug.off", points=points, facets=facets)
 
         ## mark corner vertices
         vertex_is_corner = defaultdict(set)
+        vertex_is_corner_array = np.zeros(points.shape[0],dtype=int) # used for reindexing
         for i,face in enumerate(facets):
             for vertex in face:
                 vertex_is_corner[vertex].add(polygon_to_region[i])
 
-        # pcolors = np.zeros(shape=points.shape)
-        # pcolors+=[0,0,255]
-        # for i,regions in vertex_is_corner.items():
-        #     if len(regions) > 2:
-        #         pcolors[i] = [255,0,0]
-        #
-        # pcolors = np.array(pcolors,dtype=int)
-
+        # init a surface extractor
         se=pdse(0)
         region_facets = []
+        point_normals = np.ones(shape=points.shape)
+
         for region in region_to_polygons.items():
             this_region_facets = []
             boundary = _get_region_borders(region)
-            # ss.get_cycles returns every single twice, once in each region.
+            # ss.get_cycles returns every cycle twice, once in each region.
             cycles = se.get_cycles(boundary)
             i = 0
             while i < len(cycles):
@@ -554,28 +586,46 @@ class PolyhedralComplex:
                     for c in cycles[i]:
                         if len(vertex_is_corner[c]) > 2:
                             this_cycle.append(c)
+                            vertex_is_corner_array[c] = 1
                     this_region_facets.append(this_cycle)
                 else:
                     this_region_facets.append(cycles[i])
                 i+=2
 
-            if triangulate:
+            if triangulate: # triangulate all faces
                 plane = PyPlane(self.vg.planes[region[0]])
                 points2d = plane.to_2d(points)
-                triangle_region_facets, region_has_hole = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
-                region_facets += triangle_region_facets
-            elif len(this_region_facets) > 1:
+                this_region_facets, _ = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
+            elif len(this_region_facets) > 1: # triangulate only faces that have a whole
                     plane = PyPlane(self.vg.planes[region[0]])
                     points2d = plane.to_2d(points)
                     triangle_region_facets, region_has_hole = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
-                    if not region_has_hole:
-                        triangle_region_facets = this_region_facets
-                    region_facets += triangle_region_facets
+                    if region_has_hole:
+                        this_region_facets = triangle_region_facets
+                    else:
+                        t = []
+                        for cycle in this_region_facets:
+                            t.append(cycle[:-1])
+                        this_region_facets = t
             else:
-                region_facets.append(this_region_facets[0][:-1])
+                this_region_facets = [this_region_facets[0][:-1]]
+
+            ## change orientation of the region if necessary
+            this_region_facets = _orient_facets(this_region_facets)
+            region_facets += this_region_facets
+
+        if simplify_edges:
+            ## remove unreferenced vertices and reindex
+            points = points[vertex_is_corner_array>0]
+            point_normals = point_normals[vertex_is_corner_array>0]
+            vertex_is_corner_array[vertex_is_corner_array>0] = np.arange(vertex_is_corner_array.sum())
+            t = []
+            for facet in region_facets:
+                t.append(vertex_is_corner_array[np.array(facet)])
+            region_facets = t
 
         self.complexExporter.write_surface_to_off(out_file, points=points, facets=region_facets)
-
+        # self.complexExporter.write_surface_to_ply(out_file, points=points, pnormals=point_normals, facets=region_facets)
 
 
     def save_surface(self, out_file, backend="python", triangulate=False, stitch_borders=True):
@@ -592,6 +642,7 @@ class PolyhedralComplex:
                         'cgal': Can extract a polygon or triangle mesh. It is the fastest backend. Because the CGAL polygon mesh does not allow non-manifold edges, they are repair. This may lead to non-watertightness in some cases, especially if the mesh is not triangulated.
 
         :param triangulate: Flag that controls if mesh should be triangulated or not. Only taken into account for backend == 'cgal'.
+
         :param stitch_borders: Flag that controls if border edges should be stitch. Only taken into account for backend == 'cgal'.
         """
 
@@ -1068,13 +1119,12 @@ class PolyhedralComplex:
 
     def label_partition_with_mesh(self, mesh_file, n_test_points=50):
         """
-        Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
-        :param m:
-        :param n_test_points:
-        :param graph_cut:
-        :param export:
-        :return:
+        Compute occupancy of each cell in the partition by sampling points inside each cells and checking if they lie inside the provided reference mesh.
+
+        :param mesh_file: The input mesh file.
+        :param n_test_points: Number of test points per cell.
         """
+
         try:
             from pypd import pdl
         except:
@@ -1108,49 +1158,6 @@ class PolyhedralComplex:
         occs = np.array([occs,1-occs]).transpose()
 
         return occs
-
-    # def label_partition_with_mesh(self, mesh_file, n_test_points=50):
-    #     """
-    #     Compute occupancy of each cell in the partition using a ground truth mesh and point sampling.
-    #     :param m:
-    #     :param n_test_points:
-    #     :param graph_cut:
-    #     :param export:
-    #     :return:
-    #     """
-    #     try:
-    #         import libPyLabeler as PL
-    #     except:
-    #         self.logger.error("Could not import PyLabeler. Use 'normals' for labeling partition.")
-    #         raise ModuleNotFoundError
-    #
-    #     pl=PL.PyLabeler(n_test_points)
-    #     if pl.loadMesh(mesh_file):
-    #         return 1
-    #     points = []
-    #     points_len = []
-    #     # for i,id in enumerate(list(self.graph.nodes)):
-    #     for id,cell in self.cells.items():
-    #         # if id < 0:  continue # skip the bounding box cells
-    #         bb = self.graph.nodes[id].get("bounding_box",0)
-    #         if bb:  continue # skip the bounding box cells
-    #         # cell = self.cells.get(id)
-    #         if self.debug_export:
-    #             self.complexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
-    #         pts = np.array(cell.vertices())
-    #         points.append(pts)
-    #         # print(pts)
-    #         points_len.append(pts.shape[0])
-    #
-    #
-    #     # assert(isinstance(points[0].dtype,np.float32))
-    #     occs = pl.labelCells(np.array(points_len),np.concatenate(points,axis=0))
-    #     del pl
-    #
-    #     occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
-    #     occs = np.array([occs,1-occs]).transpose()
-    #
-    #     return occs
 
     def _collect_facet_points(self):
 
@@ -1726,7 +1733,6 @@ class PolyhedralComplex:
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"]+=facet_intersection.vertices_list()
-                    # this_edge["vertices"]+=facet_intersection.vertices_list()
 
             for neighbor in list(self.graph[c1]):
                 if neighbor == c0: continue
@@ -1734,7 +1740,6 @@ class PolyhedralComplex:
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
-                    # this_edge["vertices"] += facet_intersection.vertices_list()
 
         self.polygons_constructed = True
 
