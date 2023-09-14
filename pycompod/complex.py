@@ -25,21 +25,16 @@ with warnings.catch_warnings():
     import gco # pip install gco-wrapper
 
 from .export_complex import PolyhedralComplexExporter
-from .imports import *
 from .logger import make_logger
 
-from pyplane.export import PlaneExporter
-from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
-
-from pypd import pdse
-
+from pycompose import pdse
 
 
 class PolyhedralComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, model=None, logging_level=logging.ERROR):
+    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, model=None, verbosity=logging.ERROR):
         """
         Init PolyhedralComplex.
         Class of polyhedral complex from planar primitive arrangement.
@@ -59,7 +54,7 @@ class PolyhedralComplex:
         self.vg = vertex_group
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
 
-        self.logger = make_logger(name="COMPOD",level=logging_level)
+        self.logger = make_logger(name="COMPOD",level=verbosity)
 
         self.logger.debug('Init cell complex with padding {}'.format(padding))
 
@@ -1517,7 +1512,7 @@ class PolyhedralComplex:
                         new_group = np.concatenate((new_group,fill))
                     else:
                         self.logger.warning(
-                            "Fill value overflow. Len of hull points = {}, fill value = {}. Increase vg.n_fill in primitive.py for more robustness.".format(new_group.shape[0],self.vg.n_fill))
+                            "Fill value overflow. Len of hull points = {}, fill value = {}. Increase vg.n_fill in vg.py for more robustness.".format(new_group.shape[0],self.vg.n_fill))
                         new_group = new_group[:self.vg.n_fill]
 
                     self.vg.hull_vertices = np.vstack((self.vg.hull_vertices,new_group))
@@ -1546,7 +1541,7 @@ class PolyhedralComplex:
                         new_group = np.concatenate((new_group, fill))
                     else:
                         self.logger.warning(
-                            "Fill value overflow. Len of hull points = {}, fill value = {}. Increase vg.n_fill in primitive.py for more robustness.".format(new_group.shape[0],self.vg.n_fill))
+                            "Fill value overflow. Len of hull points = {}, fill value = {}. Increase vg.n_fill in vg.py for more robustness.".format(new_group.shape[0],self.vg.n_fill))
                         new_group = new_group[:self.vg.n_fill]
 
                     self.vg.hull_vertices = np.vstack((self.vg.hull_vertices, new_group))

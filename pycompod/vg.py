@@ -3,8 +3,6 @@ import os, sys
 from pathlib import Path
 import numpy as np
 from sage.all import polytopes, QQ, Polyhedron
-from pyplane.pyplane import PyPlane, SagePlane, ProjectedConvexHull
-from pyplane.export import PlaneExporter
 import copy
 from .logger import make_logger
 
@@ -14,7 +12,7 @@ class VertexGroup:
     """
 
     def __init__(self, input_file, prioritise = None,
-                 points_type="inliers", total_sample_count=100000, recolor=False, logging_level=logging.ERROR):
+                 points_type="inliers", total_sample_count=100000, recolor=False, verbosity=logging.ERROR):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -29,7 +27,7 @@ class VertexGroup:
         # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
         np.random.seed(42)
 
-        self.logger = make_logger(name="COMPOD",level=logging_level)
+        self.logger = make_logger(name="COMPOD",level=verbosity)
 
         self.input_file = input_file
         self.prioritise = prioritise

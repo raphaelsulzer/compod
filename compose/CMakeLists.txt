@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(PDSE LANGUAGES CXX)
-
-set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_MODULE_PATH}) # for finding the FindNumPy.cmake file
+project(COMPOSE LANGUAGES CXX)
 
 ######################################################
 ###################### SETTINGS ######################
@@ -66,15 +64,14 @@ target_link_libraries(SurfaceSimplifier ${CGAL_LIBRARIES})
 target_link_libraries(SurfaceSimplifier ZLIB::ZLIB xtensor xtensor-io)
 target_link_libraries(SurfaceSimplifier spdlog::spdlog)
 
-add_executable(SurfaceSimplifierExe "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-target_link_libraries(SurfaceSimplifierExe SurfaceSimplifier)
-target_link_libraries(SurfaceSimplifierExe ${Boost_LIBRARIES})
-target_link_libraries(SurfaceSimplifierExe ${CGAL_LIBRARIES})
-target_link_libraries(SurfaceSimplifierExe ZLIB::ZLIB xtensor xtensor-io)
-target_link_libraries(SurfaceSimplifierExe spdlog::spdlog)
-
-# TODO: add the PyLabeler here and rewrite with nanobind (instead of boost)
-
+if(NOT SKBUILD)
+    add_executable(SurfaceSimplifierExe "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+    target_link_libraries(SurfaceSimplifierExe SurfaceSimplifier)
+    target_link_libraries(SurfaceSimplifierExe ${Boost_LIBRARIES})
+    target_link_libraries(SurfaceSimplifierExe ${CGAL_LIBRARIES})
+    target_link_libraries(SurfaceSimplifierExe ZLIB::ZLIB xtensor xtensor-io)
+    target_link_libraries(SurfaceSimplifierExe spdlog::spdlog)
+endif()
 
 ##########################################
 ############# python bindings ############
@@ -83,17 +80,12 @@ nanobind_add_module(libPYPDSE "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdse.cpp")
 if(SKBUILD)
     include_directories("${CMAKE_CURRENT_BINARY_DIR}")
     target_link_libraries(libPYPDSE PUBLIC SurfaceSimplifier spdlog::spdlog)
-    install(TARGETS libPYPDSE LIBRARY DESTINATION pypd)
+    install(TARGETS libPYPDSE LIBRARY DESTINATION pycompose)
 endif()
 
 nanobind_add_module(libPYPDL "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdl.cpp")
 if(SKBUILD)
     include_directories("${CMAKE_CURRENT_BINARY_DIR}")
     target_link_libraries(libPYPDL PUBLIC ${CGAL_LIBRARIES} spdlog::spdlog)
-    install(TARGETS libPYPDL LIBRARY DESTINATION pypd)
+    install(TARGETS libPYPDL LIBRARY DESTINATION pycompose)
 endif()
-
-
-#include_directories("${CMAKE_CURRENT_BINARY_DIR}")
-#target_link_libraries(libPYPDSE PUBLIC SurfaceSimplifier spdlog::spdlog)
-#install(TARGETS libPYPDSE LIBRARY DESTINATION pypdse)

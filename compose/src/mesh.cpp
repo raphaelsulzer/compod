@@ -4,7 +4,6 @@
 
 #include <boost_typedefs.h>
 
-#include <CGAL/Polygon_mesh_processing/remesh_planar_patches.h>
 #include <CGAL/Polygon_mesh_processing/region_growing.h>
 #include <CGAL/Polygon_mesh_processing/orient_polygon_soup_extension.h>
 
@@ -179,10 +178,10 @@ int SMesh::soup_to_mesh_no_repair(){
 
 
 
-    for(auto vert : _mesh.vertices()){
-        if(PMP::is_non_manifold_vertex(vert,_mesh))
-            cout << "found non maifold vertex" << endl;
-    }
+//    for(auto vert : _mesh.vertices()){
+//        if(PMP::is_non_manifold_vertex(vert,_mesh))
+//            cout << "found non maifold vertex" << endl;
+//    }
 
     for(auto fid : _mesh.faces()){
         auto pid = _polygon_to_face.find(fid)->first;
@@ -250,64 +249,67 @@ int SMesh::soup_to_mesh(const bool triangulate, const bool stitch_borders){
 
 }
 
-int SMesh::remesh_planar_patches(const int triangulate){
+/// the include gives a warning, so I'll comment that part of the code. it is not working anyway.
+//#include <CGAL/Polygon_mesh_processing/remesh_planar_patches.h>
 
-    if(!CGAL::is_triangle_mesh(_mesh))
-        PMP::triangulate_faces(_mesh);
+//int SMesh::remesh_planar_patches(const int triangulate){
 
-    _simplified_mesh.clear();
+//    if(!CGAL::is_triangle_mesh(_mesh))
+//        PMP::triangulate_faces(_mesh);
 
-    PMP::remesh_planar_patches(_mesh,_simplified_mesh,PMP::parameters::do_not_triangulate_faces(!triangulate));
+//    _simplified_mesh.clear();
 
-    return 0;
+//    PMP::remesh_planar_patches(_mesh,_simplified_mesh,PMP::parameters::do_not_triangulate_faces(!triangulate));
 
-}
+//    return 0;
 
-int SMesh::remesh_almost_planar_patches(const int triangulate){
+//}
 
-    _logger->info("Input: ");
-    _logger->info("Vertices: {}",_mesh.number_of_vertices());
-    _logger->info("Edges: {}",_mesh.number_of_edges());
-    _logger->info("Faces: {}",_mesh.number_of_faces());
+//int SMesh::remesh_almost_planar_patches(const int triangulate){
 
-
-    boost::associative_property_map<map<Mesh::Face_index, int>> ftr(_face_to_region);
-
-    map<Mesh::Vertex_index,int> vertex_to_corner;
-    boost::associative_property_map<map<Mesh::Vertex_index,int>> vtc(vertex_to_corner);
+//    _logger->info("Input: ");
+//    _logger->info("Vertices: {}",_mesh.number_of_vertices());
+//    _logger->info("Edges: {}",_mesh.number_of_edges());
+//    _logger->info("Faces: {}",_mesh.number_of_faces());
 
 
-    int nb_regions = _region_to_polygons.size();
+//    boost::associative_property_map<map<Mesh::Face_index, int>> ftr(_face_to_region);
 
-    map<Mesh::Edge_index,bool> edge_is_constrained;
-    for(Mesh::Edge_index e : _mesh.edges())
-        edge_is_constrained.insert(pair<Mesh::Edge_index,bool>(e, false));
-    boost::associative_property_map<map<Mesh::Edge_index,bool>> eic(edge_is_constrained);
+//    map<Mesh::Vertex_index,int> vertex_to_corner;
+//    boost::associative_property_map<map<Mesh::Vertex_index,int>> vtc(vertex_to_corner);
 
-    //////// //////// //////// //////// //////// //////// //////// //////// //////// //////// ////////
-    //////// nb_corners is always 0, so the whole thing doesn't work
-    int nb_corners = PMP::detect_corners_of_regions(_mesh,ftr,nb_regions,vtc,PMP::parameters::maximum_angle(1).
-                                   maximum_distance(1).edge_is_constrained_map(eic));
-    //////// //////// //////// //////// //////// //////// //////// //////// //////// //////// ////////
 
-    _simplified_mesh.clear();
+//    int nb_regions = _region_to_polygons.size();
 
-    bool succes = PMP::remesh_almost_planar_patches(_mesh,_simplified_mesh,nb_regions,nb_corners,ftr,vtc,eic,PMP::parameters::do_not_triangulate_faces(!triangulate));
+//    map<Mesh::Edge_index,bool> edge_is_constrained;
+//    for(Mesh::Edge_index e : _mesh.edges())
+//        edge_is_constrained.insert(pair<Mesh::Edge_index,bool>(e, false));
+//    boost::associative_property_map<map<Mesh::Edge_index,bool>> eic(edge_is_constrained);
 
-    if(succes){
-        _logger->info("Simplification succeeded");
-    }
-    else{
-        _logger->info("Simplification did not succeed");
-    }
+//    //////// //////// //////// //////// //////// //////// //////// //////// //////// //////// ////////
+//    //////// nb_corners is always 0, so the whole thing doesn't work
+//    int nb_corners = PMP::detect_corners_of_regions(_mesh,ftr,nb_regions,vtc,PMP::parameters::maximum_angle(1).
+//                                   maximum_distance(1).edge_is_constrained_map(eic));
+//    //////// //////// //////// //////// //////// //////// //////// //////// //////// //////// ////////
 
-    _logger->info("Output: ");
-    _logger->info("Vertices: {}",_simplified_mesh.number_of_vertices());
-    _logger->info("Edges: {}",_simplified_mesh.number_of_edges());
-    _logger->info("Faces: {}",_simplified_mesh.number_of_faces());
+//    _simplified_mesh.clear();
 
-    return 0;
-}
+//    bool succes = PMP::remesh_almost_planar_patches(_mesh,_simplified_mesh,nb_regions,nb_corners,ftr,vtc,eic,PMP::parameters::do_not_triangulate_faces(!triangulate));
+
+//    if(succes){
+//        _logger->info("Simplification succeeded");
+//    }
+//    else{
+//        _logger->info("Simplification did not succeed");
+//    }
+
+//    _logger->info("Output: ");
+//    _logger->info("Vertices: {}",_simplified_mesh.number_of_vertices());
+//    _logger->info("Edges: {}",_simplified_mesh.number_of_edges());
+//    _logger->info("Faces: {}",_simplified_mesh.number_of_faces());
+
+//    return 0;
+//}
 
 void SMesh::_get_corner_vertices(){
 
@@ -344,7 +346,6 @@ void SMesh::_save_region_mesh(const vector<Mesh::Face_index>& region,const strin
 
 }
 
-//namespace boost { void renumber_vertex_indices(Graph const&) {} }
 
 CF::CF(SMesh& smesh) : _smesh(smesh)
 {};
