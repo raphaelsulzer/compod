@@ -1,8 +1,7 @@
 import logging, colorlog, sys
 
 def make_logger(name="MyLogger",level=logging.INFO,
-                filepath=None,
-                capture_warnings=True):
+                filepath=None):
     """
     Attach a stream handler to all loggers.
 

@@ -225,7 +225,6 @@ class PolyhedralComplex:
         # if (np.unique(radians,return_counts=True)[1]>1).any():
         #     print("WARNING: same exact radians in _sort_vertex_indices_by_angle_exact")
 
-
         return np.argsort(radians)
 
     def _sorted_vertex_indices(self,adjacency_matrix):
@@ -476,24 +475,35 @@ class PolyhedralComplex:
             unique, inverse, count = np.unique(np.sort(region_edges),return_inverse=True,return_counts=True,axis=0)
             return np.array(region_edges)[(count==1)[inverse]]
 
-        def _orient_facets(facets):
+        def _orient_facets(facets, region):
             """
             Orient facets by checking if the current orientation is the same as the one of the region.
             :param facets:
             :return:
             """
 
-            a = points[facets[0][0]]
-            b = points[facets[0][1]]
-            c = points[facets[0][2]]
+            # a = points[facets[0][0]]
+            # b = points[facets[0][1]]
+            # c = points[facets[0][2]]
 
-            cross = np.cross(a-b,c-b)
+            # cross = np.cross(a-b,c-b)
+
+            i = 0
+            cross = 0
+            while np.sum(cross * cross) == 0:
+                a = points[facets[0][i+1]] - points[facets[0][i]]
+                # a = a/a.norm()
+                b = points[facets[0][i+2]] - points[facets[0][i]]
+                # b = b/b.norm()
+                cross = np.cross(a,b)
+                i += 1
+
             normal = np.array(region_normals[region[0]])
             for facet in this_region_facets:
                 for vertex in facet:
                     point_normals[vertex] = normal
 
-            if np.dot(cross,normal) > 0:
+            if np.dot(cross,normal) < 0:
                 t = []
                 for i,face in enumerate(facets):
                     t.append(np.flip(face))
@@ -611,7 +621,7 @@ class PolyhedralComplex:
                 this_region_facets = [this_region_facets[0][:-1]]
 
             ## change orientation of the region if necessary
-            this_region_facets = _orient_facets(this_region_facets)
+            this_region_facets = _orient_facets(this_region_facets, region)
             region_facets += this_region_facets
 
         if simplify_edges:

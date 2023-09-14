@@ -1,0 +1,29 @@
+Processing /home/rsulzer/cpp/pdse
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: pypdse
+  Building wheel for pypdse (pyproject.toml): started
+  Building wheel for pypdse (pyproject.toml): finished with status 'error'
+Failed to build pypdse
+Using pip 23.2.1 from /opt/miniconda3/envs/psdr/lib/python3.9/site-packages/pip (python 3.9)
+Obtaining file:///home/rsulzer/cpp/pdse
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: pypdse
+  Building editable for pypdse (pyproject.toml): started
+  Building editable for pypdse (pyproject.toml): finished with status 'error'
+Failed to build pypdse
