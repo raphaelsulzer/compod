@@ -26,11 +26,27 @@ git clone https://github.com/raphaelsulzer/compod.git
 cd compod
 conda create --name compod
 conda activate compod
-bash install dependencies.sh    # this step may take some time
+bash install.sh    # this step may take some time
 pip install . 
 ```
 
 You are now ready to use COMPOD.
+
+## COMPOSE
+
+COMPOSE is an extension for COMPOD that implements some routines for Surface Extraction in C++. Those are:
+- a fast inside/outside labelling of the cells of the polyhedral complex based on sampling points in a reference mesh. 
+- a simplification of the surface extracted from COMPOD based on a Constrained Delaunay Triangulation of the corner vertices of each planar region of the surface mesh.
+
+To install COMPOSE you need to follow the steps below:
+
+```
+cd compose
+conda install -y -c conda-forge spdlog cgal anaconda::mpfr
+pip install . 
+```
+
+
 
 
 # Usage
