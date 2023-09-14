@@ -5,6 +5,8 @@ import numpy as np
 from sage.all import polytopes, QQ, Polyhedron
 import copy
 from .logger import make_logger
+from .plane import PyPlane, ProjectedConvexHull
+from .export_plane import PlaneExporter
 
 class VertexGroup:
     """

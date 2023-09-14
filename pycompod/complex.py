@@ -10,7 +10,7 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 
-import time, multiprocessing, pickle, logging, trimesh, copy, warnings
+import time, multiprocessing, pickle, logging, trimesh, copy, warnings, sys, os
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +29,8 @@ from .logger import make_logger
 
 from pycompose import pdse
 
+from .plane import ProjectedConvexHull, PyPlane
+from .export_plane import PlaneExporter
 
 class PolyhedralComplex:
     """
@@ -54,6 +56,7 @@ class PolyhedralComplex:
         self.vg = vertex_group
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
 
+        self.verbosity = verbosity
         self.logger = make_logger(name="COMPOD",level=verbosity)
 
         self.logger.debug('Init cell complex with padding {}'.format(padding))
@@ -435,7 +438,7 @@ class PolyhedralComplex:
 
         :param out_file: File to store the mesh.
 
-        :param triangulate: Flag that controls if all regions should be triangulated or not.
+        :param triangulate: Flag that controls if all regions should be triangulated or not. Necessary for correct orientation.
 
         :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
@@ -486,12 +489,15 @@ class PolyhedralComplex:
             i = 0
             cross = 0
             while np.sum(cross * cross) == 0:
-                a = points[facets[0][i+1]] - points[facets[0][i]]
-                # a = a/a.norm()
-                b = points[facets[0][i+2]] - points[facets[0][i]]
-                # b = b/b.norm()
-                cross = np.cross(a,b)
-                i += 1
+                try:
+                    a = points[facets[0][i+1]] - points[facets[0][i]]
+                    # a = a/a.norm()
+                    b = points[facets[0][i+2]] - points[facets[0][i]]
+                    # b = b/b.norm()
+                    cross = np.cross(a,b)
+                    i += 1
+                except:
+                    return facets
 
             normal = np.array(region_normals[region[0]])
             for facet in this_region_facets:
@@ -1091,7 +1097,7 @@ class PolyhedralComplex:
 
         return labels
 
-    def label_partition(self,mode,mesh_file=None,n_test_points=50,**args):
+    def label_partition(self,mode="normals",mesh_file=None,n_test_points=50,regularization=0.0):
 
         self.logger.info('Label {} cells with {}...'.format(len(self.graph.nodes),mode))
 
@@ -1106,9 +1112,9 @@ class PolyhedralComplex:
             self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(mode))
             raise NotImplementedError
 
-        if args["graph_cut"]:
+        if regularization > 0.0:
             # occs = self.graph_cut(occs)
-            occs = self._graph_cut(occs,args["binary_weight"])
+            occs = self._graph_cut(occs,regularization)
         else:
             occs = occs[:,0]>occs[:,1]
 
@@ -1328,7 +1334,7 @@ class PolyhedralComplex:
             left_right = np.sum(left_right[:,:2],axis=1)
             best_plane_id = np.argmax(left_right)
         elif "product" in insertion_order:
-            left_right = np.product(left_right[:,:2],axis=1)
+            left_right = np.prod(left_right[:,:2],axis=1)
             best_plane_id = np.argmax(left_right)
         elif "intersect" in insertion_order:
             left_right = np.abs(left_right[:,0]-left_right[:,1])+left_right[:,2]
@@ -1384,7 +1390,7 @@ class PolyhedralComplex:
             left_right = np.sum(left_right[:,:2],axis=1)
             best_plane_id = np.argmax(left_right)
         elif "product" in insertion_order:
-            left_right = np.product(left_right[:,:2],axis=1)
+            left_right = np.prod(left_right[:,:2],axis=1)
             best_plane_id = np.argmax(left_right)
         elif "intersect" in insertion_order:
             left_right = np.abs(left_right[:,0]-left_right[:,1])+left_right[:,2]
@@ -1499,8 +1505,12 @@ class PolyhedralComplex:
                     
                     # get all hull points and  make a new hull on the left side
                     if left_point_ids.shape[0] > 2:
-                        new_hull = ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])
-                        new_group = left_point_ids[new_hull.hull.vertices]
+                        try:
+                            new_hull = ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])
+                            new_group = left_point_ids[new_hull.hull.vertices]
+                        except:
+                            # putting this except here, because even if there are more than 2 points, but they lie on the same line, you cannot get a convex hull.
+                            new_group = left_point_ids
                     else:
                         new_group = left_point_ids
 
@@ -1528,8 +1538,12 @@ class PolyhedralComplex:
 
                     # get all hull points and  make a new hull on the right side
                     if right_point_ids.shape[0] > 2:
-                        new_hull = ProjectedConvexHull(self.vg.planes[id], self.vg.points[right_point_ids])
-                        new_group = right_point_ids[new_hull.hull.vertices]
+                        try:
+                            new_hull = ProjectedConvexHull(self.vg.planes[id], self.vg.points[right_point_ids])
+                            new_group = right_point_ids[new_hull.hull.vertices]
+                        except:
+                            # putting this except here, because even if there are more than 2 points, but they lie on the same line, you cannot get a convex hull.
+                            new_group = right_point_ids
                     else:
                         new_group = right_point_ids
 
@@ -1817,7 +1831,11 @@ class PolyhedralComplex:
         self.cells[cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
         plane_count = 0 # only used for debugging exports
-        pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout)
+        if self.verbosity == logging.INFO:
+            tqdm_disable = False
+        else:
+            tqdm_disable = True
+        pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout, disable=tqdm_disable)
         best_plane_ids = [] # only used for debugging exports
 
         if subdivison:

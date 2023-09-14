@@ -2,6 +2,7 @@ import os
 import numpy as np
 from scipy.spatial import ConvexHull
 from copy import deepcopy
+from .plane import ProjectedConvexHull
 
 class PlaneExporter:
 
