@@ -32,7 +32,7 @@ pip install .
 
 You are now ready to use COMPOD.
 
-## COMPOSE
+### COMPOSE
 
 COMPOSE is an extension for COMPOD that implements some routines for Surface Extraction in C++. Those are:
 - a fast inside/outside labelling of the cells of the polyhedral complex based on sampling points in a reference mesh. 
@@ -52,24 +52,30 @@ pip install .
 # Usage
 
 ```
-from pypsdr import psdr
+import os
+from pycompod import VertexGroup, PolyhedralComplex
 
-# initialise a planar shape detector and load input points                                              
-ps = psdr(verbosity=1)                                               
-ps.load_points(example/data/anchor/pointcloud.ply)
+model = "anchor"
 
-# detect planar shapes with default values
-ps.detect(min_inliers=20,epsilon=0.02,normal_th=0.8,knn=10)
+file = "../../../cpp/psdr/example/data/{}/convexes_detected/file.npz".format(model)
+vg = VertexGroup(file,prioritise="area",verbosity=20)
 
-# refine planar shape configuration until convergence (i.e. no limit on number of iterations)
-ps.refine(max_iter=-1)
+cc = PolyhedralComplex(vg,device='gpu',logging_level=20)
+cc.construct_partition()
+cc.add_bounding_box_planes()
+cc.label_partition(mesh_file="data/{}/dense_mesh/file.off".format(model),graph_cut=False,type="mesh")
 
-# export planar shapes and vertex groups  
-ps.save(example/data/anchor/convexes.ply,"convex")                  
-ps.save(example/data/anchor/rectangles.ply,"rectangles")            
-ps.save(example/data/anchor/alpha_shapes.ply,"alpha")               
-ps.save(example/data/anchor/groups.vg)                              
-ps.save(example/data/anchor/groups.npz)                             
+os.makedirs("data/{}/partition".format(model),exist_ok=True)
+
+cc.save_partition("data/{}/partition/file.ply".format(model), rand_colors=False,
+                  export_boundary=True, with_primitive_id=False)
+
+cc.simplify_partition_tree_based()
+cc.simplify_partition_graph_based()
+
+cc.save_partition_to_pickle("data/{}/partition".format(model))
+
+cc.save_surface(out_file="data/{}/polygon_mesh_detected/file.ply".format(model), backend="cgal", triangulate=False)                          
 ```
 
 # Examples
