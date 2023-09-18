@@ -27,8 +27,6 @@ with warnings.catch_warnings():
 from .export_complex import PolyhedralComplexExporter
 from .logger import make_logger
 
-from pycompose import pdse
-
 from .plane import ProjectedConvexHull, PyPlane
 from .export_plane import PlaneExporter
 
@@ -55,6 +53,7 @@ class PolyhedralComplex:
 
         self.vg = vertex_group
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
+        del self.vg.planes
 
         self.verbosity = verbosity
         self.logger = make_logger(name="COMPOD",level=verbosity)
@@ -443,6 +442,13 @@ class PolyhedralComplex:
         :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
 
+        try:
+            from pycompose import pdse
+        except:
+            self.logger.error(
+                "Could not import pdse. Please install COMPOSE (https://github.com/raphaelsulzer/compod#compose).")
+            raise ModuleNotFoundError
+
         def _get_region_borders(region):
 
             """
@@ -604,11 +610,11 @@ class PolyhedralComplex:
                 i+=2
 
             if triangulate: # triangulate all faces
-                plane = PyPlane(self.vg.planes[region[0]])
+                plane = PyPlane(self.vg.input_planes[region[0]])
                 points2d = plane.to_2d(points)
                 this_region_facets, _ = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
             elif len(this_region_facets) > 1: # triangulate only faces that have a whole
-                    plane = PyPlane(self.vg.planes[region[0]])
+                    plane = PyPlane(self.vg.input_planes[region[0]])
                     points2d = plane.to_2d(points)
                     triangle_region_facets, region_has_hole = se.get_cdt_of_regions_with_holes(points2d, this_region_facets)
                     if region_has_hole:
@@ -708,9 +714,10 @@ class PolyhedralComplex:
         ## TODO: replace the CGAL backend with PDSE and add PDSE to COMPOD.
         if backend == "cgal":
             try:
-                from pypd import pdse
+                from pycompose import pdse
             except:
-                self.logger.error("Could not import pyPDSE. Use either 'python' or 'trimesh' as surface export backend.")
+                self.logger.error("Could not import pdse. Either install COMPOSE (https://github.com/raphaelsulzer/compod#compose)"
+                                  " or use 'python' or 'trimesh' as surface export backend.")
                 raise ModuleNotFoundError
             se = pdse(verbosity=0,debug_export=False)
             se.load_soup(np.array(points_exact,dtype=np.float64), np.array(face_lens,dtype=int))
@@ -1137,9 +1144,10 @@ class PolyhedralComplex:
         """
 
         try:
-            from pypd import pdl
+            from pycompose import pdl
         except:
-            self.logger.error("Could not import PyLabeler. Use 'normals' for labeling partition.")
+            self.logger.error("Labeling partition with 'mesh' not available. Either install COMPOSE (https://github.com/raphaelsulzer/compod#compose) "
+                              "or use type='normals' for labeling.")
             raise ModuleNotFoundError
 
         points = []
@@ -1299,7 +1307,7 @@ class PolyhedralComplex:
         if "earlystop" in insertion_order:
             earlystop = True
 
-        planes = self.vg.planes[current_ids]
+        planes = self.vg.split_planes[current_ids]
         hull_verts = self.vg.hull_vertices[current_ids]
 
         left_right = []
@@ -1355,7 +1363,7 @@ class PolyhedralComplex:
         if "earlystop" in insertion_order:
             earlystop = True
 
-        planes = self.vg.planes[current_ids]
+        planes = self.vg.split_planes[current_ids]
         hull_verts = self.vg.hull_vertices[current_ids]
         points = self.vg.points[hull_verts]
         points =  self.torch.from_numpy(points).type(self.torch.float32).to('cuda').transpose(2,0)
@@ -1441,7 +1449,7 @@ class PolyhedralComplex:
             return np.argmax(norms)
         elif insertion_order == 'area':
             areas = []
-            for i,plane in enumerate(self.vg.planes[current_ids]):
+            for i,plane in enumerate(self.vg.split_planes[current_ids]):
                 if pgs[i].shape[0] > 2:
                     mesh = PyPlane(plane).get_trimesh_of_projected_points(pgs[i])
                     areas.append(mesh.area)
@@ -1465,7 +1473,7 @@ class PolyhedralComplex:
 
         assert th >= 0,"Threshold must be >= 0"
 
-        best_plane = self.vg.planes[current_ids[best_plane_id]]
+        best_plane = self.vg.split_planes[current_ids[best_plane_id]]
 
 
         ### now put the planes into the left and right subspace of the best_plane split
@@ -1488,16 +1496,16 @@ class PolyhedralComplex:
                 right_plane_ids.append(id)
             else:
 
-                # TODO: to make the partition exact (within floating point precision), I need to add the intersection of 'best plane' with the current convex hull, ie 'ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])'
+                # TODO: to make the partition exact (within floating point precision), I need to add the intersection of 'best plane' with the current convex hull, ie 'ProjectedConvexHull(self.vg.split_planes[id],self.vg.points[left_point_ids])'
                 # one way to do this would be to:
-                    # 1. compute the line of 'best_plane' intersect 'self.vg.planes[id]'
-                    # 2. project the line to self.vg.planes[id]
+                    # 1. compute the line of 'best_plane' intersect 'self.vg.split_planes[id]'
+                    # 2. project the line to self.vg.split_planes[id]
                     # 3. intersect the line with the convex hull: https://stackoverflow.com/questions/30486312/intersection-of-nd-line-with-convex-hull-in-python
 
                 if (left_point_ids.shape[0] > th):
-                    left_plane_ids.append(self.vg.planes.shape[0])
-                    self.vg.planes = np.vstack((self.vg.planes, self.vg.planes[id]))
-                    self.vg.planes_ids.append(self.vg.planes_ids[id])
+                    left_plane_ids.append(self.vg.split_planes.shape[0])
+                    self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
+                    self.vg.split_planes_ids.append(self.vg.split_planes_ids[id])
                     self.vg.halfspaces.append(self.vg.halfspaces[id])
                     self.vg.groups.append(left_point_ids)
 
@@ -1507,7 +1515,7 @@ class PolyhedralComplex:
                     # get all hull points and  make a new hull on the left side
                     if left_point_ids.shape[0] > 2:
                         try:
-                            new_hull = ProjectedConvexHull(self.vg.planes[id],self.vg.points[left_point_ids])
+                            new_hull = ProjectedConvexHull(self.vg.split_planes[id],self.vg.points[left_point_ids])
                             new_group = left_point_ids[new_hull.hull.vertices]
                         except:
                             # putting this except here, because even if there are more than 2 points, but they lie on the same line, you cannot get a convex hull.
@@ -1529,9 +1537,9 @@ class PolyhedralComplex:
                     self.vg.hull_vertices = np.vstack((self.vg.hull_vertices,new_group))
 
                 if (right_point_ids.shape[0] > th):
-                    right_plane_ids.append(self.vg.planes.shape[0])
-                    self.vg.planes = np.vstack((self.vg.planes, self.vg.planes[id]))
-                    self.vg.planes_ids.append(self.vg.planes_ids[id])
+                    right_plane_ids.append(self.vg.split_planes.shape[0])
+                    self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
+                    self.vg.split_planes_ids.append(self.vg.split_planes_ids[id])
                     self.vg.halfspaces.append(self.vg.halfspaces[id])
                     self.vg.groups.append(right_point_ids)
 
@@ -1540,7 +1548,7 @@ class PolyhedralComplex:
                     # get all hull points and  make a new hull on the right side
                     if right_point_ids.shape[0] > 2:
                         try:
-                            new_hull = ProjectedConvexHull(self.vg.planes[id], self.vg.points[right_point_ids])
+                            new_hull = ProjectedConvexHull(self.vg.split_planes[id], self.vg.points[right_point_ids])
                             new_group = right_point_ids[new_hull.hull.vertices]
                         except:
                             # putting this except here, because even if there are more than 2 points, but they lie on the same line, you cannot get a convex hull.
@@ -1816,7 +1824,7 @@ class PolyhedralComplex:
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
 
-        self.vg.planes_ids = list(range(self.vg.planes.shape[0]))
+        self.vg.split_planes_ids = list(range(self.vg.split_planes.shape[0]))
 
         cell_count = 0
         self.split_count = 0
@@ -1827,7 +1835,7 @@ class PolyhedralComplex:
 
         ## expand the tree as long as there is at least one plane inside any of the subspaces
         self.tree = Tree()
-        dd = {"plane_ids": np.arange(self.vg.planes.shape[0])}
+        dd = {"plane_ids": np.arange(self.vg.split_planes.shape[0])}
         self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         self.cells[cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
@@ -1850,17 +1858,17 @@ class PolyhedralComplex:
 
             if len(current_ids) == 1:
                 best_plane_id = 0
-                best_plane = self.vg.planes[current_ids[best_plane_id]]
+                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
                 left_planes = []; right_planes = []
             else:
                 best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
-                best_plane = self.vg.planes[current_ids[best_plane_id]]
+                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
                 ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
                 left_planes, right_planes = self._split_support_points(best_plane_id, current_ids, th)
 
 
             ### for debugging
-            best_plane_id_input = self.vg.planes_ids[current_ids[best_plane_id]]
+            best_plane_id_input = self.vg.split_planes_ids[current_ids[best_plane_id]]
             best_plane_ids.append(best_plane_id_input)
 
             ### progress bar update
@@ -1956,7 +1964,7 @@ class PolyhedralComplex:
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
         self.logger.debug("Plane insertion order {}".format(best_plane_ids))
-        self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.planes)))
+        self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
         return 0
 
@@ -2152,14 +2160,14 @@ class PolyhedralComplex:
         for i in pbar:  # kinetic for each primitive
             # bounding box intersection test
             # indices of existing cells with potential intersections
-            indices_cells = _intersect_bound_plane(self.vg.bounds[i], self.vg.planes[i], exhaustive)
+            indices_cells = _intersect_bound_plane(self.vg.bounds[i], self.vg.split_planes[i], exhaustive)
             assert len(indices_cells), 'intersection failed! check the initial bound'
 
             # half-spaces defined by inequalities
             # no change_ring() here (instead, QQ() in _inequalities) speeds up 10x
             # init before the loop could possibly speed up a bit
             hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-                                                self._inequalities(self.vg.planes[i])]
+                                                self._inequalities(self.vg.split_planes[i])]
 
 
             # partition the intersected cells and their bounds while doing mesh slice plane

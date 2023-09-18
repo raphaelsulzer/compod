@@ -43,7 +43,6 @@ find_package(ZLIB REQUIRED) # for xtensor
 find_package(xtensor REQUIRED)
 find_package(xtensor-io REQUIRED)
 
-
 ######################################################
 ###################### INTERNAL ######################
 ######################################################
@@ -71,6 +70,7 @@ if(NOT SKBUILD)
     target_link_libraries(SurfaceSimplifierExe ${CGAL_LIBRARIES})
     target_link_libraries(SurfaceSimplifierExe ZLIB::ZLIB xtensor xtensor-io)
     target_link_libraries(SurfaceSimplifierExe spdlog::spdlog)
+    target_link_libraries(SurfaceSimplifierExe)
 endif()
 
 ##########################################
