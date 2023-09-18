@@ -1501,6 +1501,7 @@ class PolyhedralComplex:
                     self.vg.halfspaces.append(self.vg.halfspaces[id])
                     self.vg.groups.append(left_point_ids)
 
+
                     # if not enough points for making a convex hull we simply keep the points 
                     
                     # get all hull points and  make a new hull on the left side
