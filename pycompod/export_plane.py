@@ -53,7 +53,6 @@ class PlaneExporter:
         # plt.scatter(pp[:,0],pp[:,1])
         # plt.axis('equal')
         # plt.show()
-
         ch = ConvexHull(pp[:, :2])
         verts = ch.points[ch.vertices]
         verts = np.hstack((verts, pp[ch.vertices, 2, np.newaxis]))

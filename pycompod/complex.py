@@ -34,7 +34,7 @@ class PolyhedralComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, model=None, verbosity=logging.ERROR):
+    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, model=None, verbosity=logging.WARN):
         """
         Init PolyhedralComplex.
         Class of polyhedral complex from planar primitive arrangement.
@@ -81,6 +81,7 @@ class PolyhedralComplex:
         self.bounding_poly = self._init_bounding_box(padding=self.padding)
 
 
+        # TODO: make the debug export independent of model. just pass a debug_path, and if the path is not empty debug export to that path. as file name just do DEBUG_xxdebugfile
         self.debug_export = debug_export
         if self.debug_export and model is None:
             self.logger.warning('Debug export only works if dataset model is passed.')
@@ -177,6 +178,8 @@ class PolyhedralComplex:
 
         dtype = self.vg.input_planes.dtype
         self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
+        bb_color = np.zeros(shape=(6,3))
+        self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color))
 
         max_node_id = max(list(self.graph.nodes))
         for i,plane in enumerate(bb_planes):
@@ -326,7 +329,8 @@ class PolyhedralComplex:
             if c0["occupancy"] != c1["occupancy"]:
 
                 plane_id = self.graph.edges[e0, e1]["supporting_plane_id"]
-                col = self.vg.plane_colors[plane_id] if plane_id > -1 else np.array([50,50,50])
+                # col = self.vg.plane_colors[plane_id] if plane_id > -1 else np.array([50,50,50])
+                col = self.vg.plane_colors[plane_id]
                 fcolors.append(col)
 
                 intersection_points = self._get_intersection(e0, e1)
@@ -379,7 +383,7 @@ class PolyhedralComplex:
             from pycompose import pdse
         except:
             self.logger.error(
-                "Could not import pdse. Please install COMPOSE (https://github.com/raphaelsulzer/compod#compose).")
+                "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
             raise ModuleNotFoundError
 
         def _get_region_borders(region):
@@ -404,9 +408,9 @@ class PolyhedralComplex:
                 for i in range(nf):
                     region_edges.append([face[i%nf],face[(i+1)%nf]])
 
-            if self.debug_export:
-                of = out_file[:-4] + str(rid) + ".off"
-                self.complexExporter.write_surface_to_off(of, points=points, facets=region_facets, fcolor=self.vg.plane_colors[rid])
+            # if self.debug_export:
+            #     of = out_file[:-4] + str(rid) + ".off"
+            #     self.complexExporter.write_surface_to_off(of, points=points, facets=region_facets)
 
             # all edges that only appear once per region are border edges of that region
             unique, inverse, count = np.unique(np.sort(region_edges),return_inverse=True,return_counts=True,axis=0)
@@ -508,9 +512,9 @@ class PolyhedralComplex:
             facets.append(face)
         assert(len(facets)==len(polygons))
 
-        ## debug export the unsimplified surface
-        if self.debug_export:
-            self.complexExporter.write_surface_to_off(out_file[:-4]+"_debug.off", points=points, facets=facets)
+        # ## debug export the unsimplified surface
+        # if self.debug_export:
+        #     self.complexExporter.write_surface_to_off(out_file[:-4]+"_debug.off", points=points, facets=facets)
 
         ## mark corner vertices
         vertex_is_corner = defaultdict(set)
@@ -589,6 +593,7 @@ class PolyhedralComplex:
 
             # TODO: pass the plane color through to the mesh. do this in all mesh export functions.
             mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=face_colors)
+            mesh.fix_normals()
             mesh.export(out_file)
         else:
             self.logger.error(
@@ -670,8 +675,8 @@ class PolyhedralComplex:
             try:
                 from pycompose import pdse
             except:
-                self.logger.error("Could not import pdse. Either install COMPOSE (https://github.com/raphaelsulzer/compod#compose)"
-                                  " or use 'python' or 'trimesh' as surface export backend.")
+                self.logger.error("Could not import pdse. Either install COMPOSE from https://github.com/raphaelsulzer/compod#compose"
+                                  " or use 'python' or 'trimesh' as backend.")
                 raise ModuleNotFoundError
             se = pdse(verbosity=0,debug_export=False)
             se.load_soup(np.array(points_exact,dtype=np.float64), np.array(face_lens,dtype=int))
@@ -680,7 +685,7 @@ class PolyhedralComplex:
 
         elif backend == "python":
             if triangulate:
-                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' for exporting a triangle mesh.")
+                self.logger.warning("Mesh will not be triangulated. Use backend 'cgal' or 'trimesh' for exporting a triangle mesh.")
             points = np.concatenate(polygons).astype(np.float64)
             points = np.unique(points, axis=0)
 
@@ -694,7 +699,7 @@ class PolyhedralComplex:
 
         elif backend == "python_exact":
             if triangulate:
-                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' for exporting a triangle mesh.")
+                self.logger.warning("Mesh will not be triangulated. Use backend 'cgal' or 'trimesh' for exporting a triangle mesh.")
             pset = set(points_exact)
             pset = np.array(list(pset),dtype=object)
             facets = []
@@ -707,7 +712,7 @@ class PolyhedralComplex:
 
         elif backend == "trimesh":
             if not triangulate:
-                self.logger.warning("Mesh will be triangulated. Choose backend 'python' or 'cgal' for exporting a polygon mesh.")
+                self.logger.warning("Mesh will be triangulated. Use backend 'python' or 'cgal' for exporting a polygon mesh.")
             def _triangulate_points(v):
                 n = len(v)
                 triangles = []
@@ -722,7 +727,7 @@ class PolyhedralComplex:
             mesh = trimesh.Trimesh(vertices=points_exact,faces=np.concatenate(tris))
             mesh.export(out_file)
         else:
-            self.logger.error("{} is not a valid surface extraction backend. Choose either 'cgal', 'trimesh' or 'python'.".format(backend))
+            self.logger.error("{} is not a valid surface extraction backend. Valid backends are 'python', 'python_exact', 'trimesh' and 'cgal'.".format(backend))
             raise NotImplementedError
 
 
@@ -1099,8 +1104,8 @@ class PolyhedralComplex:
         try:
             from pycompose import pdl
         except:
-            self.logger.error("Labeling partition with 'mesh' not available. Either install COMPOSE (https://github.com/raphaelsulzer/compod#compose) "
-                              "or use type='normals' for labeling.")
+            self.logger.error("Labeling partition with 'mesh' not available. Either install COMPOSE from https://github.com/raphaelsulzer/compod#compose"
+                              " or use type 'normals' for labeling.")
             raise ModuleNotFoundError
 
         points = []

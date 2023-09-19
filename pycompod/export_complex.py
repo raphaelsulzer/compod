@@ -65,7 +65,7 @@ class PolyhedralComplexExporter:
 
 
 
-    def write_cell(self, m, polyhedron, points=None, normals=None, filename=None, subfolder="partitions", count=0, color=None, inside_vert_count=0):
+    def write_cell(self, model, polyhedron, points=None, normals=None, filename=None, subfolder="partitions", count=0, color=None, inside_vert_count=0):
         """
         :param m: A model from dataset
         :param polyhedron: A sage polyhedron
@@ -79,7 +79,7 @@ class PolyhedralComplexExporter:
         """
         c = color if color is not None else np.random.randint(0,255,size=3)
 
-        path = os.path.join(os.path.dirname(m['planes']),subfolder)
+        path = os.path.join(os.path.dirname(model['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
 
         if filename is None:
@@ -200,14 +200,13 @@ class PolyhedralComplexExporter:
 
         f.close()
 
-    def write_points(self,m,points,normals=None,subfolder="points",count=0, color=None):
+    def write_points(self,model,points,normals=None,subfolder="points",count=0, color=None):
 
         c = color if color is not None else np.random.randint(0,255,size=3)
 
-        path = os.path.join(os.path.dirname(m['planes']),subfolder)
+        path = os.path.join(os.path.dirname(model['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(count)+'.off')
-
 
         f = open(filename, 'w')
         if normals is None:
@@ -225,11 +224,11 @@ class PolyhedralComplexExporter:
                 f.write("{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2]))
         f.close()
 
-    def write_surface_to_off(self,filename,points,facets,pcolors=[],fcolors=[]):
+    def write_surface_to_off(self,filename,points,facets,pcolors=[]):
 
         f = open(filename[:-3]+"off",'w')
 
-        if len(fcolors) or len(pcolors):
+        if len(pcolors):
             f.write("COFF\n")
         else:
             f.write("OFF\n")
@@ -246,8 +245,6 @@ class PolyhedralComplexExporter:
             f.write("{}".format(len(face)))
             for v in face:
                 f.write(" {}".format(v))
-            for c in fcolors:
-                f.write(" {}".format(c))
             f.write('\n')
         f.close()
 
