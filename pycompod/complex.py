@@ -52,6 +52,7 @@ class PolyhedralComplex:
         self.complexExporter = PolyhedralComplexExporter(self)
 
         self.vg = vertex_group
+        # basically just a name change, to make sure that the negative indices for the boundary planes are never used on this array and not on the split_planes array
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
         del self.vg.planes
 
@@ -360,75 +361,7 @@ class PolyhedralComplex:
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
 
-    def save_simplified_surface_cgal(self, out_file, triangulate = False):
-
-        """
-        DEPRECATED
-        Extracts a simplified surface mesh from the labelled polyhedral complex.
-        This code works, but because the CGAL polygon mesh does not allow non-manifold edges, watertightness is sometimes broken to fix non-manifoldness.
-        Result is that simplified mesh is usually not watertight, ie has holes.
-
-        :param out_file: File to store the mesh.
-
-        :param triangulate: Flag that controls if mesh should be triangulated or not. Only valid for backend == 'cgal'.
-        """
-
-        if not self.polygons_constructed:
-            self.construct_polygons()
-
-        self.logger.info('Save simplified surface mesh...')
-
-        points = []
-        polygons = []
-        polygon_regions = []
-        for e0, e1 in self.graph.edges:
-
-            c0 = self.graph.nodes[e0]
-            c1 = self.graph.nodes[e1]
-
-            if c0["occupancy"] != c1["occupancy"]:
-
-                intersection_points = self._get_intersection(e0,e1)
-
-                plane_id = self.graph[e0][e1]["supporting_plane_id"]
-                plane = self.vg.input_planes[plane_id]
-                correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
-
-                intersection_points = intersection_points[correct_order]
-
-                ## orient polygon
-                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                if self._orient_polygon_exact(intersection_points,outside):
-                    intersection_points = np.flip(intersection_points, axis=0)
-
-                # points
-                points.append(intersection_points)
-                # polygons
-                polygons.append(len(intersection_points))
-                # polygon_region
-                polygon_regions.append(plane_id)
-
-
-        # now do the unpacking simply in C++
-
-        points = np.concatenate(points).astype(float)
-        polygons = np.array(polygons).astype(np.int32)
-        polygon_regions = np.array(polygon_regions).astype(np.int32)
-
-        polygon_regions[polygon_regions < 0] += len(self.vg.input_planes)
-
-        np.savez(out_file[:-4]+".npz",points=points,polygons=polygons,polygon_regions=polygon_regions,planes=self.vg.input_planes,colors=self.vg.plane_colors)
-
-        # TODO: interface the C++/CGAL code instead of storing as .npz and loading .npz in C++. I.e. just fix the interface code below.
-
-        # ss=pdse(2)
-        # ss.load_soup(points, polygons, polygon_regions)
-        # ss.soup_to_mesh(0)
-        # ss.simplify_mesh_cgal(0)
-        # ss.save_mesh(out_file)
-
-
-    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True):
+    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python"):
 
         """
         Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
@@ -590,7 +523,7 @@ class PolyhedralComplex:
         se=pdse(0)
         region_facets = []
         point_normals = np.ones(shape=points.shape)
-
+        face_colors = []
         for region in region_to_polygons.items():
             this_region_facets = []
             boundary = _get_region_borders(region)
@@ -630,6 +563,10 @@ class PolyhedralComplex:
             ## change orientation of the region if necessary
             this_region_facets = _orient_facets(this_region_facets, region)
             region_facets += this_region_facets
+            face_colors.append(np.repeat(self.vg.plane_colors[region[0],np.newaxis],len(this_region_facets),axis=0))
+
+        region_facets = np.array(region_facets)
+        face_colors = np.concatenate(face_colors)
 
         if simplify_edges:
             ## remove unreferenced vertices and reindex
@@ -641,7 +578,24 @@ class PolyhedralComplex:
                 t.append(vertex_is_corner_array[np.array(facet)])
             region_facets = t
 
-        self.complexExporter.write_surface_to_off(out_file, points=points, facets=region_facets)
+        if backend == "python":
+            self.logger.error(
+                "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need correct orientation.")
+            self.complexExporter.write_surface_to_off(out_file, points=points, facets=region_facets)
+        elif backend == "trimesh":
+            if not triangulate:
+                self.logger.error("backend 'trimesh' only works with triangulate = True. Choose backend 'python' for exporting a polygon mesh.")
+                raise NotImplementedError
+
+            # TODO: pass the plane color through to the mesh. do this in all mesh export functions.
+            mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=face_colors)
+            mesh.export(out_file)
+        else:
+            self.logger.error(
+                "{} is not a valid surface extraction backend. Choose either 'trimesh' or 'python'.".format(
+                    backend))
+            raise NotImplementedError
+
         # self.complexExporter.write_surface_to_ply(out_file, points=points, pnormals=point_normals, facets=region_facets)
 
 
@@ -726,7 +680,7 @@ class PolyhedralComplex:
 
         elif backend == "python":
             if triangulate:
-                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' instead.")
+                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' for exporting a triangle mesh.")
             points = np.concatenate(polygons).astype(np.float64)
             points = np.unique(points, axis=0)
 
@@ -740,7 +694,7 @@ class PolyhedralComplex:
 
         elif backend == "python_exact":
             if triangulate:
-                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' instead.")
+                self.logger.warning("Mesh will not be triangulated. Choose backend 'cgal' or 'trimesh' for exporting a triangle mesh.")
             pset = set(points_exact)
             pset = np.array(list(pset),dtype=object)
             facets = []
@@ -753,7 +707,7 @@ class PolyhedralComplex:
 
         elif backend == "trimesh":
             if not triangulate:
-                self.logger.warning("Mesh will be triangulated. Choose backend 'python' or 'cgal' instead.")
+                self.logger.warning("Mesh will be triangulated. Choose backend 'python' or 'cgal' for exporting a polygon mesh.")
             def _triangulate_points(v):
                 n = len(v)
                 triangles = []
@@ -767,7 +721,6 @@ class PolyhedralComplex:
                 tris.append(_triangulate_points(fa))
             mesh = trimesh.Trimesh(vertices=points_exact,faces=np.concatenate(tris))
             mesh.export(out_file)
-
         else:
             self.logger.error("{} is not a valid surface extraction backend. Choose either 'cgal', 'trimesh' or 'python'.".format(backend))
             raise NotImplementedError
@@ -1505,7 +1458,7 @@ class PolyhedralComplex:
                 if (left_point_ids.shape[0] > th):
                     left_plane_ids.append(self.vg.split_planes.shape[0])
                     self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
-                    self.vg.split_planes_ids.append(self.vg.split_planes_ids[id])
+                    self.vg.plane_ids.append(self.vg.plane_ids[id])
                     self.vg.halfspaces.append(self.vg.halfspaces[id])
                     self.vg.groups.append(left_point_ids)
 
@@ -1539,7 +1492,7 @@ class PolyhedralComplex:
                 if (right_point_ids.shape[0] > th):
                     right_plane_ids.append(self.vg.split_planes.shape[0])
                     self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
-                    self.vg.split_planes_ids.append(self.vg.split_planes_ids[id])
+                    self.vg.plane_ids.append(self.vg.plane_ids[id])
                     self.vg.halfspaces.append(self.vg.halfspaces[id])
                     self.vg.groups.append(right_point_ids)
 
@@ -1824,7 +1777,8 @@ class PolyhedralComplex:
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
 
-        self.vg.split_planes_ids = list(range(self.vg.split_planes.shape[0]))
+        self.vg.plane_ids = list(range(self.vg.input_planes.shape[0]))
+        self.vg.split_planes = copy.deepcopy(self.vg.input_planes)
 
         cell_count = 0
         self.split_count = 0
@@ -1868,7 +1822,7 @@ class PolyhedralComplex:
 
 
             ### for debugging
-            best_plane_id_input = self.vg.split_planes_ids[current_ids[best_plane_id]]
+            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
             best_plane_ids.append(best_plane_id_input)
 
             ### progress bar update
