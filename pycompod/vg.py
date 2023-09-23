@@ -2,6 +2,8 @@ import logging
 import os, sys
 from pathlib import Path
 import numpy as np
+import trimesh
+from collections import defaultdict
 from sage.all import polytopes, QQ, Polyhedron
 import copy
 from .logger import make_logger
@@ -14,7 +16,7 @@ class VertexGroup:
     """
 
     def __init__(self, input_file, prioritise = None,
-                 points_type="inliers", total_sample_count=100000, recolor=False, verbosity=logging.ERROR):
+                 points_type="inliers", total_sample_count=100000, recolor=False, verbosity=logging.WARN):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.
@@ -58,6 +60,18 @@ class VertexGroup:
             pt = copy.deepcopy(p.centroid)
             cols.append(fc.get_rgb_from_xyz(pt))
         self.plane_colors = np.array(cols)
+
+
+    def _make_point_class_weight(self):
+
+        self.point_class_weights = np.ones(self.classes.max()+1)
+        # {1: "Unclassified", 2: "Ground", 3: "Low_Vegetation", 4: "Medium_Vegetation", 5: "High_Vegetation",
+        #  6: "Building", 9: "Water",
+        #  17: "17", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
+        self.point_class_weights[6] = 3
+        self.point_class_weights[66] = 12
+        self.point_class_weights[67] = 9
+
 
 
     def _prioritise_planes(self, mode):
@@ -110,7 +124,7 @@ class VertexGroup:
                                          indices_sorted_planes[np.invert(bool_vertical_planes)])
         elif mode == "n-points":
             npoints = []
-            for pg in self.points_grouped:
+            for pg in self.groups:
                 npoints.append(pg.shape[0])
             npoints = np.array(npoints)
             return np.argsort(npoints)[::-1]
@@ -122,12 +136,42 @@ class VertexGroup:
             return np.argsort(sizes)[::-1]
         elif mode == 'area':
             return np.argsort(self.polygon_areas)[::-1]
+        elif mode == 'class':
+            # {1: "Unclassified", 2: "Ground", 3: "Low_Vegetation", 4: "Medium_Vegetation", 5: "High_Vegetation",
+            #  6: "Building", 9: "Water",
+            #  17: "17", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
+
+            class_groups = defaultdict(list)
+            # get majority class for each plane
+            for i,pg in enumerate(self.groups):
+                unique, count = np.unique(self.classes[pg],return_counts=True)
+                max_class = unique[np.argmax(count)]
+                if max_class == 6:
+                    class_groups["Building"].append(i)
+                elif max_class == 66:
+                    class_groups["Floor"].append(i)
+                elif max_class == 67:
+                    class_groups["Walls"].append(i)
+                else:
+                    class_groups["Misc"].append(i)
+
+            order = []
+            for cl in ["Floor","Walls","Building","Misc"]:
+                group_ids = np.array(class_groups[cl]).astype(int)
+                polys = self.polygon_areas[group_ids]
+                ord = np.argsort(polys)[::-1]
+                order.append(group_ids[ord])
+
+            # TODO: this doesn't actually work, because my algo resorts the planes. what I need to do is first insert the floor and walls. and then insert
+            # the roof
+
+            return np.concatenate(order)
+
+
         elif mode == "product" or mode == "product-earlystop" or mode == "sum" or mode == "sum-earlystop":
             return indices_sorted_planes
         else:
             raise NotImplementedError
-
-
 
 
     def _fill_hull_vertices(self):
@@ -155,6 +199,13 @@ class VertexGroup:
         self.planes = data["group_parameters"].astype(np.float32)
         self.points = data["points"].astype(np.float32)
         self.normals = data["normals"].astype(np.float32)
+        if "classes" in data.keys():
+            self.classes = data["classes"]
+            self._make_point_class_weight()
+        else:
+            self.classes = []
+            self.point_class_weights = []
+
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
         self.plane_colors = data["group_colors"]
@@ -179,18 +230,28 @@ class VertexGroup:
             ## make the polys
             ## make a trimesh of each input polygon, used for getting the area of each input poly for area based sorting
             pl = PyPlane(self.planes[i])
-            poly = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
-            self.polygons.append(poly)
-            self.polygon_areas.append(poly.area)
+            try:
+                poly = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
+                self.polygons.append(poly)
+                self.polygon_areas.append(poly.area)
+            except:
+                self.logger.warning("Degenerate input polygon.")
+                self.polygons.append(trimesh.Trimesh)
+                self.polygon_areas.append(0)
 
             ## this is used for finding points associated to facets of the partition for normal based occupancy voting
-            self.projected_points[vert_group] = pl.project_points_to_plane(pts)[:,:2]
+            self.projected_points[vert_group] = pl.to_2d(pts)
 
             ## this is used for _get_best_plane function
-            pch = ProjectedConvexHull(self.planes[i],pts)
-            # self.projected_points[vert_group] = pch.all_projected_points_2d
-            self.hull_vertices.append(vert_group[pch.hull.vertices])
-            n_hull_vertices = len(pch.hull.vertices)
+            try:
+                pch = ProjectedConvexHull(self.planes[i],pts)
+                self.hull_vertices.append(vert_group[pch.hull.vertices])
+                n_hull_vertices = len(pch.hull.vertices)
+            except:
+                self.hull_vertices.append(vert_group)
+                n_hull_vertices = len(vert_group)
+            
+            
             if n_hull_vertices > self.n_fill:
                 self.n_fill = n_hull_vertices
 

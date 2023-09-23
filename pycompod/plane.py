@@ -132,7 +132,11 @@ class PyPlane:
 
     def project_points_to_plane(self,points):
 
-
+        """
+        Project points to plane.
+        :param points:
+        :return:
+        """
 
         ### project inlier points to plane
         ## https://www.baeldung.com/cs/3d-point-2d-plane

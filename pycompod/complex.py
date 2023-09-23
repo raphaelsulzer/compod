@@ -30,11 +30,14 @@ from .logger import make_logger
 from .plane import ProjectedConvexHull, PyPlane
 from .export_plane import PlaneExporter
 
+from shapely.geometry import Polygon
+from shapely import contains_xy
+
 class PolyhedralComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, model=None, verbosity=logging.WARN):
+    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, verbosity=logging.WARN):
         """
         Init PolyhedralComplex.
         Class of polyhedral complex from planar primitive arrangement.
@@ -83,11 +86,6 @@ class PolyhedralComplex:
 
         # TODO: make the debug export independent of model. just pass a debug_path, and if the path is not empty debug export to that path. as file name just do DEBUG_xxdebugfile
         self.debug_export = debug_export
-        if self.debug_export and model is None:
-            self.logger.warning('Debug export only works if dataset model is passed.')
-            self.debug_export = False
-        else:
-            self.model = model
 
         if self.debug_export:
             self.logger.warning('Debug export activated. Turn off for faster processing.')
@@ -142,10 +140,45 @@ class PolyhedralComplex:
         return positive, negative
 
 
+    def add_additional_planes(self,planes,points=None):
+
+        self.logger.info("Add additional planes...")
+        self.logger.debug("Additional planes will be appended to self.vg.input_planes")
+
+
+        dtype = self.vg.input_planes.dtype
+        self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
+        bb_color = np.zeros(shape=(6,3))+[255,0,255]
+        self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color))
+
+
+        for i,plane in enumerate(planes):
+
+
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
+
+            if self.debug_export:
+                self.complexExporter.write_cell(os.path.join(self.debug_export,"bounding_box_cells"),op,count=-(i+1))
+
+            self.cells[i+1+max_node_id] = op
+            self.graph.add_node(i+1+max_node_id, bounding_box=True)
+
+            for cell_id in list(self.graph.nodes):
+
+                intersection = op.intersection(self.cells.get(cell_id))
+
+                if intersection.dim() == 2:
+                    self.graph.add_edge(i+1+max_node_id,cell_id, intersection=None, vertices=[],
+                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=True)
+
+
+
+
     def add_bounding_box_planes(self):
 
         self.logger.info("Add bounding box planes...")
-        self.logger.debug("Bounding planes will be appended to self.vg.input_planes")
+        self.logger.debug("Bounding box planes will be appended to self.vg.input_planes")
 
         pmin = vector(self.bounding_poly.bounding_box()[0])
         pmax = vector(self.bounding_poly.bounding_box()[1])
@@ -178,7 +211,7 @@ class PolyhedralComplex:
 
         dtype = self.vg.input_planes.dtype
         self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
-        bb_color = np.zeros(shape=(6,3))
+        bb_color = np.zeros(shape=(6,3))+[255,0,255]
         self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color))
 
         max_node_id = max(list(self.graph.nodes))
@@ -189,7 +222,7 @@ class PolyhedralComplex:
             op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
 
             if self.debug_export:
-                self.complexExporter.write_cell(self.model,op,count=-(i+1))
+                self.complexExporter.write_cell(os.path.join(self.debug_export,"bounding_box_cells"),op,count=-(i+1))
 
             # self.cells[-(i+1)] = op
             # self.graph.add_node(-(i+1), occupancy=0.0)
@@ -1012,12 +1045,15 @@ class PolyhedralComplex:
         f.close()
 
 
-    def _graph_cut(self,occs,binary_weight=0.2):
+    def _graph_cut(self,occs,binary_weight=0.2,binary_type="cc"):
+
+        # unfortunately necessary for computing edge areas
+        if binary_type == "area":
+            self._init_polygons()
 
         graph = nx.convert_node_labels_to_integers(self.graph)
 
         labels = (occs[:,0]<occs[:,1]).astype(np.int32)
-
 
         self.logger.info("Apply occupancy regularization with graph cut (λ={:.2g})...".format(binary_weight))
 
@@ -1033,8 +1069,10 @@ class PolyhedralComplex:
         gc.create_general_graph(len(graph.nodes), 2, energy_is_float=True)
         # data_cost = F.softmax(prediction, dim=-1)
 
+        scale = 4
+
         # data_cost = prediction
-        data_cost = np.array(occs, dtype=dtype)*4
+        data_cost = np.array(occs, dtype=dtype)*scale
 
         ### append high cost for inside for infinite cell
         # data_cost = np.append(data_cost, np.array([[-10000, 10000]]), axis=0)
@@ -1044,7 +1082,17 @@ class PolyhedralComplex:
 
         edges = np.array(graph.edges)
 
-        edge_weight = np.ones(edges.shape[0], dtype=dtype)*4/edges.shape[0]
+        if binary_type == "cc":
+            edge_weight = np.ones(edges.shape[0], dtype=dtype)*scale/edges.shape[0]
+        elif binary_type == "area":
+            edge_weight = []
+            for e0, e1 in self.graph.edges:
+                edge = self.graph.edges[e0, e1]
+                edge_weight.append(edge["intersection"].affine_hull_projection().volume().numerical_approx())
+            edge_weight = np.array(edge_weight)*scale/sum(edge_weight)
+        else:
+            self.logger.error("{} is not a valid binary type".format(binary_type))
+            raise NotImplementedError
 
         gc.set_all_neighbors(edges[:, 0], edges[:, 1], edge_weight * binary_weight)
 
@@ -1062,12 +1110,16 @@ class PolyhedralComplex:
 
         return labels
 
-    def label_partition(self,mode="normals",mesh_file=None,n_test_points=50,regularization=0.0):
+
+    def label_partition(self,mode="normals",mesh_file=None,n_test_points=50,binary_weight=0.0,binary_type="cc",footprint=None):
 
         self.logger.info('Label {} cells with {}...'.format(len(self.graph.nodes),mode))
 
         if mode == "normals":
-            occs = self.label_partition_with_point_normals()
+            if self.vg.points_type == "samples":
+                self.logger.error("Cannot label partition with normals from sampled points. Please choose mode 'mesh' instead.")
+                raise NotImplementedError
+            occs = self.label_partition_with_point_normals(footprint=footprint)
         elif mode == "mesh":
             if mesh_file is None:
                 self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
@@ -1077,9 +1129,10 @@ class PolyhedralComplex:
             self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(mode))
             raise NotImplementedError
 
-        if regularization > 0.0:
+        if binary_weight > 0.0:
             # occs = self.graph_cut(occs)
-            occs = self._graph_cut(occs,regularization)
+            # compute regularization weights
+            occs = self._graph_cut(occs,binary_weight=binary_weight,binary_type=binary_type)
         else:
             occs = occs[:,0]>occs[:,1]
 
@@ -1166,6 +1219,7 @@ class PolyhedralComplex:
 
         point_ids_dict = dict()
         count=0
+        # edge_areas_dict = dict()
         for e0, e1 in self.graph.edges:
 
             edge = self.graph.edges[e0, e1]
@@ -1181,8 +1235,16 @@ class PolyhedralComplex:
             # contain = convex_contains1(polygon, self.vg.projected_points[group])
             ## this is much faster and gives the same result
             vertices = np.array(edge["intersection"].vertices())
+            assert(len(vertices))
             vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
-            contain = convex_contains(vertices, self.vg.projected_points[group])
+            plane = PyPlane(self.vg.split_planes[edge["group_id"]])
+            # contain = convex_contains(vertices, self.vg.projected_points[group])
+            poly = Polygon(np.array(plane.to_2d(vertices)))
+            contain = contains_xy(poly,self.vg.projected_points[group])
+            # contain = poly.
+
+            # get edge area
+            # edge_areas_dict[(e0,e1)] = edge["intersection"].affine_hull_projection().volume().numerical_approx()
 
             point_ids_dict[(e0, e1)] = group[contain]
 
@@ -1190,22 +1252,42 @@ class PolyhedralComplex:
                 pts = self.vg.points[group[contain]]
                 count += 1
                 col = np.random.randint(0, 255, size=3)
+                self.complexExporter.write_points(os.path.join(self.debug_export, "labelling_facets_group_points"), self.vg.points[group],
+                                                    count=str(count) + "c", color=col)
+                self.complexExporter.write_facet(os.path.join(self.debug_export, "labelling_facets"), edge["intersection"],
+                                                    count=str(count), color=col)
                 if len(pts):
-                    self.complexExporter.write_points(self.model, pts, subfolder="labelling_facets", count=str(count) + "c", color=col)
+                    self.complexExporter.write_facet(os.path.join(self.debug_export, "labelling_facets_containing"),
+                                                     edge["intersection"],
+                                                     count=str(count), color=col)
+                    self.complexExporter.write_points(os.path.join(self.debug_export,"labelling_facets_contained_points"), pts, count=str(count) + "c", color=col)
 
         nx.set_edge_attributes(self.graph,point_ids_dict,"point_ids")
+        # nx.set_edge_attributes(self.graph,edge_areas_dict,"area")
 
-    def _collect_node_votes(self):
+
+    def _collect_node_votes(self,footprint=None):
+
         # occupancy_dict = dict()
         occs = []
+        if footprint is not None:
+            footprint = Polygon(footprint)
         for node in self.graph.nodes:
+            
+
 
             if self.graph.nodes[node].get("bounding_box",0):
                 # occupancy_dict[node] = (0,1000)
-                occs.append([0,1000])
+                occs.append([0,1000]) # TODO: this should probably be related to the number of points or something
                 continue
 
             centroid = np.array(self.cells[node].vertices()).mean(axis=0)
+            if footprint is not None:
+                if not contains_xy(footprint,x=centroid[0],y=centroid[1]):
+                    occs.append([0, 1000])
+                    continue
+                    
+            
             inside_weight = 0; outside_weight = 0
             cell_points = []
             cell_normals = []
@@ -1216,37 +1298,44 @@ class PolyhedralComplex:
                     continue
                 inside_vectors = centroid - pts
                 normal_vectors = self.vg.normals[edge["point_ids"]]
+                dp=(normal_vectors * inside_vectors).sum(axis=1)
+                iweight = (dp<0).astype(float)
+                oweight = (dp>0).astype(float)
+                if len(self.vg.classes):
+                    class_weights = self.vg.classes[edge["point_ids"]]
+                    class_weights = self.vg.point_class_weights[class_weights].astype(float)
+                    iweight*=class_weights
+                    oweight*=class_weights
+                inside_weight+=iweight.sum()
+                outside_weight+=oweight.sum()
                 if self.debug_export:
                     cell_points.append(pts)
                     cell_normals.append(normal_vectors)
-                dp=(normal_vectors * inside_vectors).sum(axis=1)
-                inside_weight+=(dp<0).sum()
-                outside_weight+=(dp>0).sum()
 
             if self.debug_export:
                 if len(cell_points):
                     st = "in" if inside_weight <= outside_weight else "out"
                     color = np.random.randint(0, 255, size=3)
-                    self.complexExporter.write_cell(self.model,self.cells[node],
-                                                        count=str(node)+st,subfolder="labelling_cells",color=color)
-                    self.complexExporter.write_points(self.model, color=color, count=str(node)+st,
-                                                          points=np.concatenate(cell_points),normals=np.concatenate(cell_normals),
-                                                          subfolder="labelling_cells")
+                    self.complexExporter.write_cell(os.path.join(self.debug_export,"labelling_cells"),self.cells[node],
+                                                        count=str(node)+st,color=color)
+                    self.complexExporter.write_points(os.path.join(self.debug_export,"labelling_points"),color=color, count=str(node)+st,
+                                                          points=np.concatenate(cell_points),normals=np.concatenate(cell_normals))
 
             # occupancy_dict[node] = (inside_weight,outside_weight)
             occs.append([inside_weight,outside_weight])
 
-        return np.array(occs)/(2*len(self.vg.points))
+        # return np.array(occs)/(2*len(self.vg.points)*sum(self.vg.point_class_weights[self.vg.classes]))
+        return np.array(occs)/(2*self.vg.point_class_weights[self.vg.classes].sum())
         # nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
 
 
-    def label_partition_with_point_normals(self):
+    def label_partition_with_point_normals(self,footprint=None):
         """
         Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
         """
 
         self._collect_facet_points()
-        return self._collect_node_votes()
+        return self._collect_node_votes(footprint=footprint)
 
 
 
@@ -1769,15 +1858,20 @@ class PolyhedralComplex:
             p=Polyhedron(ieqs=hspaces)
 
 
+    # def _insert_static_planes(self,planes):
+    #
+    #     pass
 
-    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop",subdivison=None):
+    def _insert_new_plane(self):
+
+        
+
+    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop", subdivison=None):
         """
-        1. construct the partition
-        :param m:
+        1. Construct the partition
         :param mode:
         :param th:
         :param ordering:                                                                                                                                                                                                                              
-        :param export:
         :return:
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
@@ -1798,12 +1892,15 @@ class PolyhedralComplex:
         self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
         self.cells[cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
+
+        # if len(static_planes):
+        #     self.logger.info("Insert {} static planes".format(len(static_planes)))
+        #     children = self._insert_static_planes(static_planes)
+
+        disable_tqdm = False if self.verbosity == logging.INFO else True
+        pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout, disable=disable_tqdm)
+
         plane_count = 0 # only used for debugging exports
-        if self.verbosity == logging.INFO:
-            tqdm_disable = False
-        else:
-            tqdm_disable = True
-        pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout, disable=tqdm_disable)
         best_plane_ids = [] # only used for debugging exports
 
         if subdivison:
@@ -1841,7 +1938,7 @@ class PolyhedralComplex:
                 # epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
                 if epoints.shape[0]>3:
                     color = self.vg.plane_colors[best_plane_id_input]
-                    self.planeExporter.save_plane(os.path.dirname(self.model["planes"]), best_plane, epoints,count=str(plane_count),color=color)
+                    self.planeExporter.save_plane(os.path.join(self.debug_export,"split_planes"), best_plane, epoints,count=str(plane_count),color=color)
 
 
             ## create the new convexes
@@ -1855,7 +1952,7 @@ class PolyhedralComplex:
             ## and update graph with new nodes
             if(cell_negative.dim() == 3):
                 if self.debug_export:
-                    self.complexExporter.write_cell(self.model,cell_negative,count=str(cell_count+1)+"n")
+                    self.complexExporter.write_cell(os.path.join(self.debug_export,"construct_cells"),cell_negative,count=str(cell_count+1)+"n")
                 dd = {"plane_ids": np.array(left_planes)}
                 cell_count = cell_count+1
                 neg_cell_id = cell_count
@@ -1865,7 +1962,7 @@ class PolyhedralComplex:
 
             if(cell_positive.dim() == 3):
                 if self.debug_export:
-                    self.complexExporter.write_cell(self.model,cell_positive,count=str(cell_count+1)+"p")
+                    self.complexExporter.write_cell(os.path.join(self.debug_export,"construct_cells"),cell_positive,count=str(cell_count+1)+"p")
                 dd = {"plane_ids": np.array(right_planes)}
                 cell_count = cell_count+1
                 pos_cell_id = cell_count
@@ -1882,7 +1979,7 @@ class PolyhedralComplex:
                 self.graph.add_edge(neg_cell_id, pos_cell_id, intersection = new_intersection, vertices = [], group_id = current_ids[best_plane_id],
                                supporting_plane_id = best_plane_id_input, bounding_box_edge = False)
                 if self.debug_export:
-                    self.complexExporter.write_facet(self.model,new_intersection,count=plane_count)
+                    self.complexExporter.write_facet(os.path.join(self.debug_export,"construct_facets"),new_intersection,count=plane_count)
 
             ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
             neighbors_of_old_cell = list(self.graph[child])

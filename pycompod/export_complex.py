@@ -65,9 +65,8 @@ class PolyhedralComplexExporter:
 
 
 
-    def write_cell(self, model, polyhedron, points=None, normals=None, filename=None, subfolder="partitions", count=0, color=None, inside_vert_count=0):
+    def write_cell(self,path,polyhedron,points=None,normals=None,filename=None,count=0,color=None,inside_vert_count=0):
         """
-        :param m: A model from dataset
         :param polyhedron: A sage polyhedron
         :param points: A point set
         :param normals: A normal set
@@ -79,7 +78,6 @@ class PolyhedralComplexExporter:
         """
         c = color if color is not None else np.random.randint(0,255,size=3)
 
-        path = os.path.join(os.path.dirname(model['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
 
         if filename is None:
@@ -118,11 +116,10 @@ class PolyhedralComplexExporter:
         f.close()
 
 
-    def write_facet(self,m,facet,subfolder="facets",count=0, color=None):
+    def write_facet(self,path,facet,count=0, color=None):
 
         c = color if color is not None else np.random.randint(0,255,size=3)
 
-        path = os.path.join(os.path.dirname(m['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(count)+'.obj')
 
@@ -200,11 +197,10 @@ class PolyhedralComplexExporter:
 
         f.close()
 
-    def write_points(self,model,points,normals=None,subfolder="points",count=0, color=None):
+    def write_points(self,path,points,normals=None,count=0, color=None):
 
         c = color if color is not None else np.random.randint(0,255,size=3)
 
-        path = os.path.join(os.path.dirname(model['planes']),subfolder)
         os.makedirs(path,exist_ok=True)
         filename = os.path.join(path,str(count)+'.off')
 

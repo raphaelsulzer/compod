@@ -1,14 +1,15 @@
+import logging
 import os
 import numpy as np
 from scipy.spatial import ConvexHull
 from copy import deepcopy
 from .plane import ProjectedConvexHull
+from .logger import make_logger
 
 class PlaneExporter:
 
     def __init__(self):
-        pass
-
+        self.logger = make_logger(name="COMPOD", level=logging.WARN)
 
     def save_deleted_points(self,path,points,count,subfolder="deleted_points",color=None):
 
@@ -53,7 +54,10 @@ class PlaneExporter:
         # plt.scatter(pp[:,0],pp[:,1])
         # plt.axis('equal')
         # plt.show()
-        ch = ConvexHull(pp[:, :2])
+        try:
+            ch = ConvexHull(pp[:, :2])
+        except:
+            return
         verts = ch.points[ch.vertices]
         verts = np.hstack((verts, pp[ch.vertices, 2, np.newaxis]))
 
@@ -196,7 +200,11 @@ class PlaneExporter:
         for i, plane in enumerate(planes):
 
             # hull_points = PyPlane(plane).get_convex_hull_points_of_projected_points(pts,dim=3)
-            pch = ProjectedConvexHull(plane,points[groups[i]])
+            try:
+                pch = ProjectedConvexHull(plane,points[groups[i]])
+            except:
+                self.logger.warning("Degenerate export polygon.")
+                continue
 
             pcount+=len(points[groups[i]])
 
