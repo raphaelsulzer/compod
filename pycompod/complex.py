@@ -83,10 +83,7 @@ class PolyhedralComplex:
         self.padding = padding
         self.bounding_poly = self._init_bounding_box(padding=self.padding)
 
-
-        # TODO: make the debug export independent of model. just pass a debug_path, and if the path is not empty debug export to that path. as file name just do DEBUG_xxdebugfile
         self.debug_export = debug_export
-
         if self.debug_export:
             self.logger.warning('Debug export activated. Turn off for faster processing.')
 
@@ -212,7 +209,7 @@ class PolyhedralComplex:
         dtype = self.vg.input_planes.dtype
         self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
         bb_color = np.zeros(shape=(6,3))+[255,0,255]
-        self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color))
+        self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color.astype(self.vg.plane_colors.dtype)))
 
         max_node_id = max(list(self.graph.nodes))
         for i,plane in enumerate(bb_planes):
@@ -1170,7 +1167,8 @@ class PolyhedralComplex:
             if bb:  continue # skip the bounding box cells
             # cell = self.cells.get(id)
             if self.debug_export:
-                self.complexExporter.write_cell(self.model,cell,count=id,subfolder="final_cells")
+                out_path = os.path.join(self.debug_export,"final_cells")
+                self.complexExporter.write_cell(out_path,cell,count=id)
             pts = np.array(cell.vertices())
             points.append(pts)
             # print(pts)
@@ -1324,9 +1322,12 @@ class PolyhedralComplex:
             # occupancy_dict[node] = (inside_weight,outside_weight)
             occs.append([inside_weight,outside_weight])
 
-        # return np.array(occs)/(2*len(self.vg.points)*sum(self.vg.point_class_weights[self.vg.classes]))
-        return np.array(occs)/(2*self.vg.point_class_weights[self.vg.classes].sum())
-        # nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
+        if len(self.vg.classes):
+            return np.array(occs)/(2*self.vg.point_class_weights[self.vg.classes].sum())
+        else:
+            return np.array(occs)/(2*len(self.vg.points))
+
+    # nx.set_node_attributes(self.graph,occupancy_dict,"occupancy")
 
 
     def label_partition_with_point_normals(self,footprint=None):
@@ -1858,13 +1859,89 @@ class PolyhedralComplex:
             p=Polyhedron(ieqs=hspaces)
 
 
-    # def _insert_static_planes(self,planes):
-    #
-    #     pass
+    def _insert_new_plane(self,parent,id,left_planes=[],right_planes=[]):
 
-    def _insert_new_plane(self):
+        current_cell = self.cells.get(parent)
+        best_plane_id_input = self.vg.plane_ids[id]
 
-        
+        ## create the new convexes
+        # hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id],0], self.vg.halfspaces[current_ids[best_plane_id],1]
+        hspace_positive, hspace_negative = self.vg.halfspaces[id][0], \
+                                           self.vg.halfspaces[id][1]
+
+        cell_negative = current_cell.intersection(hspace_negative)
+        cell_positive = current_cell.intersection(hspace_positive)
+
+        ## update tree by creating the new nodes with the planes that fall into it
+        ## and update graph with new nodes
+        if (cell_negative.dim() == 3):
+            if self.debug_export:
+                self.complexExporter.write_cell(os.path.join(self.debug_export, "construct_cells"), cell_negative,
+                                                count=str(self.cell_count + 1) + "n")
+            dd = {"plane_ids": np.array(left_planes)}
+            self.cell_count += 1
+            neg_cell_id = self.cell_count
+            self.tree.create_node(tag=neg_cell_id, identifier=neg_cell_id, data=dd, parent=parent)
+            self.graph.add_node(neg_cell_id)
+            self.cells[neg_cell_id] = cell_negative
+
+        if (cell_positive.dim() == 3):
+            if self.debug_export:
+                self.complexExporter.write_cell(os.path.join(self.debug_export, "construct_cells"), cell_positive,
+                                                count=str(self.cell_count + 1) + "p")
+            dd = {"plane_ids": np.array(right_planes)}
+            self.cell_count += 1
+            pos_cell_id = self.cell_count
+            self.tree.create_node(tag=pos_cell_id, identifier=pos_cell_id, data=dd, parent=parent)
+            self.graph.add_node(pos_cell_id)
+            self.cells[pos_cell_id] = cell_positive
+
+        ## add the split plane to the parent node of the tree
+        self.tree.nodes[parent].data["supporting_plane_id"] = best_plane_id_input
+
+        if (cell_positive.dim() == 3 and cell_negative.dim() == 3):
+
+            new_intersection = cell_negative.intersection(cell_positive)
+            self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=new_intersection, vertices=[],
+                                group_id=id,
+                                supporting_plane_id=best_plane_id_input, bounding_box_edge=False)
+            if self.debug_export:
+                self.complexExporter.write_facet(os.path.join(self.debug_export, "construct_facets"), new_intersection,
+                                                 count=self.plane_count)
+
+        ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
+        neighbors_of_old_cell = list(self.graph[parent])
+        old_cell_id = parent
+        for neighbor_id_old_cell in neighbors_of_old_cell:
+            # self.logger.debug("make neighbors")
+
+            # get the neighboring convex
+            nconvex = self.cells.get(neighbor_id_old_cell)
+            # intersect new cells with old neighbors to make the new facets
+            n_nonempty = False;
+            p_nonempty = False
+            if cell_negative.dim() == 3:
+                negative_intersection = nconvex.intersection(cell_negative)
+                n_nonempty = negative_intersection.dim() == 2
+            if cell_positive.dim() == 3:
+                positive_intersection = nconvex.intersection(cell_positive)
+                p_nonempty = positive_intersection.dim() == 2
+            # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
+            if n_nonempty:
+                self.graph.add_edge(neighbor_id_old_cell, neg_cell_id, intersection=negative_intersection, vertices=[],
+                                    group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
+                                    supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id][
+                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
+            if p_nonempty:
+                self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
+                                    group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
+                                    supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id][
+                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
+
+        self.graph.remove_node(parent)
+        del self.cells[parent]
+
+
 
     def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop", subdivison=None):
         """
@@ -1879,28 +1956,24 @@ class PolyhedralComplex:
         self.vg.plane_ids = list(range(self.vg.input_planes.shape[0]))
         self.vg.split_planes = copy.deepcopy(self.vg.input_planes)
 
-        cell_count = 0
+        self.cell_count = 0
         self.split_count = 0
 
         ## init the graph
         self.graph = nx.Graph()
-        self.graph.add_node(cell_count, convex=self.bounding_poly)
+        self.graph.add_node(self.cell_count, convex=self.bounding_poly)
 
         ## expand the tree as long as there is at least one plane inside any of the subspaces
         self.tree = Tree()
         dd = {"plane_ids": np.arange(self.vg.split_planes.shape[0])}
-        self.tree.create_node(tag=cell_count, identifier=cell_count, data=dd)  # root node
-        self.cells[cell_count] = self.bounding_poly
+        self.tree.create_node(tag=self.cell_count, identifier=self.cell_count, data=dd)  # root node
+        self.cells[self.cell_count] = self.bounding_poly
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
-
-        # if len(static_planes):
-        #     self.logger.info("Insert {} static planes".format(len(static_planes)))
-        #     children = self._insert_static_planes(static_planes)
 
         disable_tqdm = False if self.verbosity == logging.INFO else True
         pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout, disable=disable_tqdm)
 
-        plane_count = 0 # only used for debugging exports
+        self.plane_count = 0 # only used for debugging exports
         best_plane_ids = [] # only used for debugging exports
 
         if subdivison:
@@ -1912,6 +1985,7 @@ class PolyhedralComplex:
             current_ids = self.tree[child].data["plane_ids"]
             current_cell = self.cells.get(child)
 
+            ## get the best plane
             if len(current_ids) == 1:
                 best_plane_id = 0
                 best_plane = self.vg.split_planes[current_ids[best_plane_id]]
@@ -1923,102 +1997,29 @@ class PolyhedralComplex:
                 left_planes, right_planes = self._split_support_points(best_plane_id, current_ids, th)
 
 
-            ### for debugging
+            ### for debug export
             best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
             best_plane_ids.append(best_plane_id_input)
-
-            ### progress bar update
-            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
-
+            self.plane_count+=1
             ### export best plane
             if self.debug_export:
-                plane_count += 1
                 epoints = self.vg.groups[current_ids[best_plane_id]]
                 epoints = self.vg.points[epoints]
                 # epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
                 if epoints.shape[0]>3:
                     color = self.vg.plane_colors[best_plane_id_input]
-                    self.planeExporter.save_plane(os.path.join(self.debug_export,"split_planes"), best_plane, epoints,count=str(plane_count),color=color)
+                    self.planeExporter.save_plane(os.path.join(self.debug_export,"split_planes"), best_plane, epoints,count=str(self.plane_count),color=color)
 
+            ## insert the best plane into the complex
+            self._insert_new_plane(parent=child,id=current_ids[best_plane_id],left_planes=left_planes,right_planes=right_planes)
 
-            ## create the new convexes
-            # hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id],0], self.vg.halfspaces[current_ids[best_plane_id],1]
-            hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id]][0], self.vg.halfspaces[current_ids[best_plane_id]][1]
-
-            cell_negative = current_cell.intersection(hspace_negative)
-            cell_positive = current_cell.intersection(hspace_positive)
-
-            ## update tree by creating the new nodes with the planes that fall into it
-            ## and update graph with new nodes
-            if(cell_negative.dim() == 3):
-                if self.debug_export:
-                    self.complexExporter.write_cell(os.path.join(self.debug_export,"construct_cells"),cell_negative,count=str(cell_count+1)+"n")
-                dd = {"plane_ids": np.array(left_planes)}
-                cell_count = cell_count+1
-                neg_cell_id = cell_count
-                self.tree.create_node(tag=neg_cell_id, identifier=neg_cell_id, data=dd, parent=child)
-                self.graph.add_node(neg_cell_id)
-                self.cells[neg_cell_id] = cell_negative
-
-            if(cell_positive.dim() == 3):
-                if self.debug_export:
-                    self.complexExporter.write_cell(os.path.join(self.debug_export,"construct_cells"),cell_positive,count=str(cell_count+1)+"p")
-                dd = {"plane_ids": np.array(right_planes)}
-                cell_count = cell_count+1
-                pos_cell_id = cell_count
-                self.tree.create_node(tag=pos_cell_id, identifier=pos_cell_id, data=dd, parent=child)
-                self.graph.add_node(pos_cell_id)
-                self.cells[pos_cell_id] = cell_positive
-
-            ## add the split plane to the parent node of the tree
-            self.tree.nodes[child].data["supporting_plane_id"] = best_plane_id_input
-
-            if(cell_positive.dim() == 3 and cell_negative.dim() == 3):
-
-                new_intersection = cell_negative.intersection(cell_positive)
-                self.graph.add_edge(neg_cell_id, pos_cell_id, intersection = new_intersection, vertices = [], group_id = current_ids[best_plane_id],
-                               supporting_plane_id = best_plane_id_input, bounding_box_edge = False)
-                if self.debug_export:
-                    self.complexExporter.write_facet(os.path.join(self.debug_export,"construct_facets"),new_intersection,count=plane_count)
-
-            ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
-            neighbors_of_old_cell = list(self.graph[child])
-            old_cell_id=child
-            for neighbor_id_old_cell in neighbors_of_old_cell:
-                # self.logger.debug("make neighbors")
-
-                # get the neighboring convex
-                nconvex = self.cells.get(neighbor_id_old_cell)
-                # intersect new cells with old neighbors to make the new facets
-                n_nonempty = False; p_nonempty = False
-                if cell_negative.dim()==3:
-                    negative_intersection = nconvex.intersection(cell_negative)
-                    n_nonempty = negative_intersection.dim()==2
-                if cell_positive.dim()==3:
-                    positive_intersection = nconvex.intersection(cell_positive)
-                    p_nonempty = positive_intersection.dim()==2
-                # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
-                if n_nonempty:
-                    self.graph.add_edge(neighbor_id_old_cell,neg_cell_id,intersection=negative_intersection, vertices=[], group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
-                                   supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
-                if p_nonempty:
-                    self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[], group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
-                                   supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id]["supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
-
-            self.graph.remove_node(child)
+            ## progress bar update
+            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
             pbar.update(n_points_processed)
-
-            # if self.device == 'gpu':
-            #     self.vg.halfspaces[current_ids[best_plane_id]] = None
-            #     primitive_dict["point_groups"][current_ids[best_plane_id]] = None
-            #     self.vg.convex_hulls[current_ids[best_plane_id]] = None
-
-            del self.cells[child]
 
         pbar.close()
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
-
         self.logger.debug("Plane insertion order {}".format(best_plane_ids))
         self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
