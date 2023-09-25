@@ -29,6 +29,10 @@ class PlaneExporter:
 
     def save_plane(self,path,plane,points,count,subpaths=["planes","point_groups"],color=None):
 
+        if points.shape[0] < 3:
+            self.logger.error("Cannot export plane with less than 3 support points.")
+            return 1
+
         plane = deepcopy(plane)
 
         c = color if color is not None else [0.5,0.5,0.5]
@@ -71,6 +75,8 @@ class PlaneExporter:
         f.write(fstring)
 
         f.close()
+
+        return 0
 
 
     def save_planes(self,path,planes,points,color=None):

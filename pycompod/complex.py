@@ -37,7 +37,7 @@ class PolyhedralComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, vertex_group, padding=0.02, device='cpu', debug_export=False, verbosity=logging.WARN):
+    def __init__(self, vertex_group, padding=0.02, insertion_threshold=0, device='cpu', debug_export=False, verbosity=logging.WARN):
         """
         Init PolyhedralComplex.
         Class of polyhedral complex from planar primitive arrangement.
@@ -74,6 +74,7 @@ class PolyhedralComplex:
         else:
             self.torch = None
 
+        self.partition_initialized = False
         self.polygons_initialized = False
         self.polygons_constructed = False
         self.partition_labelled = False
@@ -82,6 +83,9 @@ class PolyhedralComplex:
         # init the bounding box
         self.padding = padding
         self.bounding_poly = self._init_bounding_box(padding=self.padding)
+
+        self.insertion_threshold = insertion_threshold
+        self.tree_mode = Tree.DEPTH
 
         self.debug_export = debug_export
         if self.debug_export:
@@ -137,37 +141,64 @@ class PolyhedralComplex:
         return positive, negative
 
 
-    def add_additional_planes(self,planes,points=None):
+    def add_additional_planes2(self,planes,points=None,normals=None):
+
+
+        def _plane_cell_intersection_test():
+            current_cell = self.cells.get(parent)
+
+            ## create the new convexes
+            # hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id],0], self.vg.halfspaces[current_ids[best_plane_id],1]
+            hspace_positive, hspace_negative = self.vg.halfspaces[id][0], \
+                                               self.vg.halfspaces[id][1]
+
+            cell_negative = current_cell.intersection(hspace_negative)
+            cell_positive = current_cell.intersection(hspace_positive)
+
+            if (cell_positive.is_empty() or cell_negative.is_empty()):
+                return 0
+            else:
+                return 1
+
+
 
         self.logger.info("Add additional planes...")
         self.logger.debug("Additional planes will be appended to self.vg.input_planes")
 
-
-        dtype = self.vg.input_planes.dtype
-        self.vg.input_planes = np.vstack((self.vg.input_planes,np.flip(bb_planes,axis=0).astype(dtype)))
-        bb_color = np.zeros(shape=(6,3))+[255,0,255]
-        self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color))
-
+        color = np.zeros(shape=(6,3))+[192,192,192]
+        self.vg.plane_colors = np.vstack((self.vg.plane_colors,color.astype(self.vg.plane_colors.dtype)))
 
         for i,plane in enumerate(planes):
 
-
+            ## TODO: scratch this idea and insert additional planes in the beginning and not at the end
+            ## then I can also merge this idea with a subdivision scheme
+            
+            ## add plane stuff
+            id = len(self.vg.input_planes)
+            self.vg.input_planes = np.append((self.vg.input_planes,plane.astype(self.vg.input_planes.dtype)))
+            self.vg.split_planes = np.append((self.vg.input_planes,plane.astype(self.vg.input_planes.dtype)))
+            self.vg.plane_ids.append(id)
+            # self.vg.plane_order = np.append(self.vg.plane_order,id)
+            self.vg.polygons_from_plane.append(np.array([]))
             hspace_neg, hspace_pos = self._inequalities(plane)
-            op = outside_poly.intersection(Polyhedron(ieqs=[hspace_neg]))
+            self.vg.halfspaces.append(np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])]))
+            
+            ## add point stuff
+            clen = len(self.vg.points)
+            self.vg.groups.append(np.arange(clen,clen+len(points[i])))
+            self.vg.points = np.append(self.vg.points,points[i],axis=0)
+            self.vg.normals = np.append(self.vg.normals,normals[i],axis=0)
 
             if self.debug_export:
-                self.complexExporter.write_cell(os.path.join(self.debug_export,"bounding_box_cells"),op,count=-(i+1))
-
-            self.cells[i+1+max_node_id] = op
-            self.graph.add_node(i+1+max_node_id, bounding_box=True)
+                self.planeExporter.save_plane(os.path.join(self.debug_export,"additional_planes"), plane, points[i], count=str(i), color=color[0,:])
 
             for cell_id in list(self.graph.nodes):
 
-                intersection = op.intersection(self.cells.get(cell_id))
 
-                if intersection.dim() == 2:
-                    self.graph.add_edge(i+1+max_node_id,cell_id, intersection=None, vertices=[],
-                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=True)
+                if(self._insert_new_plane(parent=cell_id,id=len(self.vg.input_planes)-1,construct_partition=False)):
+                    a=5
+
+
 
 
 
@@ -221,8 +252,6 @@ class PolyhedralComplex:
             if self.debug_export:
                 self.complexExporter.write_cell(os.path.join(self.debug_export,"bounding_box_cells"),op,count=-(i+1))
 
-            # self.cells[-(i+1)] = op
-            # self.graph.add_node(-(i+1), occupancy=0.0)
             self.cells[i+1+max_node_id] = op
             self.graph.add_node(i+1+max_node_id, bounding_box=True)
 
@@ -1508,7 +1537,7 @@ class PolyhedralComplex:
             raise NotImplementedError
 
 
-    def _split_support_points(self,best_plane_id,current_ids,th=0):
+    def _split_support_points(self,best_plane_id,current_ids):
 
         '''
         Split all primitive (ie 2D convex hulls) in the current cell with the best plane.
@@ -1519,7 +1548,7 @@ class PolyhedralComplex:
         :return: IDs of primitives falling left and right of the best plane.
         '''
 
-        assert th >= 0,"Threshold must be >= 0"
+        assert self.insertion_threshold >= 0,"Threshold must be >= 0"
 
         best_plane = self.vg.split_planes[current_ids[best_plane_id]]
 
@@ -1538,9 +1567,9 @@ class PolyhedralComplex:
             left_point_ids = this_group[which_side < -best_plane[3]]
             right_point_ids = this_group[which_side > -best_plane[3]]
 
-            if (this_group.shape[0] - left_point_ids.shape[0]) <= th:
+            if (this_group.shape[0] - left_point_ids.shape[0]) <= self.insertion_threshold:
                 left_plane_ids.append(id)
-            elif(this_group.shape[0] - right_point_ids.shape[0]) <= th:
+            elif(this_group.shape[0] - right_point_ids.shape[0]) <= self.insertion_threshold:
                 right_plane_ids.append(id)
             else:
 
@@ -1550,7 +1579,7 @@ class PolyhedralComplex:
                     # 2. project the line to self.vg.split_planes[id]
                     # 3. intersect the line with the convex hull: https://stackoverflow.com/questions/30486312/intersection-of-nd-line-with-convex-hull-in-python
 
-                if (left_point_ids.shape[0] > th):
+                if (left_point_ids.shape[0] > self.insertion_threshold):
                     left_plane_ids.append(self.vg.split_planes.shape[0])
                     self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
                     self.vg.plane_ids.append(self.vg.plane_ids[id])
@@ -1584,7 +1613,7 @@ class PolyhedralComplex:
 
                     self.vg.hull_vertices = np.vstack((self.vg.hull_vertices,new_group))
 
-                if (right_point_ids.shape[0] > th):
+                if (right_point_ids.shape[0] > self.insertion_threshold):
                     right_plane_ids.append(self.vg.split_planes.shape[0])
                     self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
                     self.vg.plane_ids.append(self.vg.plane_ids[id])
@@ -1872,6 +1901,13 @@ class PolyhedralComplex:
         cell_negative = current_cell.intersection(hspace_negative)
         cell_positive = current_cell.intersection(hspace_positive)
 
+        # # if not construct_partition and (cell_positive.is_empty() or cell_negative.is_empty()):
+        # if (cell_positive.is_empty() or cell_negative.is_empty()):
+        #     # when constructing the partition I expand a tree. so even if this is a meaningless split, i.e. one where one of the cells is empty,
+        #     # I still need to add a new tree node, so the parent node gets visited again and another split plane is used (in case the cell contains more planes).
+        #     # However, when inserting additional planes, I don't expand a tree, but loop over all the planes and cells, i.e. I can just pass the meaningless splits.
+        #     return 0
+
         ## update tree by creating the new nodes with the planes that fall into it
         ## and update graph with new nodes
         if (cell_negative.dim() == 3):
@@ -1896,6 +1932,7 @@ class PolyhedralComplex:
             self.graph.add_node(pos_cell_id)
             self.cells[pos_cell_id] = cell_positive
 
+
         ## add the split plane to the parent node of the tree
         self.tree.nodes[parent].data["supporting_plane_id"] = best_plane_id_input
 
@@ -1908,6 +1945,8 @@ class PolyhedralComplex:
             if self.debug_export:
                 self.complexExporter.write_facet(os.path.join(self.debug_export, "construct_facets"), new_intersection,
                                                  count=self.plane_count)
+
+
 
         ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
         neighbors_of_old_cell = list(self.graph[parent])
@@ -1940,18 +1979,85 @@ class PolyhedralComplex:
 
         self.graph.remove_node(parent)
         del self.cells[parent]
+        
+        return 1
+
+    def add_additional_planes(self,planes,points=None,normals=None):
+        
+        color = np.zeros(shape=(1,3))+[192,192,192]
+
+        # add the planes to the vertex_group
+        for i,plane in enumerate(planes):
+            self.vg.plane_order = np.append(0,self.vg.plane_order+1)
+            self.vg.input_planes = np.append(plane[np.newaxis,:],self.vg.input_planes,axis=0)
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            self.vg.halfspaces = [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])] + self.vg.halfspaces
+            self.vg.polygons_from_plane = [np.array([])]+self.vg.polygons_from_plane
+            # self.hull_vertices = self.hull_vertices[order]
+            self.vg.plane_colors = np.append(color,self.vg.plane_colors,axis=0)
+
+
+            ## add point stuff
+            clen = len(self.vg.points)
+            self.vg.groups = [np.arange(clen,clen+len(points[i]),dtype=self.vg.groups[0].dtype)] + self.vg.groups
+            self.vg.points = np.append(self.vg.points,points[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.normals = np.append(self.vg.normals,normals[i].astype(self.vg.points.dtype),axis=0)
 
 
 
-    def construct_partition(self, mode=Tree.DEPTH, th=0, insertion_order="product-earlystop", subdivison=None):
-        """
-        1. Construct the partition
-        :param mode:
-        :param th:
-        :param ordering:                                                                                                                                                                                                                              
-        :return:
-        """
-        self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
+
+        if not self.partition_initialized:
+            self._init_partition()
+
+
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+
+        for child in children:
+
+
+
+            current_ids = self.tree[child].data["plane_ids"]
+            current_cell = self.cells.get(child)
+
+
+            best_plane_id = 0
+            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+            ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
+            left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+
+
+            ### for debug export
+            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
+            self.best_plane_ids.append(best_plane_id_input)
+            self.plane_count+=1
+            ### export best plane
+            if self.debug_export:
+                epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
+                color = self.vg.plane_colors[best_plane_id_input]
+                self.planeExporter.save_plane(os.path.join(self.debug_export,"additional_planes"), best_plane, epoints, count=str(self.plane_count), color=color)
+
+            ## insert the best plane into the complex
+            self._insert_new_plane(parent=child,id=current_ids[best_plane_id],left_planes=left_planes,right_planes=right_planes)
+
+            ## progress bar update
+            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
+
+
+
+        self.polygons_initialized = False # false because I do not initialize the sibling facets
+        self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
+        self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
+
+        return 0
+
+
+
+
+
+
+
+
+    def _init_partition(self):
 
         self.vg.plane_ids = list(range(self.vg.input_planes.shape[0]))
         self.vg.split_planes = copy.deepcopy(self.vg.input_planes)
@@ -1968,24 +2074,39 @@ class PolyhedralComplex:
         dd = {"plane_ids": np.arange(self.vg.split_planes.shape[0])}
         self.tree.create_node(tag=self.cell_count, identifier=self.cell_count, data=dd)  # root node
         self.cells[self.cell_count] = self.bounding_poly
-        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=mode)
+        self.plane_count = 0 # only used for debugging exports
+        self.best_plane_ids = [] # only used for debugging exports
 
-        disable_tqdm = False if self.verbosity == logging.INFO else True
+        self.partition_initialized = True
+
+
+
+
+
+
+
+    def construct_partition(self, insertion_order="product-earlystop"):
+        """
+        1. Construct the partition
+        :param th:
+        :param insertion_order:
+        :return:
+        """
+        self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
+
+        if not self.partition_initialized:
+            self._init_partition()
+
+        disable_tqdm = False if self.verbosity < 40 else True
         pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout, disable=disable_tqdm)
 
-        self.plane_count = 0 # only used for debugging exports
-        best_plane_ids = [] # only used for debugging exports
-
-        if subdivison:
-            self.apply_subdivision(subdivison[0],subdivison[1],subdivison[2])
-
-
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
 
             current_ids = self.tree[child].data["plane_ids"]
             current_cell = self.cells.get(child)
 
-            ## get the best plane
+            ## get the best plane              
             if len(current_ids) == 1:
                 best_plane_id = 0
                 best_plane = self.vg.split_planes[current_ids[best_plane_id]]
@@ -1994,21 +2115,18 @@ class PolyhedralComplex:
                 best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
                 best_plane = self.vg.split_planes[current_ids[best_plane_id]]
                 ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
-                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids, th)
+                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
 
 
             ### for debug export
             best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
-            best_plane_ids.append(best_plane_id_input)
+            self.best_plane_ids.append(best_plane_id_input)
             self.plane_count+=1
             ### export best plane
             if self.debug_export:
-                epoints = self.vg.groups[current_ids[best_plane_id]]
-                epoints = self.vg.points[epoints]
-                # epoints = epoints[~np.isnan(epoints.astype(float)).all(axis=-1)]
-                if epoints.shape[0]>3:
-                    color = self.vg.plane_colors[best_plane_id_input]
-                    self.planeExporter.save_plane(os.path.join(self.debug_export,"split_planes"), best_plane, epoints,count=str(self.plane_count),color=color)
+                epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
+                color = self.vg.plane_colors[best_plane_id_input]
+                self.planeExporter.save_plane(os.path.join(self.debug_export,"split_planes"), best_plane, epoints, count=str(self.plane_count), color=color)
 
             ## insert the best plane into the complex
             self._insert_new_plane(parent=child,id=current_ids[best_plane_id],left_planes=left_planes,right_planes=right_planes)
@@ -2020,7 +2138,7 @@ class PolyhedralComplex:
         pbar.close()
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
-        self.logger.debug("Plane insertion order {}".format(best_plane_ids))
+        self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
         self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
         return 0

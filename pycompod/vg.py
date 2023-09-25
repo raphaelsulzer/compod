@@ -70,7 +70,7 @@ class VertexGroup:
         #  17: "17", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
         self.point_class_weights[6] = 3
         self.point_class_weights[66] = 12
-        self.point_class_weights[67] = 9
+        # self.point_class_weights[67] = 9
 
 
 
