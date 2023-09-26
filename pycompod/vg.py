@@ -62,18 +62,6 @@ class VertexGroup:
         self.plane_colors = np.array(cols)
 
 
-    def _make_point_class_weight(self):
-
-        self.point_class_weights = np.ones(self.classes.max()+1)
-        # {1: "Unclassified", 2: "Ground", 3: "Low_Vegetation", 4: "Medium_Vegetation", 5: "High_Vegetation",
-        #  6: "Building", 9: "Water",
-        #  17: "17", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
-        self.point_class_weights[6] = 3
-        self.point_class_weights[66] = 12
-        # self.point_class_weights[67] = 9
-
-
-
     def _prioritise_planes(self, mode):
         """
         Prioritise certain planes to favour building reconstruction.
@@ -144,6 +132,10 @@ class VertexGroup:
             class_groups = defaultdict(list)
             # get majority class for each plane
             for i,pg in enumerate(self.groups):
+                if np.isclose(self.planes[i,2],0,atol=0.05):
+                    class_groups["Walls"].append(i)
+                    continue
+
                 unique, count = np.unique(self.classes[pg],return_counts=True)
                 max_class = unique[np.argmax(count)]
                 if max_class == 6:
@@ -152,11 +144,13 @@ class VertexGroup:
                     class_groups["Floor"].append(i)
                 elif max_class == 67:
                     class_groups["Walls"].append(i)
+                elif max_class == 68:
+                    class_groups["Etage"].append(i)
                 else:
                     class_groups["Misc"].append(i)
 
             order = []
-            for cl in ["Floor","Walls","Building","Misc"]:
+            for cl in ["Floor","Etage","Walls","Building","Misc"]:
                 group_ids = np.array(class_groups[cl]).astype(int)
                 polys = self.polygon_areas[group_ids]
                 ord = np.argsort(polys)[::-1]
@@ -201,10 +195,8 @@ class VertexGroup:
         self.normals = data["normals"].astype(np.float32)
         if "classes" in data.keys():
             self.classes = data["classes"]
-            self._make_point_class_weight()
         else:
             self.classes = []
-            self.point_class_weights = []
 
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()

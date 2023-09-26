@@ -3,8 +3,10 @@ import os
 import numpy as np
 from scipy.spatial import ConvexHull
 from copy import deepcopy
-from .plane import ProjectedConvexHull
+from .plane import ProjectedConvexHull, PyPlane
 from .logger import make_logger
+
+
 
 class PlaneExporter:
 
@@ -26,11 +28,10 @@ class PlaneExporter:
             f.write('v {} {} {} {} {} {}\n'.format(v[0], v[1], v[2], c[0], c[1], c[2]))
         f.close()
 
-
     def save_plane(self,path,plane,points,count,subpaths=["planes","point_groups"],color=None):
 
         if points.shape[0] < 3:
-            self.logger.error("Cannot export plane with less than 3 support points.")
+            self.logger.warning("Cannot export plane with less than 3 support points.")
             return 1
 
         plane = deepcopy(plane)
@@ -45,25 +46,12 @@ class PlaneExporter:
             f.write('v {} {} {} {} {} {}\n'.format(v[0], v[1], v[2], c[0], c[1], c[2]))
         f.close()
 
-        plane+=(np.random.rand(4,)*0.001)
-
-
-        ## project verts to plane
-        ## https://www.baeldung.com/cs/3d-point-2d-plane
-        k = (-plane[-1] - plane[0] * points[:, 0] - plane[1] * points[:, 1] - plane[2] * points[:, 2]) / \
-            (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
-        pp = np.asarray([points[:, 0] + k * plane[0], points[:, 1] + k * plane[1], points[:, 2] + k * plane[2]]).transpose()
-
-        # plt.figure()
-        # plt.scatter(pp[:,0],pp[:,1])
-        # plt.axis('equal')
-        # plt.show()
         try:
-            ch = ConvexHull(pp[:, :2])
+            pyplane = PyPlane(plane)
+            verts = pyplane.get_convex_hull_points_of_projected_points(points,dim=3)
         except:
-            return
-        verts = ch.points[ch.vertices]
-        verts = np.hstack((verts, pp[ch.vertices, 2, np.newaxis]))
+            self.logger.warning("Degenerate export polygon.")
+            return 0
 
         os.makedirs(os.path.join(path,subpaths[0]), exist_ok=True)
         filename = os.path.join(path, subpaths[0], str(count) + '.obj')
@@ -77,55 +65,6 @@ class PlaneExporter:
         f.close()
 
         return 0
-
-
-    def save_planes(self,path,planes,points,color=None):
-
-        """this writes all planes"""
-
-        os.makedirs(os.path.join(path,"planes"), exist_ok=True)
-        os.makedirs(os.path.join(path,"point_groups"), exist_ok=True)
-
-        for i, plane in enumerate(planes):
-
-            plane = deepcopy(plane)
-
-            plane += (np.random.rand(4, ) * 0.001)
-
-            c = np.random.random(size=3)
-
-            filename = os.path.join(path, "point_groups", str(i) + '.obj')
-            f = open(filename, 'w')
-            for j,v in enumerate(points[i]):
-                f.write('v {} {} {} {} {} {}\n'.format(v[0],v[1],v[2],c[0],c[1],c[2]))
-            f.close()
-
-            p = points[i]
-
-            # project verts to plane
-            # https://www.baeldung.com/cs/3d-point-2d-plane
-            k = (-plane[-1] -plane[0]*p[:, 0] -plane[1]*p[:, 1] -plane[2]*p[:, 2]) / \
-                (plane[0] ** 2 + plane[1] ** 2 + plane[2] ** 2)
-            pp = np.asarray([p[:, 0] + k * plane[0], p[:, 1] + k * plane[1], p[:, 2] + k * plane[2]]).transpose()
-
-
-            ch = ConvexHull(pp[:,:2])
-            verts = ch.points[ch.vertices]
-            verts = np.hstack((verts, pp[ch.vertices,2,np.newaxis]))
-
-
-
-
-            filename = os.path.join(path, "planes", str(i) + '.obj')
-            f = open(filename, 'w')
-            fstring='f'
-            for j,v in enumerate(verts):
-                f.write('v {} {} {} {} {} {}\n'.format(v[0],v[1],v[2],c[0],c[1],c[2]))
-                fstring+=' {}'.format(j+1)
-            f.write(fstring)
-
-            f.close()
-
 
     def save_planes_to_ply(self,filename,points,group_num_points,group_points,group_parameters,colors=None):
 
