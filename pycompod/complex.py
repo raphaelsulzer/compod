@@ -2007,6 +2007,8 @@ class PolyhedralComplex:
 
     def add_subdivision(self,res=[2,2,2]):
 
+        self.logger.info("Apply subdivision of input into {} grid".format(res))
+
         # TODO: when making a grid; just make one with twice the density and sample points on that;
         # then just run this normally until additional planes are all inserted
         def make_grid(res):
@@ -2106,7 +2108,8 @@ class PolyhedralComplex:
             if self.debug_export:
                 epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
                 color = self.vg.plane_colors[best_plane_id_input]
-                self.planeExporter.save_plane(os.path.join(self.debug_export,"additional_planes"), best_plane, epoints, count=str(self.plane_count), color=color)
+                if len(epoints) > 3:
+                    self.planeExporter.save_plane(os.path.join(self.debug_export,"additional_planes"), best_plane, epoints, count=str(self.plane_count), color=color)
 
             ## insert the best plane into the complex
             self._insert_new_plane(parent=child,id=current_ids[best_plane_id],left_planes=left_planes,right_planes=right_planes)
@@ -2114,11 +2117,7 @@ class PolyhedralComplex:
             ## progress bar update
             n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
 
-
-
         self.polygons_initialized = False # false because I do not initialize the sibling facets
-        self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
-        self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
         return 0
 
@@ -2149,8 +2148,10 @@ class PolyhedralComplex:
 
     def _compute_split(self, parent, insertion_order="product-earlystop"):
 
-        children = self.tree.expand_tree(parent, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+        disable_tqdm = False if self.verbosity < 30 else True
+        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=disable_tqdm)
 
+        children = self.tree.expand_tree(parent, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
 
             current_ids = self.tree[child].data["plane_ids"]
@@ -2179,60 +2180,37 @@ class PolyhedralComplex:
             if self.debug_export:
                 epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
                 color = self.vg.plane_colors[best_plane_id_input]
-                self.planeExporter.save_plane(os.path.join(self.debug_export, "split_planes"), best_plane, epoints,
-                                              count=str(self.plane_count), color=color)
+                if len(epoints) > 3:
+                    self.planeExporter.save_plane(os.path.join(self.debug_export, "split_planes"), best_plane, epoints,
+                                                  count=str(self.plane_count), color=color)
 
             ## insert the best plane into the complex
             self._insert_new_plane(parent=child, id=current_ids[best_plane_id], left_planes=left_planes,
                                    right_planes=right_planes)
 
-            # ## progress bar update
-            # n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
-            # pbar.update(n_points_processed)
+            ## progress bar update
+            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
+            pbar.update(n_points_processed)
 
+        pbar.close()
 
 
 
     def construct_partition(self, insertion_order="product-earlystop"):
         """
         1. Construct the partition
-        :param th:
-        :param insertion_order:
-        :return:
+        :param insertion_order: In which order to process the planes.
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
 
         if not self.partition_initialized:
             self._init_partition()
 
-        disable_tqdm = False if self.verbosity < 30 else True
-        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=disable_tqdm)
-
-        # self._compute_split(0, insertion_order=insertion_order)
-
-        cells = list(self.cells.keys())
-
-        # for cell in cells:
-        #     self._compute_split(cell, insertion_order=insertion_order)
-
-        ## doesn't work like this obviously, because a different instance of self is passed to each subprocess (https://stackoverflow.com/a/44850640)
-        processes = [Process(target=self._compute_split, args=(cell,)) for cell in cells]
-        for process in processes:
-            process.start()
-            # wait for all processes to complete
-        time.sleep(5)
-        for process in processes:
-            process.join()
-            # report that all tasks are completed
-        print("\n\nall finished", flush=True)
-
-        pbar.close()
+        self._compute_split(0, insertion_order=insertion_order)
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
         self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
         self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
-
-        return 0
 
 
     def save_partition_to_pickle(self,outpath):
