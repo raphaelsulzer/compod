@@ -56,6 +56,7 @@ class PolyhedralComplex:
         self.vg = vertex_group
         # basically just a name change, to make sure that the negative indices for the boundary planes are never used on this array and not on the split_planes array
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
+        self.n_points = np.concatenate(self.vg.groups).shape[0]
         del self.vg.planes
 
         self.verbosity = verbosity
@@ -1010,24 +1011,26 @@ class PolyhedralComplex:
 
         f.close()
 
-    def _unit_normal(self,a, b, c):
-        def det(a):
-            return a[0][0] * a[1][1] * a[2][2] + a[0][1] * a[1][2] * a[2][0] + a[0][2] * a[1][0] * a[2][1] - a[0][2] * \
-                   a[1][1] * a[2][0] - a[0][1] * a[1][0] * a[2][2] - a[0][0] * a[1][2] * a[2][1]
-        x = det([[1, a[1], a[2]],
-                 [1, b[1], b[2]],
-                 [1, c[1], c[2]]])
-        y = det([[a[0], 1, a[2]],
-                 [b[0], 1, b[2]],
-                 [c[0], 1, c[2]]])
-        z = det([[a[0], a[1], 1],
-                 [b[0], b[1], 1],
-                 [c[0], c[1], 1]])
-        magnitude = (x ** 2 + y ** 2 + z ** 2) ** .5
-        return (x / magnitude, y / magnitude, z / magnitude)
-
-
     def _polygon_area(self,poly):
+        """Compute polygon area, from here: https://stackoverflow.com/a/12643315"""
+
+        def unit_normal(a, b, c):
+            def det(a):
+                return a[0][0] * a[1][1] * a[2][2] + a[0][1] * a[1][2] * a[2][0] + a[0][2] * a[1][0] * a[2][1] - a[0][
+                    2] * \
+                       a[1][1] * a[2][0] - a[0][1] * a[1][0] * a[2][2] - a[0][0] * a[1][2] * a[2][1]
+
+            x = det([[1, a[1], a[2]],
+                     [1, b[1], b[2]],
+                     [1, c[1], c[2]]])
+            y = det([[a[0], 1, a[2]],
+                     [b[0], 1, b[2]],
+                     [c[0], 1, c[2]]])
+            z = det([[a[0], a[1], 1],
+                     [b[0], b[1], 1],
+                     [c[0], c[1], 1]])
+            magnitude = (x ** 2 + y ** 2 + z ** 2) ** .5
+            return (x / magnitude, y / magnitude, z / magnitude)
 
 
         if len(poly) < 3:  # not a plane - no area
@@ -1044,8 +1047,9 @@ class PolyhedralComplex:
             total[0] += prod[0]
             total[1] += prod[1]
             total[2] += prod[2]
-        result = np.dot(total, self._unit_normal(poly[0], poly[1], poly[2]))
+        result = np.dot(total, unit_normal(poly[0], poly[1], poly[2]))
         return abs(result / 2)
+
 
     def _beta_skeleton(self, center, point, normal):
 
@@ -1224,196 +1228,164 @@ class PolyhedralComplex:
 
         return occs
 
-    def _collect_facet_points(self):
-
-        def convex_contains(vertices, points):
-            """
-            Check if points are contained in a convex polygon.
-            :param vertices: The vertices of the convex polygon.
-            :param points: The points array.
-            :return:
-            """
-            sides = []
-            n = len(vertices)
-            for i in range(n):
-                x0 = vertices[i, 0]
-                x1 = vertices[(i + 1) % n, 0]
-                y0 = vertices[i, 1]
-                y1 = vertices[(i + 1) % n, 1]
-                sides.append((points[:, 1] - y0) * (x1 - x0) - (points[:, 0] - x0) * (y1 - y0))
-
-            sides = np.array(sides)
-            sides1 = sides < 0
-            sides2 = ~sides1 # orientation of the facet is unknown, so need to check for both sides
-            sides1 = sides1.all(axis=0)
-            sides2 = sides2.all(axis=0)
-            sides = np.logical_or(sides1,sides2)
-            return sides
-
-
-
-        point_ids_dict = dict()
-        count=0
-        # edge_areas_dict = dict()
-        for e0, e1 in self.graph.edges:
-
-            edge = self.graph.edges[e0, e1]
-            if edge["supporting_plane_id"] < 0:  # bounding box planes have no associated points, so skip them
-                point_ids_dict[(e0, e1)] = np.empty(shape=0,dtype=np.int32)
-                continue
-
-            group = self.vg.groups[edge["group_id"]]
-
-            ## use my own contains functions because no need to do this with QQ bqse_ring and changing it to RDF is not robust.
-            ## this works but is slow
-            # polygon = edge["intersection"].affine_hull_projection()
-            # contain = convex_contains1(polygon, self.vg.projected_points[group])
-            ## this is much faster and gives the same result
-            vertices = np.array(edge["intersection"].vertices())
-            assert(len(vertices))
-            vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
-            plane = PyPlane(self.vg.split_planes[edge["group_id"]])
-            # contain = convex_contains(vertices, self.vg.projected_points[group])
-            poly = Polygon(np.array(plane.to_2d(vertices)))
-            contain = contains_xy(poly,self.vg.projected_points[group])
-            # contain = poly.
-
-            # get edge area
-            # edge_areas_dict[(e0,e1)] = edge["intersection"].affine_hull_projection().volume().numerical_approx()
-
-            point_ids_dict[(e0, e1)] = group[contain]
-
-            if self.debug_export:
-                pts = self.vg.points[group[contain]]
-                count += 1
-                col = np.random.randint(0, 255, size=3)
-                self.complexExporter.write_points(os.path.join(self.debug_export, "labelling_facets_group_points"), self.vg.points[group],
-                                                    count=str(count) + "c", color=col)
-                self.complexExporter.write_facet(os.path.join(self.debug_export, "labelling_facets"), edge["intersection"],
-                                                    count=str(count), color=col)
-                if len(pts):
-                    self.complexExporter.write_facet(os.path.join(self.debug_export, "labelling_facets_containing"),
-                                                     edge["intersection"],
-                                                     count=str(count), color=col)
-                    self.complexExporter.write_points(os.path.join(self.debug_export,"labelling_facets_contained_points"), pts, count=str(count) + "c", color=col)
-
-        nx.set_edge_attributes(self.graph,point_ids_dict,"point_ids")
-        # nx.set_edge_attributes(self.graph,edge_areas_dict,"area")
-
-
-    def _make_point_class_weight(self):
-
-        self.point_class_weights = np.ones(self.vg.classes.max()+1)
-        # {1: "Unclassified", 2: "Ground", 3: "Low_Vegetation", 4: "Medium_Vegetation", 5: "High_Vegetation",
-        #  6: "Building", 9: "Water",
-        #  17: "17", 63: "Etage", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
-        self.point_class_weights[6] = 3
-        self.point_class_weights[63] = 0
-        self.point_class_weights[66] = 12
-        self.point_class_weights[67] = 2
-
-    def _collect_node_votes(self,footprint=None,z_range=None):
-        
-        if len(self.vg.classes):
-            self._make_point_class_weight()
-
-        occs = []
-        if footprint is not None:
-            footprint = Polygon(footprint)
-
-        all_cell_points = []
-        all_cell_normals = []
-        type_colors = []
-        for node in self.graph.nodes:
-            
-
-            centroid = np.array(self.cells[node].vertices()).mean(axis=0)
-            footprint_weight = 24
-            n = footprint_weight*2*len(self.vg.points)*self.point_class_weights.max()/len(self.cells)
-
-            if self.graph.nodes[node].get("bounding_box",0):
-                # occupancy_dict[node] = (0,1000)
-                occs.append([0,n]) # TODO: this should probably be related to the number of points or something
-                type_colors.append([205,82,61])
-            elif footprint is not None and not contains_xy(footprint,x=centroid[0],y=centroid[1]):
-                occs.append([0, n])
-                type_colors.append([147,196,125])
-            elif z_range is not None and z_range[0] <= centroid[2] and z_range[1] >= centroid[2] and contains_xy(footprint,x=centroid[0],y=centroid[1]):
-                occs.append([n, 0])
-                type_colors.append([61,184,205])
-            elif z_range is not None and centroid[2] > z_range[2]:
-                occs.append([0,n])
-                type_colors.append([205,61,112])
-            else:
-                type_colors.append([241,194,50])
-                inside_weight = 0; outside_weight = 0
-                cell_points = []
-                cell_normals = []
-                for edge in self.graph.edges(node):
-                    edge = self.graph.edges[edge]
-                    pts = self.vg.points[edge["point_ids"]]
-                    if not len(pts):
-                        continue
-                    inside_vectors = centroid - pts
-                    normal_vectors = self.vg.normals[edge["point_ids"]]
-                    dp=(normal_vectors * inside_vectors).sum(axis=1)
-                    iweight = (dp<0).astype(float)
-                    oweight = (dp>0).astype(float)
-                    if len(self.vg.classes):
-                        class_weights = self.vg.classes[edge["point_ids"]]
-                        class_weights = self.point_class_weights[class_weights].astype(float)
-                        iweight*=class_weights
-                        oweight*=class_weights
-                    inside_weight+=iweight.sum()
-                    outside_weight+=oweight.sum()
-                    if self.debug_export:
-                        cell_points.append(pts)
-                        cell_normals.append(normal_vectors)
-
-
-                # occupancy_dict[node] = (inside_weight,outside_weight)
-                occs.append([inside_weight,outside_weight])
-
-
-        if len(self.vg.classes):
-            occs = np.array(occs) / (2 * self.point_class_weights[self.vg.classes].sum())
-        else:
-            occs = np.array(occs) / (2 * len(self.vg.points))
-
-
-        if self.debug_export:
-
-            from fancycolor import GradientColor2D
-
-            inside_weight = occs[:, 0]
-            outside_weight = occs[:, 1]
-
-            icol = GradientColor2D("Reds", inside_weight.min(), inside_weight.max()).get_rgb(inside_weight)
-            ocol = GradientColor2D("Greens", outside_weight.min(), outside_weight.max()).get_rgb(outside_weight)
-            
-            for i,node in enumerate(self.graph.nodes):
-                st = "out" if inside_weight[i] <= outside_weight[i] else "in"
-                color = np.array(ocol[i])[:3] if inside_weight[i] <= outside_weight[i] else np.array(icol[i][:3])
-
-                self.complexExporter.write_cell(os.path.join(self.debug_export,"labelling_cells_{}".format(st)),self.cells[node],
-                                                    count=str(node)+st,color=color)
-                color = type_colors[i]
-                self.complexExporter.write_cell(os.path.join(self.debug_export,"labelling_cells_type_{}".format(st)),self.cells[node],
-                                                    count=str(node)+st,color=color)
-                # self.complexExporter.write_points(os.path.join(self.debug_export,"labelling_points"),color=color, count=str(node)+st,
-                #                                       points=np.concatenate(cell_points),normals=np.concatenate(cell_normals))
-
-        return occs
-
-
 
     def label_partition_with_point_normals(self,footprint=None,z_range=None):
         """
         Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
         """
 
-        self._collect_facet_points()
-        return self._collect_node_votes(footprint=footprint,z_range=z_range)
+        def collect_facet_points():
+
+            point_ids_dict = dict()
+            count = 0
+            # edge_areas_dict = dict()
+            for e0, e1 in self.graph.edges:
+
+                edge = self.graph.edges[e0, e1]
+                if edge["supporting_plane_id"] < 0:  # bounding box planes have no associated points, so skip them
+                    point_ids_dict[(e0, e1)] = np.empty(shape=0, dtype=np.int32)
+                    continue
+
+                group = self.vg.groups[edge["group_id"]]
+
+                ## use shapely contains_xy with projected points.
+                vertices = np.array(edge["intersection"].vertices())
+                assert (len(vertices))
+                vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
+                plane = PyPlane(self.vg.split_planes[edge["group_id"]])
+                poly = Polygon(np.array(plane.to_2d(vertices)))
+                contain = contains_xy(poly, self.vg.projected_points[group])
+
+                point_ids_dict[(e0, e1)] = group[contain]
+                if self.debug_export:
+                    pts = self.vg.points[group[contain]]
+                    count += 1
+                    col = np.random.randint(0, 255, size=3)
+                    self.complexExporter.write_points(os.path.join(self.debug_export, "labelling_facets_group_points"),
+                                                      self.vg.points[group],
+                                                      count=str(count) + "c", color=col)
+                    self.complexExporter.write_facet(os.path.join(self.debug_export, "labelling_facets"),
+                                                     edge["intersection"],
+                                                     count=str(count), color=col)
+                    if len(pts):
+                        self.complexExporter.write_facet(os.path.join(self.debug_export, "labelling_facets_containing"),
+                                                         edge["intersection"],
+                                                         count=str(count), color=col)
+                        self.complexExporter.write_points(
+                            os.path.join(self.debug_export, "labelling_facets_contained_points"), pts,
+                            count=str(count) + "c", color=col)
+
+            nx.set_edge_attributes(self.graph, point_ids_dict, "point_ids")
+
+
+        def make_point_class_weight():
+
+            self.point_class_weights = np.ones(self.vg.classes.max() + 1)
+            # {1: "Unclassified", 2: "Ground", 3: "Low_Vegetation", 4: "Medium_Vegetation", 5: "High_Vegetation",
+            #  6: "Building", 9: "Water",
+            #  17: "17", 63: "Etage", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
+            self.point_class_weights[0] = 0
+            self.point_class_weights[1] = 1
+            self.point_class_weights[6] = 3
+            self.point_class_weights[63] = 0
+            self.point_class_weights[66] = 12
+            self.point_class_weights[67] = 2
+
+        def collect_node_votes(footprint=None, z_range=None):
+
+            if len(self.vg.classes):
+                make_point_class_weight()
+
+            occs = []
+            if footprint is not None:
+                footprint = Polygon(footprint)
+
+            all_cell_points = []
+            all_cell_normals = []
+            type_colors = []
+            for node in self.graph.nodes:
+
+                centroid = np.array(self.cells[node].vertices()).mean(axis=0)
+                footprint_weight = 24
+                n = footprint_weight * 2 * len(self.vg.points) * self.point_class_weights.max() / len(self.cells)
+
+                if self.graph.nodes[node].get("bounding_box", 0):
+                    # occupancy_dict[node] = (0,1000)
+                    occs.append([0, n])  # TODO: this should probably be related to the number of points or something
+                    type_colors.append([205, 82, 61])
+                elif footprint is not None and not contains_xy(footprint, x=centroid[0], y=centroid[1]):
+                    occs.append([0, n])
+                    type_colors.append([147, 196, 125])
+                elif z_range is not None and z_range[0] <= centroid[2] and z_range[1] >= centroid[2] and contains_xy(
+                        footprint, x=centroid[0], y=centroid[1]):
+                    occs.append([n, 0])
+                    type_colors.append([61, 184, 205])
+                elif z_range is not None and centroid[2] > z_range[2]:
+                    occs.append([0, n])
+                    type_colors.append([205, 61, 112])
+                else:
+                    type_colors.append([241, 194, 50])
+                    inside_weight = 0;
+                    outside_weight = 0
+                    cell_points = []
+                    cell_normals = []
+                    for edge in self.graph.edges(node):
+                        edge = self.graph.edges[edge]
+                        pts = self.vg.points[edge["point_ids"]]
+                        if not len(pts):
+                            continue
+                        inside_vectors = centroid - pts
+                        normal_vectors = self.vg.normals[edge["point_ids"]]
+                        dp = (normal_vectors * inside_vectors).sum(axis=1)
+                        iweight = (dp < 0).astype(float)
+                        oweight = (dp > 0).astype(float)
+                        if len(self.vg.classes):
+                            class_weights = self.vg.classes[edge["point_ids"]]
+                            class_weights = self.point_class_weights[class_weights].astype(float)
+                            iweight *= class_weights
+                            oweight *= class_weights
+                        inside_weight += iweight.sum()
+                        outside_weight += oweight.sum()
+                        if self.debug_export:
+                            cell_points.append(pts)
+                            cell_normals.append(normal_vectors)
+
+                    # occupancy_dict[node] = (inside_weight,outside_weight)
+                    occs.append([inside_weight, outside_weight])
+
+            if len(self.vg.classes):
+                occs = np.array(occs) / (2 * self.point_class_weights[self.vg.classes].sum())
+            else:
+                occs = np.array(occs) / (2 * len(self.vg.points))
+
+            if self.debug_export:
+
+                from fancycolor import GradientColor2D
+
+                inside_weight = occs[:, 0]
+                outside_weight = occs[:, 1]
+
+                icol = GradientColor2D("Reds", inside_weight.min(), inside_weight.max()).get_rgb(inside_weight)
+                ocol = GradientColor2D("Greens", outside_weight.min(), outside_weight.max()).get_rgb(outside_weight)
+
+                for i, node in enumerate(self.graph.nodes):
+                    st = "out" if inside_weight[i] <= outside_weight[i] else "in"
+                    color = np.array(ocol[i])[:3] if inside_weight[i] <= outside_weight[i] else np.array(icol[i][:3])
+
+                    self.complexExporter.write_cell(os.path.join(self.debug_export, "labelling_cells_{}".format(st)),
+                                                    self.cells[node],
+                                                    count=str(node) + st, color=color)
+                    color = type_colors[i]
+                    self.complexExporter.write_cell(
+                        os.path.join(self.debug_export, "labelling_cells_type_{}".format(st)), self.cells[node],
+                        count=str(node) + st, color=color)
+                    # self.complexExporter.write_points(os.path.join(self.debug_export,"labelling_points"),color=color, count=str(node)+st,
+                    #                                       points=np.concatenate(cell_points),normals=np.concatenate(cell_normals))
+
+            return occs
+
+        collect_facet_points()
+        return collect_node_votes(footprint=footprint,z_range=z_range)
 
 
 
@@ -1585,7 +1557,7 @@ class PolyhedralComplex:
             raise NotImplementedError
 
 
-    def _split_support_points(self,best_plane_id,current_ids,best_plane=None):
+    def _split_support_points(self,best_plane_id,current_ids):
 
         '''
         Split all primitive (ie 2D convex hulls) in the current cell with the best plane.
@@ -1598,8 +1570,7 @@ class PolyhedralComplex:
 
         assert self.insertion_threshold >= 0,"Threshold must be >= 0"
 
-        if best_plane is None:
-            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+        best_plane = self.vg.split_planes[current_ids[best_plane_id]]
 
 
         ### now put the planes into the left and right subspace of the best_plane split
@@ -2031,54 +2002,102 @@ class PolyhedralComplex:
         
         return 1
 
-    def add_additional_planes(self,planes,points=None,normals=None):
-        
-        # color = np.zeros(shape=(1,3))+[192,192,192]
-        #
-        # # add the planes to the vertex_group
-        # for i,plane in enumerate(planes):
-        #     self.vg.plane_order = np.append(0,self.vg.plane_order+1)
-        #     self.vg.input_planes = np.append(plane[np.newaxis,:],self.vg.input_planes,axis=0)
-        #     hspace_neg, hspace_pos = self._inequalities(plane)
-        #     self.vg.halfspaces = [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])] + self.vg.halfspaces
-        #     self.vg.polygons_from_plane = [np.array([])]+self.vg.polygons_from_plane
-        #     # self.hull_vertices = self.hull_vertices[order]
-        #     self.vg.plane_colors = np.append(color,self.vg.plane_colors,axis=0)
-        #
-        #
-        #     ## add point stuff
-        #     clen = len(self.vg.points)
-        #     self.vg.groups = [np.arange(clen,clen+len(points[i]),dtype=self.vg.groups[0].dtype)] + self.vg.groups
-        #     self.vg.points = np.append(self.vg.points,points[i].astype(self.vg.points.dtype),axis=0)
-        #     self.vg.normals = np.append(self.vg.normals,normals[i].astype(self.vg.points.dtype),axis=0)
+
+    def add_subdivision(self,res=(3,3,3)):
+
+        # TODO: when making a grid; just make one with twice the density and sample points on that;
+        # then just run this normally until additional planes are all inserted
+        def make_grid(res):
+
+            bb = np.array(self.bounding_poly.bounding_box())
+            bb_mean = bb.mean(axis=0)
+
+            subdivisions = []
+            points = []
+            dims = np.array([0,1,2])
+            for dim in range(3):
+                subdivisions.append(np.linspace(bb[0, dim], bb[1, dim], res[dim] + 1)[1:-1])
+
+                # now I just make sampling points with res = res+1, which automatically ensures that I have a point in each subspace
+                tdims = np.delete(dims,dim)
+                a = np.linspace(bb[0, tdims[0]], bb[1, tdims[0]], res[tdims[0]] + 2)[1:-1]
+                b = np.linspace(bb[0, tdims[1]], bb[1, tdims[1]], res[tdims[1]] + 2)[1:-1]
+                # A, B = np.mgrid[a,b]
+                A, B = np.meshgrid(a, b)
+                points.append(np.vstack([A.ravel(), B.ravel()]).transpose())
+
+            normals = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+            normals = np.array(normals)
+            planes = []
+
+            ppoints = []
+            pnormals = []
+            projected_points = []
+            for dim in range(3):
+
+                for sub in subdivisions[dim]:
+                    n = normals[dim]
+                    pt = bb_mean
+                    pt[dim] = sub
+                    plane = [n[0], n[1], n[2], -np.dot(n, pt)]
+                    planes.append(plane)
+
+                    pts = points[dim]
+                    projected_points.append(pts)
+                    isub = np.repeat(sub, len(pts))
+                    pts = np.insert(pts, dim, isub, axis=1)
+                    ppoints.append(pts)
+                    pnormals.append(np.repeat(n[np.newaxis, :], len(pts), axis=0))
+
+            return np.array(planes), np.array(ppoints), np.array(pnormals), np.array(projected_points)
 
 
 
+        planes, points, normals, projected_points = make_grid(res=res)
+        color = np.zeros(shape=(1,3))+[255,255,255]
+
+        # add the planes to the vertex_group
+        for i,plane in enumerate(planes):
+            self.vg.plane_order = np.append(0,self.vg.plane_order+1).astype(self.vg.plane_order.dtype)
+            self.vg.input_planes = np.append(plane[np.newaxis,:].astype(self.vg.input_planes.dtype),self.vg.input_planes,axis=0)
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            self.vg.halfspaces = [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])] + self.vg.halfspaces
+            self.vg.polygons_from_plane = [np.array([])]+self.vg.polygons_from_plane
+            self.vg.hull_vertices = np.append(np.zeros(shape=(1,self.vg.hull_vertices.shape[1]),dtype=self.vg.hull_vertices.dtype),self.vg.hull_vertices,axis=0)
+            self.vg.plane_colors = np.append(color.astype(self.vg.plane_colors.dtype),self.vg.plane_colors,axis=0)
+
+            ## add point stuff
+            clen = len(self.vg.points)
+            self.vg.groups = [np.arange(clen,clen+len(points[i]),dtype=self.vg.groups[0].dtype)] + self.vg.groups
+            self.vg.points = np.append(self.vg.points,points[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.normals = np.append(self.vg.normals,normals[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.classes = np.append(self.vg.classes,np.zeros(clen).astype(self.vg.classes.dtype))
+            self.vg.projected_points = np.append(self.vg.projected_points,projected_points[i].astype(self.vg.projected_points.dtype),axis=0)
 
         if not self.partition_initialized:
             self._init_partition()
 
-
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
-
-
-
         for child in children:
 
 
 
+            # current_ids = self.tree[child].data["additional_splits"]
             current_ids = self.tree[child].data["plane_ids"]
             current_cell = self.cells.get(child)
 
-
             best_plane_id = 0
+            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
+            if best_plane_id_input >= len(planes):
+                continue
+
             best_plane = self.vg.split_planes[current_ids[best_plane_id]]
             ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
             left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
 
 
+
             ### for debug export
-            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
             self.best_plane_ids.append(best_plane_id_input)
             self.plane_count+=1
             ### export best plane
@@ -2127,11 +2146,6 @@ class PolyhedralComplex:
         self.partition_initialized = True
 
 
-
-
-
-
-
     def construct_partition(self, insertion_order="product-earlystop"):
         """
         1. Construct the partition
@@ -2145,13 +2159,17 @@ class PolyhedralComplex:
             self._init_partition()
 
         disable_tqdm = False if self.verbosity < 30 else True
-        pbar = tqdm(total=np.concatenate(self.vg.groups).shape[0],file=sys.stdout, disable=disable_tqdm)
+        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=disable_tqdm)
 
+        first_cell = list(self.cells.keys())[0]
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
 
             current_ids = self.tree[child].data["plane_ids"]
             current_cell = self.cells.get(child)
+            
+            if current_cell is None: # necessary for subdivision schemes
+                continue
 
             ## get the best plane              
             if len(current_ids) == 1:
@@ -2221,23 +2239,6 @@ class PolyhedralComplex:
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
-
-    # def _load_occupancies(self,inpath):
-    #
-    #     occs = np.load(os.path.join(inpath,'occupancies.npz'))["occupancies"]
-    #
-    #
-    #
-    #     occs = np.hstack((occs,[0,0,0,0,0,0]))
-    #     occs = np.rint(occs)
-    #
-    #     occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
-    #
-    #     assert len(occs) == len(self.graph.nodes)
-    #
-    #     nx.set_node_attributes(self.graph,occs,"occupancy")
-
-
 
 
     def construct_abspy(self, exhaustive=False, num_workers=0):

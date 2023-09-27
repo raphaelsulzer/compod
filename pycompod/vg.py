@@ -50,11 +50,11 @@ class VertexGroup:
 
     def _recolor_planes(self):
 
-        from fancycolor.color import FancyColor
+        from fancycolor import GradientColor3D
 
         bbox = np.vstack((self.points.min(axis=0),self.points.max(axis=0)))
 
-        fc=FancyColor(bbox)
+        fc=GradientColor3D(bbox)
         cols = []
         for p in self.polygons:
             pt = copy.deepcopy(p.centroid)
@@ -196,7 +196,7 @@ class VertexGroup:
         if "classes" in data.keys():
             self.classes = data["classes"]
         else:
-            self.classes = []
+            self.classes = np.ones(len(self.points),dtype=np.int32)
 
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
