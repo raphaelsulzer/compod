@@ -80,6 +80,7 @@ class PolyhedralComplex:
         self.polygons_constructed = False
         self.partition_labelled = False
         self.tree_simplified = False
+        self.subdivision_planes = []
 
         # init the bounding box
         self.padding = padding
@@ -2014,14 +2015,12 @@ class PolyhedralComplex:
         def make_grid(res):
 
             bb = np.array(self.bounding_poly.bounding_box())
-            bb_mean = bb.mean(axis=0)
 
             subdivisions = []
             points = []
             dims = np.array([0,1,2])
             for dim in range(3):
                 subdivisions.append(np.linspace(bb[0, dim], bb[1, dim], res[dim] + 1)[1:-1])
-
                 # now I just make sampling points with res = res+1, which automatically ensures that I have a point in each subspace
                 tdims = np.delete(dims,dim)
                 a = np.linspace(bb[0, tdims[0]], bb[1, tdims[0]], res[tdims[0]] + 2)[1:-1]
@@ -2030,8 +2029,7 @@ class PolyhedralComplex:
                 A, B = np.meshgrid(a, b)
                 points.append(np.vstack([A.ravel(), B.ravel()]).transpose())
 
-            normals = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
-            normals = np.array(normals)
+            normals = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
             planes = []
 
             ppoints = []
@@ -2041,7 +2039,7 @@ class PolyhedralComplex:
 
                 for sub in subdivisions[dim]:
                     n = normals[dim]
-                    pt = bb_mean
+                    pt = bb.mean(axis=0)
                     pt[dim] = sub
                     plane = [n[0], n[1], n[2], -np.dot(n, pt)]
                     planes.append(plane)
@@ -2054,8 +2052,6 @@ class PolyhedralComplex:
                     pnormals.append(np.repeat(n[np.newaxis, :], len(pts), axis=0))
 
             return np.array(planes), np.array(ppoints), np.array(pnormals), np.array(projected_points)
-
-
 
         planes, points, normals, projected_points = make_grid(res=res)
         color = np.zeros(shape=(1,3))+[255,255,255]
@@ -2081,47 +2077,12 @@ class PolyhedralComplex:
         if not self.partition_initialized:
             self._init_partition()
 
-        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
-        for child in children:
-
-
-
-            # current_ids = self.tree[child].data["additional_splits"]
-            current_ids = self.tree[child].data["plane_ids"]
-            current_cell = self.cells.get(child)
-
-            best_plane_id = 0
-            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
-            if best_plane_id_input >= len(planes):
-                continue
-
-            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-            ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
-            left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
-
-
-
-            ### for debug export
-            self.best_plane_ids.append(best_plane_id_input)
-            self.plane_count+=1
-            ### export best plane
-            if self.debug_export:
-                epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
-                color = self.vg.plane_colors[best_plane_id_input]
-                if len(epoints) > 3:
-                    self.planeExporter.save_plane(os.path.join(self.debug_export,"additional_planes"), best_plane, epoints, count=str(self.plane_count), color=color)
-
-            ## insert the best plane into the complex
-            self._insert_new_plane(parent=child,id=current_ids[best_plane_id],left_planes=left_planes,right_planes=right_planes)
-
-            ## progress bar update
-            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
+        self.subdivision_planes = planes
+        self._compute_splits(parent=0,insertion_order=None,progress_bar=False)
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
         return 0
-
-
 
 
     def _init_partition(self):
@@ -2146,11 +2107,10 @@ class PolyhedralComplex:
 
         self.partition_initialized = True
 
-    def _compute_split(self, parent, insertion_order="product-earlystop"):
 
-        disable_tqdm = False if self.verbosity < 30 else True
-        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=disable_tqdm)
+    def _compute_splits(self, parent=0, insertion_order="product-earlystop", progress_bar=True):
 
+        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar))
         children = self.tree.expand_tree(parent, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
 
@@ -2160,8 +2120,17 @@ class PolyhedralComplex:
             if current_cell is None:  # necessary for subdivision schemes
                 continue
 
-            ## get the best plane              
-            if len(current_ids) == 1:
+            ## get the best plane
+            if insertion_order is None:
+                best_plane_id = 0
+                best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
+                if len(self.subdivision_planes) and best_plane_id_input >= len(self.subdivision_planes):
+                    continue
+                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+                ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
+                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+
+            elif len(current_ids) == 1:
                 best_plane_id = 0
                 best_plane = self.vg.split_planes[current_ids[best_plane_id]]
                 left_planes = [];
@@ -2206,7 +2175,8 @@ class PolyhedralComplex:
         if not self.partition_initialized:
             self._init_partition()
 
-        self._compute_split(0, insertion_order=insertion_order)
+        progress_bar = True if self.verbosity < 30 else False
+        self._compute_splits(0, insertion_order=insertion_order, progress_bar=progress_bar)
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
         self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
