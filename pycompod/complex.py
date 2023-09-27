@@ -2003,7 +2003,7 @@ class PolyhedralComplex:
         return 1
 
 
-    def add_subdivision(self,res=(3,3,3)):
+    def add_subdivision(self,res=(5,5,5)):
 
         # TODO: when making a grid; just make one with twice the density and sample points on that;
         # then just run this normally until additional planes are all inserted
@@ -2144,6 +2144,10 @@ class PolyhedralComplex:
         self.best_plane_ids = [] # only used for debugging exports
 
         self.partition_initialized = True
+
+    # def _compute_split(self,generator):
+
+
 
 
     def construct_partition(self, insertion_order="product-earlystop"):
