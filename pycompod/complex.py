@@ -21,6 +21,7 @@ from treelib import Tree
 from collections import defaultdict
 from shapely.geometry import Polygon
 from shapely import contains_xy
+from multiprocessing import Process
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
@@ -1280,7 +1281,8 @@ class PolyhedralComplex:
 
         def make_point_class_weight():
 
-            self.point_class_weights = np.ones(self.vg.classes.max() + 1)
+            # self.point_class_weights = np.ones(self.vg.classes.max() + 1)
+            self.point_class_weights = np.ones(67+1)
             # {1: "Unclassified", 2: "Ground", 3: "Low_Vegetation", 4: "Medium_Vegetation", 5: "High_Vegetation",
             #  6: "Building", 9: "Water",
             #  17: "17", 63: "Etage", 64: "64", 65: "65", 66: "Floor", 67: "Walls"}
@@ -2003,7 +2005,7 @@ class PolyhedralComplex:
         return 1
 
 
-    def add_subdivision(self,res=(5,5,5)):
+    def add_subdivision(self,res=[2,2,2]):
 
         # TODO: when making a grid; just make one with twice the density and sample points on that;
         # then just run this normally until additional planes are all inserted
@@ -2145,7 +2147,48 @@ class PolyhedralComplex:
 
         self.partition_initialized = True
 
-    # def _compute_split(self,generator):
+    def _compute_split(self, parent, insertion_order="product-earlystop"):
+
+        children = self.tree.expand_tree(parent, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+
+        for child in children:
+
+            current_ids = self.tree[child].data["plane_ids"]
+            current_cell = self.cells.get(child)
+
+            if current_cell is None:  # necessary for subdivision schemes
+                continue
+
+            ## get the best plane              
+            if len(current_ids) == 1:
+                best_plane_id = 0
+                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+                left_planes = [];
+                right_planes = []
+            else:
+                best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
+                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+                ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
+                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+
+            ### for debug export
+            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
+            self.best_plane_ids.append(best_plane_id_input)
+            self.plane_count += 1
+            ### export best plane
+            if self.debug_export:
+                epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
+                color = self.vg.plane_colors[best_plane_id_input]
+                self.planeExporter.save_plane(os.path.join(self.debug_export, "split_planes"), best_plane, epoints,
+                                              count=str(self.plane_count), color=color)
+
+            ## insert the best plane into the complex
+            self._insert_new_plane(parent=child, id=current_ids[best_plane_id], left_planes=left_planes,
+                                   right_planes=right_planes)
+
+            # ## progress bar update
+            # n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
+            # pbar.update(n_points_processed)
 
 
 
@@ -2165,44 +2208,23 @@ class PolyhedralComplex:
         disable_tqdm = False if self.verbosity < 30 else True
         pbar = tqdm(total=self.n_points,file=sys.stdout, disable=disable_tqdm)
 
-        first_cell = list(self.cells.keys())[0]
-        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
-        for child in children:
+        # self._compute_split(0, insertion_order=insertion_order)
 
-            current_ids = self.tree[child].data["plane_ids"]
-            current_cell = self.cells.get(child)
-            
-            if current_cell is None: # necessary for subdivision schemes
-                continue
+        cells = list(self.cells.keys())
 
-            ## get the best plane              
-            if len(current_ids) == 1:
-                best_plane_id = 0
-                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-                left_planes = []; right_planes = []
-            else:
-                best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
-                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-                ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
-                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+        # for cell in cells:
+        #     self._compute_split(cell, insertion_order=insertion_order)
 
-
-            ### for debug export
-            best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
-            self.best_plane_ids.append(best_plane_id_input)
-            self.plane_count+=1
-            ### export best plane
-            if self.debug_export:
-                epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
-                color = self.vg.plane_colors[best_plane_id_input]
-                self.planeExporter.save_plane(os.path.join(self.debug_export,"split_planes"), best_plane, epoints, count=str(self.plane_count), color=color)
-
-            ## insert the best plane into the complex
-            self._insert_new_plane(parent=child,id=current_ids[best_plane_id],left_planes=left_planes,right_planes=right_planes)
-
-            ## progress bar update
-            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
-            pbar.update(n_points_processed)
+        ## doesn't work like this obviously, because a different instance of self is passed to each subprocess (https://stackoverflow.com/a/44850640)
+        processes = [Process(target=self._compute_split, args=(cell,)) for cell in cells]
+        for process in processes:
+            process.start()
+            # wait for all processes to complete
+        time.sleep(5)
+        for process in processes:
+            process.join()
+            # report that all tasks are completed
+        print("\n\nall finished", flush=True)
 
         pbar.close()
 
