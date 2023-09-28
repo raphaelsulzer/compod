@@ -57,8 +57,12 @@ class PolyhedralComplex:
         self.vg = vertex_group
         # basically just a name change, to make sure that the negative indices for the boundary planes are never used on this array and not on the split_planes array
         self.vg.input_planes = copy.deepcopy(self.vg.planes)
+        self.vg.input_halfspaces = copy.deepcopy(self.vg.halfspaces)
+        self.vg.input_groups = copy.deepcopy(self.vg.groups)
         self.n_points = np.concatenate(self.vg.groups).shape[0]
         del self.vg.planes
+        del self.vg.halfspaces
+        del self.vg.groups
 
         self.verbosity = verbosity
         self.logger = make_logger(name="COMPOD",level=verbosity)
@@ -202,6 +206,111 @@ class PolyhedralComplex:
                 if intersection.dim() == 2:
                     self.graph.add_edge(i+1+max_node_id,cell_id, intersection=None, vertices=[],
                                    supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=True)
+
+
+    def _prepend_planes_to_vg(self, planes, color=None, points=None, normals=None, classes=None, projected_points=None):
+
+        # add the planes to the vertex_group
+        for i,plane in enumerate(planes):
+            self.vg.plane_order = np.append(0,self.vg.plane_order+1).astype(self.vg.plane_order.dtype)
+            self.vg.input_planes = np.append(plane[np.newaxis,:].astype(self.vg.input_planes.dtype),self.vg.input_planes,axis=0)
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            self.vg.input_halfspaces = [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])] + self.vg.input_halfspaces
+            self.vg.polygons_from_plane = [np.array([])]+self.vg.polygons_from_plane
+            self.vg.hull_vertices = np.append(np.zeros(shape=(1,self.vg.hull_vertices.shape[1]),dtype=self.vg.hull_vertices.dtype),self.vg.hull_vertices,axis=0)
+            self.vg.plane_colors = np.append(color[np.newaxis,:].astype(self.vg.plane_colors.dtype),self.vg.plane_colors,axis=0)
+
+            ## add point stuff
+            clen = len(self.vg.points)
+            self.vg.input_groups = [np.arange(clen,clen+len(points[i]),dtype=self.vg.input_groups[0].dtype)] + self.vg.input_groups
+            self.vg.points = np.append(self.vg.points,points[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.normals = np.append(self.vg.normals,normals[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.classes = np.append(self.vg.classes,np.zeros(clen).astype(self.vg.classes.dtype))
+            self.vg.projected_points = np.append(self.vg.projected_points,projected_points[i].astype(self.vg.projected_points.dtype),axis=0)
+
+    def _append_planes_to_vg(self, planes, color=None, points=None, normals=None, classes=None, projected_points=None):
+
+        # add the planes to the vertex_group
+        for i,plane in enumerate(planes):
+            self.vg.plane_order = np.append(self.vg.plane_order,len(self.vg.plane_order)).astype(self.vg.plane_order.dtype)
+            self.vg.input_planes = np.append(self.vg.input_planes,plane[np.newaxis,:].astype(self.vg.input_planes.dtype),axis=0)
+            hspace_neg, hspace_pos = self._inequalities(plane)
+            self.vg.input_halfspaces = self.vg.input_halfspaces + [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])]
+            self.vg.polygons_from_plane = self.vg.polygons_from_plane + [np.array([])]
+            self.vg.hull_vertices = np.append(self.vg.hull_vertices,np.zeros(shape=(1,self.vg.hull_vertices.shape[1]),dtype=self.vg.hull_vertices.dtype),axis=0)
+            self.vg.plane_colors = np.append(self.vg.plane_colors,color[np.newaxis,:].astype(self.vg.plane_colors.dtype),axis=0)
+
+
+            ## add point stuff
+            clen = len(self.vg.points)
+            self.vg.input_groups = [np.arange(clen,clen+len(points[i]),dtype=self.vg.input_groups[0].dtype)] + self.vg.input_groups
+            self.vg.points = np.append(self.vg.points,points[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.normals = np.append(self.vg.normals,normals[i].astype(self.vg.points.dtype),axis=0)
+            self.vg.classes = np.append(self.vg.classes,classes[i].astype(self.vg.classes.dtype))
+            self.vg.projected_points = np.append(self.vg.projected_points,projected_points[i].astype(self.vg.projected_points.dtype),axis=0)
+
+
+
+    def insert_exhaustive_planes(self, planes, color=None, points=None, normals=None, classes=None, projected_points=None, polygon=None):
+
+        # TODO: insert footprint planes post construction here
+
+        # first: have to call _append_planes_to_vg with the additional planes; because if a cell gets split by additional_plane A
+        # it can be further split by additional plane B and the cell needs to know that it is inside
+        n_planes_before = len(self.vg.input_planes)
+        self._append_planes_to_vg(planes=planes,color=color,points=points,normals=normals,classes=classes,projected_points=projected_points)
+
+        if not self.partition_initialized:
+            self._init_partition()
+
+
+        progress_bar = True if self.verbosity < 30 else False
+        pbar = tqdm(total=len(planes),file=sys.stdout, disable=np.invert(progress_bar))
+
+        for i,pl in enumerate(planes):
+            
+            plane_id = i+n_planes_before
+
+            # TODO: I could add a filter here that tests intersection. like this I could exclude a lot of tests below, already at a higher level of the tree
+            # children = self.tree.expand_tree(0, filter=lambda x: x.is_leaf(), mode=self.tree_mode)
+
+            for leaf in self.tree.leaves():
+
+                cell_id = leaf.identifier
+
+                assert(len(self.tree[cell_id].data["plane_ids"])==0)
+
+                current_cell = self.cells.get(cell_id)
+                cell_verts = np.array(current_cell.vertices_list())
+
+                border_cell = contains_xy(polygon,cell_verts[:,:2])
+                if border_cell.all() or (~border_cell).all():
+                    continue
+
+                which_side = np.dot(pl[:3],cell_verts.transpose())
+                which_side = (which_side < -pl[3])
+                if which_side.all() or (~which_side).all():
+                    continue
+
+                # hspace_negative = self.vg.input_halfspaces[plane_id][0]
+                # hspace_positive = self.vg.input_halfspaces[plane_id][1]
+                #
+                # if (current_cell.intersection(hspace_negative).is_empty() or current_cell.intersection(hspace_positive).is_empty()):
+                #     continue
+
+                self.vg.plane_ids.append(plane_id)
+                self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.input_planes[plane_id]))
+                self.vg.split_halfspaces.append(self.vg.input_halfspaces[plane_id])
+                self.vg.split_groups.append(self.vg.input_groups[plane_id])
+                
+                self._insert_new_plane(cell_id=cell_id,split_id=len(self.vg.plane_ids)-1)
+                
+            pbar.update(1)
+
+        pbar.close()
+        self.polygons_initialized = False # false because I do not initialize the sibling facets
+        # self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
+        # self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
 
 
@@ -595,7 +704,7 @@ class PolyhedralComplex:
             # trimesh.repair.fix_winding(mesh)
             # trimesh.repair.fix_normals(mesh)
             # trimesh.repair.fix_inversion(mesh)
-            # mesh.fix_normals()
+            mesh.fix_normals()
             mesh.export(out_file)
         else:
             self.logger.error(
@@ -1063,17 +1172,18 @@ class PolyhedralComplex:
         return np.dot(normal,co_tangent)
 
 
-    def _graph_cut(self,occs,binary_weight=0.2,binary_type="cc"):
+    def _graph_cut(self,occs,regularization={"cc":0.5}):
 
         # unfortunately necessary for computing edge areas
-        if binary_type == "area":
+        if "area" in regularization.keys():
             self._init_polygons()
 
         graph = nx.convert_node_labels_to_integers(self.graph)
 
         labels = (occs[:,0]<occs[:,1]).astype(np.int32)
 
-        self.logger.info("Apply occupancy regularization with graph cut (λ={:.2g})...".format(binary_weight))
+        # self.logger.info("Apply occupancy regularization with graph cut (λ={:.3g})...".format(binary_weight))
+        self.logger.info("Apply occupancy regularization with graph cut...")
 
         assert len(occs) == len(graph.nodes)
 
@@ -1100,9 +1210,18 @@ class PolyhedralComplex:
 
         edges = np.array(graph.edges)
 
-        if binary_type == "cc":
-            edge_weight = np.ones(edges.shape[0], dtype=dtype)*scale/edges.shape[0]
-        elif binary_type == "area":
+        for key in regularization.keys():
+            if key not in ["cc","area","beta_skeleton"]:
+                self.logger.error("{} is not a valid binary type".format(binary_type))
+                raise NotImplementedError
+
+        t_edge_weight = np.zeros(edges.shape[0])
+        binary_weight=0
+        if "cc" in regularization:
+            edge_weight = np.ones(edges.shape[0], dtype=dtype)/edges.shape[0]
+            t_edge_weight+=(edge_weight*regularization["cc"])
+            binary_weight+=regularization["cc"]
+        if "area" in regularization:
             edge_weight = []
             for e0, e1 in self.graph.edges:
                 edge = self.graph.edges[e0, e1]
@@ -1112,7 +1231,9 @@ class PolyhedralComplex:
                 edge_weight.append(self._polygon_area(vertices))
                 # edge_weight.append(edge["intersection"].affine_hull_projection().volume().numerical_approx())
             edge_weight = np.array(edge_weight)/sum(edge_weight)
-        elif binary_type == "beta_skeleton":
+            t_edge_weight+=(edge_weight*regularization["area"])
+            binary_weight+=regularization["area"]
+        if "beta_skeleton" in regularization:
             edge_weight = []
             for e0, e1 in self.graph.edges:
                 edge = self.graph.edges[e0,e1]
@@ -1122,9 +1243,9 @@ class PolyhedralComplex:
                              self._beta_skeleton(self.cells[e1].center(),point,-normal))
                 edge_weight.append(ew)
             edge_weight = np.array(edge_weight)/sum(edge_weight)
-        else:
-            self.logger.error("{} is not a valid binary type".format(binary_type))
-            raise NotImplementedError
+            t_edge_weight+=(edge_weight*regularization["beta_skeleton"])
+            binary_weight+=regularization["beta_skeleton"]
+
         
         # TODO: try to solve orientation with the graph cut
         # also add
@@ -1134,16 +1255,16 @@ class PolyhedralComplex:
         # ew = np.append(edge_weight,edge_weight,axis=0)
         # gc.set_all_neighbors(e1, e2, edge_weight * binary_weight * scale)
 
-        gc.set_all_neighbors(edges[:, 0], edges[:, 1], edge_weight * binary_weight * scale)
+        gc.set_all_neighbors(edges[:, 0], edges[:, 1], t_edge_weight * scale)
 
         for i, l in enumerate(labels):
             gc.init_label_at_site(i, l)
 
-        self.logger.debug("Energy before GC (D + λ*S): {:.2g} + {:.2g}*{:.2g} = {:.2g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
+        self.logger.debug("Energy before GC (D + λ*S): {:.3g} + {:.3g}*{:.3g} = {:.3g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
                                                             gc.compute_data_energy()+gc.compute_smooth_energy()))
 
         gc.expansion()
-        self.logger.debug("Energy after GC (D + λ*S): {:.2g} + {:.2g}*{:.2g} = {:.2g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
+        self.logger.debug("Energy after GC (D + λ*S): {:.3g} + {:.3g}*{:.3g} = {:.3g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
                                                             gc.compute_data_energy() + gc.compute_smooth_energy()))
 
         labels = gc.get_labels()
@@ -1151,7 +1272,7 @@ class PolyhedralComplex:
         return labels
 
 
-    def label_partition(self,mode="normals",mesh_file=None,n_test_points=50,binary_weight=0.0,binary_type="cc",footprint=None,z_range=None):
+    def label_partition(self,mode="normals",mesh_file=None,n_test_points=50,regularization=None,footprint=None,z_range=None):
 
         self.logger.info('Label {} cells with {}...'.format(len(self.graph.nodes),mode))
 
@@ -1169,10 +1290,10 @@ class PolyhedralComplex:
             self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(mode))
             raise NotImplementedError
 
-        if binary_weight > 0.0:
+        if regularization is not None:
             # occs = self.graph_cut(occs)
             # compute regularization weights
-            occs = self._graph_cut(occs,binary_weight=binary_weight,binary_type=binary_type)
+            occs = self._graph_cut(occs,regularization)
         else:
             occs = occs[:,0]>occs[:,1]
 
@@ -1248,13 +1369,13 @@ class PolyhedralComplex:
                     point_ids_dict[(e0, e1)] = np.empty(shape=0, dtype=np.int32)
                     continue
 
-                group = self.vg.groups[edge["group_id"]]
+                group = self.vg.split_groups[edge["split_id"]]
 
                 ## use shapely contains_xy with projected points.
                 vertices = np.array(edge["intersection"].vertices())
                 assert (len(vertices))
                 vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
-                plane = PyPlane(self.vg.split_planes[edge["group_id"]])
+                plane = PyPlane(self.vg.split_planes[edge["split_id"]])
                 poly = Polygon(np.array(plane.to_2d(vertices)))
                 contain = contains_xy(poly, self.vg.projected_points[group])
 
@@ -1293,6 +1414,7 @@ class PolyhedralComplex:
             self.point_class_weights[63] = 0
             self.point_class_weights[66] = 12
             self.point_class_weights[67] = 2
+            # self.point_class_weights[67] = 20
 
         def collect_node_votes(footprint=None, z_range=None):
 
@@ -1300,30 +1422,35 @@ class PolyhedralComplex:
                 make_point_class_weight()
 
             occs = []
-            if footprint is not None:
-                footprint = Polygon(footprint)
+            # if footprint is not None:
+            #     footprint = Polygon(footprint).buffer(0.25)
 
             all_cell_points = []
             all_cell_normals = []
             type_colors = []
             for node in self.graph.nodes:
 
-                centroid = np.array(self.cells[node].vertices()).mean(axis=0)
+                cell_verts = np.array(self.cells[node].vertices())
+                centroid = cell_verts.mean(axis=0)
+                # cell_verts = np.vstack((cell_verts,centroid))
                 footprint_weight = 24
                 n = footprint_weight * 2 * len(self.vg.points) * self.point_class_weights.max() / len(self.cells)
-
+                # there is an error here
                 if self.graph.nodes[node].get("bounding_box", 0):
-                    # occupancy_dict[node] = (0,1000)
-                    occs.append([0, n])  # TODO: this should probably be related to the number of points or something
-                    type_colors.append([205, 82, 61])
-                elif footprint is not None and not contains_xy(footprint, x=centroid[0], y=centroid[1]):
                     occs.append([0, n])
-                    type_colors.append([147, 196, 125])
-                elif z_range is not None and z_range[0] <= centroid[2] and z_range[1] >= centroid[2] and contains_xy(
-                        footprint, x=centroid[0], y=centroid[1]):
+                    type_colors.append([205, 82, 61]) # red
+                # elif footprint is not None and not contains_xy(footprint, x=centroid[0], y=centroid[1]):
+                elif footprint is not None and (~contains_xy(footprint, cell_verts[:,:2])).all():
+                    occs.append([0, n])
+                    type_colors.append([147, 196, 125]) # green
+                elif z_range is not None and z_range[0] <= centroid[2] and (z_range[1] >= cell_verts[:,2]).all() and \
+                        contains_xy(footprint, cell_verts[:,:2]).all():
+                # elif z_range is not None and z_range[0] <= centroid[2] and z_range[1] >= centroid[2] and \
+                #      contains_xy(footprint, cell_verts[:, :2]).all():
                     occs.append([n, 0])
                     type_colors.append([61, 184, 205])
-                elif z_range is not None and centroid[2] > z_range[2]:
+                # elif z_range is not None and (cell_verts[:,2] > z_range[2]).all():
+                elif z_range is not None and (cell_verts[:,2] > z_range[2]).all():
                     occs.append([0, n])
                     type_colors.append([205, 61, 112])
                 else:
@@ -1372,6 +1499,10 @@ class PolyhedralComplex:
                 ocol = GradientColor2D("Greens", outside_weight.min(), outside_weight.max()).get_rgb(outside_weight)
 
                 for i, node in enumerate(self.graph.nodes):
+
+                    if self.graph.nodes[node].get("bounding_box", 0):
+                        continue
+
                     st = "out" if inside_weight[i] <= outside_weight[i] else "in"
                     color = np.array(ocol[i])[:3] if inside_weight[i] <= outside_weight[i] else np.array(icol[i][:3])
 
@@ -1585,7 +1716,7 @@ class PolyhedralComplex:
             if id == current_ids[best_plane_id]:
                 continue
 
-            this_group = self.vg.groups[id]
+            this_group = self.vg.split_groups[id]
             which_side = np.dot(best_plane[:3],self.vg.points[this_group].transpose())
             left_point_ids = this_group[which_side < -best_plane[3]]
             right_point_ids = this_group[which_side > -best_plane[3]]
@@ -1606,8 +1737,8 @@ class PolyhedralComplex:
                     left_plane_ids.append(self.vg.split_planes.shape[0])
                     self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
                     self.vg.plane_ids.append(self.vg.plane_ids[id])
-                    self.vg.halfspaces.append(self.vg.halfspaces[id])
-                    self.vg.groups.append(left_point_ids)
+                    self.vg.split_halfspaces.append(self.vg.split_halfspaces[id])
+                    self.vg.split_groups.append(left_point_ids)
 
 
                     # if not enough points for making a convex hull we simply keep the points 
@@ -1640,8 +1771,8 @@ class PolyhedralComplex:
                     right_plane_ids.append(self.vg.split_planes.shape[0])
                     self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.split_planes[id]))
                     self.vg.plane_ids.append(self.vg.plane_ids[id])
-                    self.vg.halfspaces.append(self.vg.halfspaces[id])
-                    self.vg.groups.append(right_point_ids)
+                    self.vg.split_halfspaces.append(self.vg.split_halfspaces[id])
+                    self.vg.split_groups.append(right_point_ids)
 
                     # if not enough points for making a convex hull we simply keep the points
 
@@ -1808,9 +1939,9 @@ class PolyhedralComplex:
     def _init_polygons(self):
 
         """
-        3. initialize the polygons
-        3a. intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
-        3b. init an empty vertices list needed for self.construct_polygons
+        Initialize the polygons
+        - intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
+        - init an empty vertices list needed for self.construct_polygons
         """
 
         self.logger.info("Initialise polygons...")
@@ -1837,8 +1968,7 @@ class PolyhedralComplex:
     def construct_polygons(self):
 
         """
-        add missing vertices to the polyhedron facets by intersecting all neighbors with all neighbors
-        :return:
+        Add missing vertices to the polyhedron facets by intersecting all facets of neighboring cells of the partition.
         """
 
         if not self.polygons_initialized:
@@ -1911,18 +2041,18 @@ class PolyhedralComplex:
             p=Polyhedron(ieqs=hspaces)
 
 
-    def _insert_new_plane(self,parent,id,left_planes=[],right_planes=[]):
+    def _insert_new_plane(self,cell_id,split_id,left_planes=[],right_planes=[],cell_negative=None,cell_positive=None):
 
-        current_cell = self.cells.get(parent)
-        best_plane_id_input = self.vg.plane_ids[id]
+        current_cell = self.cells.get(cell_id)
+        best_plane_id_input = self.vg.plane_ids[split_id]
 
         ## create the new convexes
-        # hspace_positive, hspace_negative = self.vg.halfspaces[current_ids[best_plane_id],0], self.vg.halfspaces[current_ids[best_plane_id],1]
-        hspace_positive, hspace_negative = self.vg.halfspaces[id][0], \
-                                           self.vg.halfspaces[id][1]
+        hspace_positive, hspace_negative = self.vg.split_halfspaces[split_id][0], \
+                                           self.vg.split_halfspaces[split_id][1]
 
-        cell_negative = current_cell.intersection(hspace_negative)
-        cell_positive = current_cell.intersection(hspace_positive)
+        if cell_negative is None and cell_positive is None:
+            cell_negative = current_cell.intersection(hspace_negative)
+            cell_positive = current_cell.intersection(hspace_positive)
 
         # # if not construct_partition and (cell_positive.is_empty() or cell_negative.is_empty()):
         # if (cell_positive.is_empty() or cell_negative.is_empty()):
@@ -1940,7 +2070,7 @@ class PolyhedralComplex:
             dd = {"plane_ids": np.array(left_planes)}
             self.cell_count += 1
             neg_cell_id = self.cell_count
-            self.tree.create_node(tag=neg_cell_id, identifier=neg_cell_id, data=dd, parent=parent)
+            self.tree.create_node(tag=neg_cell_id, identifier=neg_cell_id, data=dd, parent=cell_id)
             self.graph.add_node(neg_cell_id)
             self.cells[neg_cell_id] = cell_negative
 
@@ -1951,19 +2081,19 @@ class PolyhedralComplex:
             dd = {"plane_ids": np.array(right_planes)}
             self.cell_count += 1
             pos_cell_id = self.cell_count
-            self.tree.create_node(tag=pos_cell_id, identifier=pos_cell_id, data=dd, parent=parent)
+            self.tree.create_node(tag=pos_cell_id, identifier=pos_cell_id, data=dd, parent=cell_id)
             self.graph.add_node(pos_cell_id)
             self.cells[pos_cell_id] = cell_positive
 
 
         ## add the split plane to the parent node of the tree
-        self.tree.nodes[parent].data["supporting_plane_id"] = best_plane_id_input
+        self.tree.nodes[cell_id].data["supporting_plane_id"] = best_plane_id_input
 
         if (cell_positive.dim() == 3 and cell_negative.dim() == 3):
 
             new_intersection = cell_negative.intersection(cell_positive)
             self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=new_intersection, vertices=[],
-                                group_id=id,
+                                split_id=split_id,
                                 supporting_plane_id=best_plane_id_input, bounding_box_edge=False)
             if self.debug_export:
                 self.complexExporter.write_facet(os.path.join(self.debug_export, "construct_facets"), new_intersection,
@@ -1972,8 +2102,8 @@ class PolyhedralComplex:
 
 
         ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
-        neighbors_of_old_cell = list(self.graph[parent])
-        old_cell_id = parent
+        neighbors_of_old_cell = list(self.graph[cell_id])
+        old_cell_id = cell_id
         for neighbor_id_old_cell in neighbors_of_old_cell:
             # self.logger.debug("make neighbors")
 
@@ -1991,22 +2121,22 @@ class PolyhedralComplex:
             # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
             if n_nonempty:
                 self.graph.add_edge(neighbor_id_old_cell, neg_cell_id, intersection=negative_intersection, vertices=[],
-                                    group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
+                                    split_id=self.graph[neighbor_id_old_cell][old_cell_id]["split_id"],
                                     supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id][
                                         "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
             if p_nonempty:
                 self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
-                                    group_id=self.graph[neighbor_id_old_cell][old_cell_id]["group_id"],
+                                    split_id=self.graph[neighbor_id_old_cell][old_cell_id]["split_id"],
                                     supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id][
                                         "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
 
-        self.graph.remove_node(parent)
-        del self.cells[parent]
+        self.graph.remove_node(cell_id)
+        del self.cells[cell_id]
         
         return 1
 
 
-    def add_subdivision(self,res=[2,2,2]):
+    def apply_subdivision(self,res=[2,2,2]):
 
         self.logger.info("Apply subdivision of input into {} grid".format(res))
 
@@ -2054,31 +2184,22 @@ class PolyhedralComplex:
             return np.array(planes), np.array(ppoints), np.array(pnormals), np.array(projected_points)
 
         planes, points, normals, projected_points = make_grid(res=res)
-        color = np.zeros(shape=(1,3))+[255,255,255]
+        classes = []
+        for p in points:
+            classes.append(np.zeros(p.shape[0]))
 
-        # add the planes to the vertex_group
-        for i,plane in enumerate(planes):
-            self.vg.plane_order = np.append(0,self.vg.plane_order+1).astype(self.vg.plane_order.dtype)
-            self.vg.input_planes = np.append(plane[np.newaxis,:].astype(self.vg.input_planes.dtype),self.vg.input_planes,axis=0)
-            hspace_neg, hspace_pos = self._inequalities(plane)
-            self.vg.halfspaces = [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])] + self.vg.halfspaces
-            self.vg.polygons_from_plane = [np.array([])]+self.vg.polygons_from_plane
-            self.vg.hull_vertices = np.append(np.zeros(shape=(1,self.vg.hull_vertices.shape[1]),dtype=self.vg.hull_vertices.dtype),self.vg.hull_vertices,axis=0)
-            self.vg.plane_colors = np.append(color.astype(self.vg.plane_colors.dtype),self.vg.plane_colors,axis=0)
+        color = np.zeros(3)+[255,255,255]
 
-            ## add point stuff
-            clen = len(self.vg.points)
-            self.vg.groups = [np.arange(clen,clen+len(points[i]),dtype=self.vg.groups[0].dtype)] + self.vg.groups
-            self.vg.points = np.append(self.vg.points,points[i].astype(self.vg.points.dtype),axis=0)
-            self.vg.normals = np.append(self.vg.normals,normals[i].astype(self.vg.points.dtype),axis=0)
-            self.vg.classes = np.append(self.vg.classes,np.zeros(clen).astype(self.vg.classes.dtype))
-            self.vg.projected_points = np.append(self.vg.projected_points,projected_points[i].astype(self.vg.projected_points.dtype),axis=0)
+        self._prepend_planes_to_vg(planes,color=color,points=points,normals=normals,classes=classes,projected_points=projected_points)
 
         if not self.partition_initialized:
             self._init_partition()
 
         self.subdivision_planes = planes
-        self._compute_splits(parent=0,insertion_order=None,progress_bar=False)
+
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+        for child in children:
+            self._compute_split(cell_id=child,insertion_order="subdivision_planes")
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
 
@@ -2087,8 +2208,14 @@ class PolyhedralComplex:
 
     def _init_partition(self):
 
+
         self.vg.plane_ids = list(range(self.vg.input_planes.shape[0]))
+        ## these arrays have the simple task of pointing from an element contained in a certain cell to the original input element
+        ## for split_planes and split_halfspaces this is not really necessary as self.vg.input_planes[self.vg.plane_ids[id]] == self.vg.split_planes[id]
+        ## however, for split groups, it is a bit different, because here the groups are actually the once contained in the cell
         self.vg.split_planes = copy.deepcopy(self.vg.input_planes)
+        self.vg.split_halfspaces = copy.deepcopy(self.vg.input_halfspaces)
+        self.vg.split_groups = copy.deepcopy(self.vg.input_groups)
 
         self.cell_count = 0
         self.split_count = 0
@@ -2108,60 +2235,61 @@ class PolyhedralComplex:
         self.partition_initialized = True
 
 
-    def _compute_splits(self, parent=0, insertion_order="product-earlystop", progress_bar=True):
+    def _compute_split(self, cell_id, insertion_order="product-earlystop"):
 
-        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar))
-        children = self.tree.expand_tree(parent, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
-        for child in children:
 
-            current_ids = self.tree[child].data["plane_ids"]
-            current_cell = self.cells.get(child)
+        current_ids = self.tree[cell_id].data["plane_ids"]
+        current_cell = self.cells.get(cell_id)
 
-            if current_cell is None:  # necessary for subdivision schemes
-                continue
+        if current_cell is None:  # necessary for subdivision schemes
+            return 0
 
-            ## get the best plane
-            if insertion_order is None:
-                best_plane_id = 0
-                best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
-                if len(self.subdivision_planes) and best_plane_id_input >= len(self.subdivision_planes):
-                    continue
-                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-                ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
-                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
-
-            elif len(current_ids) == 1:
-                best_plane_id = 0
-                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-                left_planes = [];
-                right_planes = []
-            else:
-                best_plane_id = 0 if not insertion_order else self._get_best_plane(current_ids, insertion_order)
-                best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-                ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
-                left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
-
-            ### for debug export
+        ## get the best plane
+        if insertion_order == "subdivision_planes":
+            best_plane_id = 0
             best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
-            self.best_plane_ids.append(best_plane_id_input)
-            self.plane_count += 1
-            ### export best plane
-            if self.debug_export:
-                epoints = self.vg.points[self.vg.groups[current_ids[best_plane_id]]]
-                color = self.vg.plane_colors[best_plane_id_input]
-                if len(epoints) > 3:
-                    self.planeExporter.save_plane(os.path.join(self.debug_export, "split_planes"), best_plane, epoints,
-                                                  count=str(self.plane_count), color=color)
+            if len(self.subdivision_planes) and best_plane_id_input >= len(self.subdivision_planes):
+                return 0
+            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+            ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
+            left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+        elif insertion_order == "0":
+            best_plane_id = 0
+            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+            left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+        elif len(current_ids) == 1:
+            best_plane_id = 0
+            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+            left_planes = [];
+            right_planes = []
+        else:
+            best_plane_id = self._get_best_plane(current_ids, insertion_order)
+            best_plane = self.vg.split_planes[current_ids[best_plane_id]]
+            ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
+            left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
 
-            ## insert the best plane into the complex
-            self._insert_new_plane(parent=child, id=current_ids[best_plane_id], left_planes=left_planes,
-                                   right_planes=right_planes)
+        ### for debug export
+        best_plane_id_input = self.vg.plane_ids[current_ids[best_plane_id]]
+        self.best_plane_ids.append(best_plane_id_input)
+        self.plane_count += 1
+        ### export best plane
+        if self.debug_export:
+            epoints = self.vg.points[self.vg.split_groups[current_ids[best_plane_id]]]
+            color = self.vg.plane_colors[best_plane_id_input]
+            if len(epoints) > 3:
+                self.planeExporter.save_plane(os.path.join(self.debug_export, "split_planes"), best_plane, epoints,
+                                              count=str(self.plane_count), color=color)
 
-            ## progress bar update
-            n_points_processed = len(self.vg.groups[current_ids[best_plane_id]])
-            pbar.update(n_points_processed)
+        ## insert the best plane into the complex
+        self._insert_new_plane(cell_id=cell_id, split_id=current_ids[best_plane_id], left_planes=left_planes,
+                               right_planes=right_planes)
 
-        pbar.close()
+        ## progress bar update
+        n_points_processed = len(self.vg.split_groups[current_ids[best_plane_id]])
+
+        return n_points_processed
+
+
 
 
 
@@ -2176,7 +2304,11 @@ class PolyhedralComplex:
             self._init_partition()
 
         progress_bar = True if self.verbosity < 30 else False
-        self._compute_splits(0, insertion_order=insertion_order, progress_bar=progress_bar)
+        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar))
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+        for child in children:
+            pbar.update(self._compute_split(cell_id=child, insertion_order=insertion_order))
+        pbar.close()
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
         self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
@@ -2194,7 +2326,7 @@ class PolyhedralComplex:
             pickle.dump(self.tree,open(os.path.join(outpath,'tree.pickle'),'wb'))
         pickle.dump(self.graph,open(os.path.join(outpath,'graph.pickle'),'wb'))
         pickle.dump(self.cells,open(os.path.join(outpath,'cells.pickle'),'wb'))
-        pickle.dump(self.vg.groups,open(os.path.join(outpath,'groups.pickle'),'wb'))
+        pickle.dump(self.vg.input_groups,open(os.path.join(outpath,'groups.pickle'),'wb'))
         pickle.dump(self.vg.input_planes,open(os.path.join(outpath,'planes.pickle'),'wb'))
 
 
@@ -2207,7 +2339,7 @@ class PolyhedralComplex:
         self.tree = pickle.load(open(os.path.join(inpath,'tree.pickle'),'rb'))
         self.graph = pickle.load(open(os.path.join(inpath,'graph.pickle'),'rb'))
         self.cells = pickle.load(open(os.path.join(inpath,'cells.pickle'),'rb'))
-        self.vg.groups = pickle.load(open(os.path.join(inpath,'groups.pickle'),'rb'))
+        self.vg.input_groups = pickle.load(open(os.path.join(inpath,'groups.pickle'),'rb'))
         self.vg.input_planes = pickle.load(open(os.path.join(inpath,'planes.pickle'),'rb'))
 
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
