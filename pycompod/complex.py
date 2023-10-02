@@ -640,31 +640,9 @@ class PolyhedralComplex:
             this_region_facets = []
             boundary = _get_region_borders(region)
 
-            ### ss.get_cycles returns every cycle twice, once in each region.
-            # cycles = se.get_cycles(boundary)
-            # i = 0
-            # while i < len(cycles):
-            #     if simplify_edges:
-            #         this_cycle = []
-            #         for c in cycles[i]:
-            #             if len(vertex_is_corner[c]) > 2:
-            #                 this_cycle.append(c)
-            #                 vertex_is_corner_array[c] = 1
-            #         this_region_facets.append(this_cycle)
-            #     else:
-            #         this_region_facets.append(cycles[i])
-            #     i+=2
-            
-            # boundary_r = np.array((boundary[:,1],boundary[:,0])).transpose()
-            # boundary = np.vstack((boundary,boundary_r))
-            # g = nx.DiGraph(boundary.tolist())
-            # cycles1 = list(nx.simple_cycles(g))
-            
             g = nx.Graph(boundary.tolist())
-            cycles1 = nx.cycle_basis(g)
-            this_region_facets = []
-            for cyc in cycles1:
-                # cyc = cyc+[cyc[0]]
+            cycles = nx.cycle_basis(g)
+            for cyc in cycles:
                 if simplify_edges:
                     this_cycle = []
                     for c in cyc:
@@ -674,11 +652,8 @@ class PolyhedralComplex:
                     this_cycle = this_cycle+[this_cycle[0]]
                     this_region_facets.append(this_cycle)
                 else:
+                    cyc = cyc+[cyc[0]]
                     this_region_facets.append(cyc)
-                # i+=2
-                
-            # if len(this_region_facets) != len(this_region_facets1):
-            #     a=4
 
             if triangulate: # triangulate all faces
                 plane = PyPlane(self.vg.input_planes[region[0]])
@@ -725,11 +700,7 @@ class PolyhedralComplex:
                 self.logger.error("backend 'trimesh' only works with triangulate = True. Choose backend 'python' for exporting a polygon mesh.")
                 raise NotImplementedError
 
-            # TODO: pass the plane color through to the mesh. do this in all mesh export functions.
             mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=face_colors)
-            # trimesh.repair.fix_winding(mesh)
-            # trimesh.repair.fix_normals(mesh)
-            # trimesh.repair.fix_inversion(mesh)
             mesh.fix_normals()
             mesh.export(out_file)
         else:
@@ -737,8 +708,6 @@ class PolyhedralComplex:
                 "{} is not a valid surface extraction backend. Choose either 'trimesh' or 'python'.".format(
                     backend))
             raise NotImplementedError
-
-        # self.complexExporter.write_surface_to_ply(out_file, points=points, pnormals=point_normals, facets=region_facets)
 
 
     def save_surface(self, out_file, backend="python", triangulate=False, stitch_borders=True):
