@@ -472,7 +472,7 @@ class PolyhedralComplex:
 
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
-
+    @profile
     def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python"):
 
         """
@@ -639,20 +639,46 @@ class PolyhedralComplex:
         for region in region_to_polygons.items():
             this_region_facets = []
             boundary = _get_region_borders(region)
-            # ss.get_cycles returns every cycle twice, once in each region.
-            cycles = se.get_cycles(boundary)
-            i = 0
-            while i < len(cycles):
+
+            ### ss.get_cycles returns every cycle twice, once in each region.
+            # cycles = se.get_cycles(boundary)
+            # i = 0
+            # while i < len(cycles):
+            #     if simplify_edges:
+            #         this_cycle = []
+            #         for c in cycles[i]:
+            #             if len(vertex_is_corner[c]) > 2:
+            #                 this_cycle.append(c)
+            #                 vertex_is_corner_array[c] = 1
+            #         this_region_facets.append(this_cycle)
+            #     else:
+            #         this_region_facets.append(cycles[i])
+            #     i+=2
+            
+            # boundary_r = np.array((boundary[:,1],boundary[:,0])).transpose()
+            # boundary = np.vstack((boundary,boundary_r))
+            # g = nx.DiGraph(boundary.tolist())
+            # cycles1 = list(nx.simple_cycles(g))
+            
+            g = nx.Graph(boundary.tolist())
+            cycles1 = nx.cycle_basis(g)
+            this_region_facets = []
+            for cyc in cycles1:
+                # cyc = cyc+[cyc[0]]
                 if simplify_edges:
                     this_cycle = []
-                    for c in cycles[i]:
+                    for c in cyc:
                         if len(vertex_is_corner[c]) > 2:
                             this_cycle.append(c)
                             vertex_is_corner_array[c] = 1
+                    this_cycle = this_cycle+[this_cycle[0]]
                     this_region_facets.append(this_cycle)
                 else:
-                    this_region_facets.append(cycles[i])
-                i+=2
+                    this_region_facets.append(cyc)
+                # i+=2
+                
+            # if len(this_region_facets) != len(this_region_facets1):
+            #     a=4
 
             if triangulate: # triangulate all faces
                 plane = PyPlane(self.vg.input_planes[region[0]])
@@ -1822,6 +1848,8 @@ class PolyhedralComplex:
             # furthermore, the case that I previously drew and found to be unsolveable with tree traversal is also solveable with tree traversal
                 # if the two siblings of two graph adjacent nodes where split with the same plane ID they should be collapseable!?
         # TOOD: save the labelling to file. it takes the most amount of time when prototyping tree collapse and alos graph-cut later
+
+        # TODO: cells can only be collapsed if they share th
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
