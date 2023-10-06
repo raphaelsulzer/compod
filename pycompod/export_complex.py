@@ -1,11 +1,13 @@
 import os
 import numpy as np
+import logging
+from .logger import make_logger
 
 class PolyhedralComplexExporter:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, cellComplex):
+    def __init__(self, cellComplex, verbosity=logging.WARN):
         """
         Init CellComplex.
         Class of cell complex from planar primitive arrangement.
@@ -29,6 +31,9 @@ class PolyhedralComplexExporter:
             Disable logging and progress bar if set True
         """
         self.cellComplex = cellComplex
+
+        self.logger = make_logger(name="COMPOD",level=verbosity)
+
 
 
     def write_graph(self, m, graph, cells, subfolder="", color = None):
@@ -152,7 +157,7 @@ class PolyhedralComplexExporter:
         intersection_points = intersection_points[correct_order]
 
         if (len(intersection_points) < 3):
-            print("WARNING: graph edge with less than three polygon vertices")
+            self.logger.warn("Graph edge with less than three polygon vertices")
             return
 
         ## orient triangle
@@ -220,9 +225,24 @@ class PolyhedralComplexExporter:
                 f.write("{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {} {} {}\n".format(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2]))
         f.close()
 
+
+    def write_surface(self,filename,points,facets,**kwargs):
+
+        file_type = os.path.splitext(filename)[1]
+        if(file_type == ".ply"):
+            self.write_surface_to_ply(filename,points,facets,**kwargs)
+        elif(file_type == ".off"):
+            self.write_surface_to_off(filename,points,facets,**kwargs)
+        elif(file_type == ".obj"):
+            self.write_surface_to_obj(filename,points,facets,**kwargs)
+        else:
+            raise NotImplementedError
+            self.logger.error("{} is not a valid file type for surface export.".format(file_type))
+            return 1
+
     def write_surface_to_off(self,filename,points,facets,pcolors=[]):
 
-        f = open(filename[:-3]+"off",'w')
+        f = open(filename,'w')
 
         if len(pcolors):
             f.write("COFF\n")
@@ -244,12 +264,31 @@ class PolyhedralComplexExporter:
             f.write('\n')
         f.close()
 
+    def write_surface_to_obj(self,filename,points,facets,pcolors=[]):
+
+        f = open(filename,'w')
+
+        for i,p in enumerate(points):
+            f.write("v {:6f} {:6f} {:6f}".format(p[0], p[1], p[2]))
+            # f.write("v {} {} {}".format(p[0], p[1], p[2]))
+            if len(pcolors):
+                c = pcolor[i]
+                f.write(" {} {} {}".format(int(c[0]/255), int(c[1]/255), int(c[2]/255)))
+            f.write("\n")
+
+        for i,face in enumerate(facets):
+            f.write("f")
+            for v in face:
+                f.write(" {}".format(v+1))
+            f.write('\n')
+        f.close()
+
 
     def write_surface_to_ply(self,filename,points,facets,pnormals=[],pcolors=[],fcolors=[]):
 
         # TODO: write this function so I can export point normals
 
-        f = open(filename[:-3]+"ply",'w')
+        f = open(filename,'w')
 
         f.write("ply\n")
         f.write("format ascii 1.0\n")

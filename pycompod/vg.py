@@ -16,7 +16,8 @@ class VertexGroup:
     """
 
     def __init__(self, input_file, prioritise = None,
-                 points_type="inliers", total_sample_count=100000, recolor=False, verbosity=logging.WARN):
+                 points_type="inliers", total_sample_count=100000,
+                 recolor=False, verbosity=logging.WARN):
         """
         Init VertexGroup.
         Class for manipulating planar primitives.

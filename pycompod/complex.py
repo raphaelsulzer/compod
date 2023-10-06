@@ -14,6 +14,7 @@ import time, multiprocessing, pickle, logging, trimesh, copy, warnings, sys, os
 from pathlib import Path
 
 import numpy as np
+import scipy.spatial
 from tqdm import trange, tqdm
 import networkx as nx
 from sage.all import QQ, RDF, ZZ, Polyhedron, vector, arctan2
@@ -91,7 +92,8 @@ class PolyhedralComplex:
         self.bounding_poly = self._init_bounding_box(padding=self.padding)
 
         self.insertion_threshold = insertion_threshold
-        self.tree_mode = Tree.DEPTH
+        self.tree_mode = Tree.DEPTH # this is what it always was
+        # self.tree_mode = Tree.WIDTH
 
         self.debug_export = debug_export
         if self.debug_export:
@@ -472,7 +474,6 @@ class PolyhedralComplex:
 
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
-    @profile
     def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python"):
 
         """
@@ -515,10 +516,6 @@ class PolyhedralComplex:
                 nf = len(face)
                 for i in range(nf):
                     region_edges.append([face[i%nf],face[(i+1)%nf]])
-
-            # if self.debug_export:
-            #     of = out_file[:-4] + str(rid) + ".off"
-            #     self.complexExporter.write_surface_to_off(of, points=points, facets=region_facets)
 
             # all edges that only appear once per region are border edges of that region
             unique, inverse, count = np.unique(np.sort(region_edges),return_inverse=True,return_counts=True,axis=0)
@@ -620,10 +617,6 @@ class PolyhedralComplex:
             facets.append(face)
         assert(len(facets)==len(polygons))
 
-        # ## debug export the unsimplified surface
-        # if self.debug_export:
-        #     self.complexExporter.write_surface_to_off(out_file[:-4]+"_debug.off", points=points, facets=facets)
-
         ## mark corner vertices
         vertex_is_corner = defaultdict(set)
         vertex_is_corner_array = np.zeros(points.shape[0],dtype=int) # used for reindexing
@@ -678,7 +671,7 @@ class PolyhedralComplex:
             region_facets += this_region_facets
             face_colors.append(np.repeat(self.vg.plane_colors[region[0],np.newaxis],len(this_region_facets),axis=0))
 
-        region_facets = np.array(region_facets)
+        # region_facets = np.array(region_facets)
         face_colors = np.concatenate(face_colors)
 
         if simplify_edges:
@@ -691,10 +684,30 @@ class PolyhedralComplex:
                 t.append(vertex_is_corner_array[np.array(facet)])
             region_facets = t
 
+        if(os.path.splitext(out_file)[1] == ".ply"):
+            self.logger.warning(
+                ".ply files do not display the simplified mesh correctly in Meshlab! It is displayed correctly in Blender and "
+                                ".obj and .off files of the exact same mesh are also displayed correctly in Meshlab.")
+        if not triangulate:
+            self.logger.warning(
+                "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need the faces to be consistently oriented.")
+
         if backend == "python":
-            self.logger.error(
-                "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need correct orientation.")
-            self.complexExporter.write_surface_to_off(out_file, points=points, facets=region_facets)
+            self.complexExporter.write_surface(out_file, points=points, facets=region_facets)
+        elif backend == "vedo":
+            import vedo
+            mesh = vedo.Mesh([points, region_facets])
+            # # see here for face color: https://github.com/marcomusy/vedo/issues/575, but it doesn't actually export it
+            # mesh.celldata["face_colors"] = face_colors
+            # mesh.celldata.select("face_colors")
+            # # trying to fix orientation, but doesn't work
+            # vals=mesh.check_validity()
+            # faces = mesh.faces()
+            # for i,v in enumerate(vals):
+            #     if v == 16:
+            #         faces[i].reverse()
+            # mesh = vedo.Mesh([points,faces])
+            vedo.io.write(mesh,out_file)
         elif backend == "trimesh":
             if not triangulate:
                 self.logger.error("backend 'trimesh' only works with triangulate = True. Choose backend 'python' for exporting a polygon mesh.")
@@ -801,7 +814,7 @@ class PolyhedralComplex:
                 for pt in poly:
                     face.append(np.argwhere((np.equal(points, pt, dtype=object)).all(-1))[0][0])
                 facets.append(face)
-            self.complexExporter.write_surface_to_off(out_file, points=points, facets=facets)
+            self.complexExporter.write_surface(out_file, points=points, facets=facets)
 
         elif backend == "python_exact":
             if triangulate:
@@ -814,7 +827,7 @@ class PolyhedralComplex:
                 for pt in poly:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
-            self.complexExporter.write_surface_to_off(out_file,points=np.array(pset,dtype=np.float32),facets=facets)
+            self.complexExporter.write_surface(out_file,points=np.array(pset,dtype=np.float32),facets=facets)
 
         elif backend == "trimesh":
             if not triangulate:
@@ -929,7 +942,6 @@ class PolyhedralComplex:
 
     def save_in_cells(self,out_file):
 
-        self.logger.info('Save inside cells...')
 
         os.makedirs(os.path.dirname(out_file),exist_ok=True)
         f = open(out_file,'w')
@@ -943,7 +955,10 @@ class PolyhedralComplex:
         view = nx.subgraph_view(self.graph,filter_node=filter_node)
         # for node in enumerate(self.graph.nodes(data=True)):
             # if node[1]["occupancy"] == 1:
-        for node in view.nodes():
+
+        nodes = list(view.nodes())
+        self.logger.info('Save inside {} cells...'.format(len(nodes)))
+        for node in nodes:
             c = np.random.randint(low=100,high=255,size=3)
             polyhedron = self.cells.get(node)
             ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
@@ -980,6 +995,8 @@ class PolyhedralComplex:
             f.write("\n")
 
         f.close()
+
+
 
 
     def save_partition(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
@@ -1518,13 +1535,12 @@ class PolyhedralComplex:
 
 
 
-    def _get_best_split(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+    def _get_best_split(self,current_ids,insertion_order):
         """
         CPU version of _get_best_split_gpu().
         Note: This function could also be written with a single loop and np.tensordot, just like _get_best_split_gpu, but it will make it actually slightly slower.
 
         :param current_ids:
-        :param primitive_dict:
         :param insertion_order:
         :return:
         """
@@ -1570,9 +1586,11 @@ class PolyhedralComplex:
         elif "product" in insertion_order:
             left_right = np.prod(left_right[:,:2],axis=1)
             best_plane_id = np.argmax(left_right)
-        elif "intersect" in insertion_order:
+        elif "sum_intersect" in insertion_order:
             left_right = np.abs(left_right[:,0]-left_right[:,1])+left_right[:,2]
             best_plane_id = np.argmin(left_right)
+        elif "intersect" in insertion_order:
+            best_plane_id = np.argmin(left_right[:,2])
         elif "equal" in insertion_order:
             left_right = np.abs(left_right[:,0]-left_right[:,1])
             best_plane_id = np.argmin(left_right)
@@ -1582,7 +1600,7 @@ class PolyhedralComplex:
         return best_plane_id
 
 
-    def _get_best_split_gpu(self,current_ids,primitive_dict,insertion_order="product-earlystop"):
+    def _get_best_split_gpu(self,current_ids,insertion_order):
 
 
         earlystop = False
@@ -1626,9 +1644,11 @@ class PolyhedralComplex:
         elif "product" in insertion_order:
             left_right = np.prod(left_right[:,:2],axis=1)
             best_plane_id = np.argmax(left_right)
-        elif "intersect" in insertion_order:
+        elif "sum_intersect" in insertion_order:
             left_right = np.abs(left_right[:,0]-left_right[:,1])+left_right[:,2]
             best_plane_id = np.argmin(left_right)
+        elif "intersect" in insertion_order:
+            best_plane_id = np.argmin(left_right[:,2])
         elif "equal" in insertion_order:
             left_right = np.abs(left_right[:,0]-left_right[:,1])
             best_plane_id = np.argmin(left_right)
@@ -1638,7 +1658,7 @@ class PolyhedralComplex:
         return best_plane_id
 
 
-    def _get_best_plane(self,current_ids,insertion_order="product-earlystop"):
+    def _get_best_plane(self,current_ids,insertion_order):
         """
         Get the best plane from the planes in the current cell (ie from current_ids).
         :param current_ids: The planes in the current cell.
@@ -1650,7 +1670,11 @@ class PolyhedralComplex:
 
         if insertion_order == "random":
             return np.random.choice(len(current_ids),size=1)[0]
-        elif insertion_order in ["product", "product-earlystop", "sum", "sum-earlystop", "equal", "equal-earlystop", "intersect", "intersect-earlystop"]:
+        elif insertion_order in ["product", "product-earlystop",
+                                 "sum", "sum-earlystop",
+                                 "sum_intersect", "sum_intersect-earlystop",
+                                 "equal", "equal-earlystop",
+                                 "intersect", "intersect-earlystop"]:
             if self.device == "gpu":
                 return self._get_best_split_gpu(current_ids,insertion_order)
             elif self.device == "cpu":
@@ -1802,8 +1826,67 @@ class PolyhedralComplex:
 
         return left_plane_ids,right_plane_ids
 
+    def delete_small_cells(self,tol=0.0001):
 
-    def simplify_partition_graph_based(self):
+        ilen = len(self.graph.nodes)
+        self.logger.warning("You are about to apply a simplification process that will lead to a degenerate complex.")
+        if not bool(nx.get_node_attributes(self.graph,"volume")):
+            nx.set_node_attributes(self.graph, None, "volume")
+        total_vol = 0
+        for cid in self.graph.nodes:
+            vol = self.cells[cid].volume()
+            total_vol += vol
+            self.graph.nodes[cid]["volume"] = vol
+
+        nodes = list(self.graph.nodes)
+        tol*=total_vol
+        for cid in nodes:
+            if self.graph.nodes[cid]["volume"] < tol:
+                del self.cells[cid]
+                self.graph.remove_node(cid)
+
+        self.logger.info("Deleted {} nodes, reducing the partition from {} to {} nodes.".format(ilen-len(self.graph.nodes),ilen,len(self.graph.nodes)))
+
+
+    # @profile
+    def simplify_partition_graph_based(self,exact=False,atol=0.0,rtol=0.0):
+
+        if not exact:
+            self.logger.warning("You are about to apply a simplification process based on inexact coordinates. "
+                                "This will most likely lead to a degenerate complex.")
+        if atol != 0.0 or rtol != 0.0:
+            self.logger.warning("You are about to apply a simplification process that will most likely lead to intersecting cells.")
+
+
+        base_ring = QQ
+        def _make_new_cell(c0,c1):
+            if exact:
+                return Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list(),base_ring=base_ring)
+            else:
+                p0 = self.cells[c0].points
+                p1 = self.cells[c1].points
+                pts = np.vstack((p0,p1))
+                return scipy.spatial.ConvexHull(pts)
+
+        def _get_cell_volume(cell):
+            if exact:
+                return cell.volume()
+            else:
+                return cell.volume
+        
+        def _cell_volume_equal(vols):
+            return vols[0] == vols[1]
+        def _cell_volume_close(vols):
+            vols.sort()
+            return np.isclose(vols[0],vols[1],atol=atol,rtol=rtol)
+        
+        _collapse = _cell_volume_equal if (atol == 0.0 and rtol == 0.0) else _cell_volume_close
+
+        if not exact:
+            cells = dict()
+            for k,v in self.cells.items():
+                cells[k] = scipy.spatial.ConvexHull(np.array(v.vertices_list()))
+            self.cells = cells
 
         if not self.partition_labelled:
             self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
@@ -1815,16 +1898,16 @@ class PolyhedralComplex:
         # TODO: incooperate the function above into this one. everytime I deal with siblings, I do not have to compute the volume
             # simply need to update the tree with the correct node_id, how it is already done in simplify_partition_tree_based
             # furthermore, the case that I previously drew and found to be unsolveable with tree traversal is also solveable with tree traversal
-                # if the two siblings of two graph adjacent nodes where split with the same plane ID they should be collapseable!?
+                # if the two siblings of two graph adjacent nodes were split with the same plane ID they should be collapseable!?
         # TOOD: save the labelling to file. it takes the most amount of time when prototyping tree collapse and alos graph-cut later
-
-        # TODO: cells can only be collapsed if they share th
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
         before = len(self.graph.nodes)
-        nx.set_node_attributes(self.graph,None,"volume")
-        nx.set_edge_attributes(self.graph,None,"union_volume")
+        if not bool(nx.get_node_attributes(self.graph, "volume")):
+            nx.set_node_attributes(self.graph, None, "volume")
+        if not bool(nx.get_edge_attributes(self.graph, "union_volume")):
+            nx.set_edge_attributes(self.graph,None,"union_volume")
 
         def filter_edge(c0, c1):
             return not self.graph.edges[c0, c1]["processed"]
@@ -1841,31 +1924,40 @@ class PolyhedralComplex:
 
                 cx = None
                 if self.graph.edges[c0,c1]["union_volume"] is None:
-                    cx = Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
-                    self.graph.edges[c0,c1]["union_volume"] = cx.volume()
-                if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = self.cells[c0].volume()
-                if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = self.cells[c1].volume()
-                if self.graph.edges[c0, c1]["union_volume"] != (self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]):
-                    self.graph.edges[c0,c1]["processed"] = True
-                    continue
-                else:
+                    cx = _make_new_cell(c0,c1)
+                    self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(cx)
+                if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
+                if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
+
+
+
+                # if self.graph.edges[c0, c1]["union_volume"] == (self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]):
+                vols = np.array([self.graph.edges[c0, c1]["union_volume"],self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]])
+                if _collapse(vols):
                     self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
                     nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                    self.cells[c0] = cx if cx is not None else Polyhedron(
-                        vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list())
+                    self.cells[c0] = cx if cx is not None else _make_new_cell(c0,c1)
                     del self.cells[c1]
                     for n0, n1 in self.graph.edges(c0):
                         if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
-                            self.graph.edges[n0, n1]["union_volume"] = \
-                                Polyhedron(
-                                    vertices=self.cells[n0].vertices_list() + self.cells[n1].vertices_list()).volume()
+                            new_union = _make_new_cell(n0,n1)
+                            self.graph.edges[n0, n1]["union_volume"] = _get_cell_volume(new_union)
                             self.graph.edges[n0, n1]["processed"] = False
                     del self.graph.nodes[c0]["contraction"]
-
                     break
+                else:
+
+                    self.graph.edges[c0, c1]["processed"] = True
+                    continue
 
 
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+        if not exact:
+            cells = dict()
+            for k,v in self.cells.items():
+                cells[k] = Polyhedron(vertices=v.points,base_ring=base_ring)
+            self.cells = cells
 
 
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
@@ -2232,7 +2324,7 @@ class PolyhedralComplex:
         self.partition_initialized = True
 
 
-    def _compute_split(self, cell_id, insertion_order="product-earlystop"):
+    def _compute_split(self, cell_id, insertion_order):
 
 
         current_ids = self.tree[cell_id].data["plane_ids"]
@@ -2290,7 +2382,7 @@ class PolyhedralComplex:
 
 
 
-    def construct_partition(self, insertion_order="product-earlystop"):
+    def construct_partition(self, insertion_order="product-earlystop",max_child=10**10):
         """
         1. Construct the partition
         :param insertion_order: In which order to process the planes.
@@ -2304,6 +2396,8 @@ class PolyhedralComplex:
         pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar))
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
+            # if child > max_child:
+            #     break
             pbar.update(self._compute_split(cell_id=child, insertion_order=insertion_order))
         pbar.close()
 
