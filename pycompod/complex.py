@@ -1832,16 +1832,11 @@ class PolyhedralComplex:
         self.logger.warning("You are about to apply a simplification process that will lead to a degenerate complex.")
         if not bool(nx.get_node_attributes(self.graph,"volume")):
             nx.set_node_attributes(self.graph, None, "volume")
-        total_vol = 0
-        for cid in self.graph.nodes:
-            vol = self.cells[cid].volume()
-            total_vol += vol
-            self.graph.nodes[cid]["volume"] = vol
 
         nodes = list(self.graph.nodes)
-        tol*=total_vol
+        tol*=self.bounding_poly.volume()
         for cid in nodes:
-            if self.graph.nodes[cid]["volume"] < tol:
+            if self.cells[cid].volume() < tol:
                 del self.cells[cid]
                 self.graph.remove_node(cid)
 
@@ -1849,19 +1844,27 @@ class PolyhedralComplex:
 
 
     # @profile
-    def simplify_partition_graph_based(self,exact=False,atol=0.0,rtol=0.0):
+    def simplify_partition_graph_based(self,exact=True,atol=0.0,rtol=0.0,dtol=0.0):
+
+        self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
         if not exact:
-            self.logger.warning("You are about to apply a simplification process based on inexact coordinates. "
+            self.logger.info("You are about to apply a simplification process based on inexact coordinates. "
                                 "This will most likely lead to a degenerate complex.")
         if atol != 0.0 or rtol != 0.0:
-            self.logger.warning("You are about to apply a simplification process that will most likely lead to intersecting cells.")
+            atol *= self.bounding_poly.volume()
+            dtol *= self.bounding_poly.volume()
+            self.logger.info("You are about to apply a simplification process with atol={}, rtol={} and dtol={} "
+                             "that will most likely lead to intersecting cells.".format(atol,rtol,dtol))
+        if not self.partition_labelled:
+            self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
+            return 0
+        if not self.tree_simplified:
+            self.logger.warning("This function is slow. It is recommended to call simplify_tree_based first.")
 
-
-        base_ring = QQ
         def _make_new_cell(c0,c1):
             if exact:
-                return Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list(),base_ring=base_ring)
+                return Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list(),base_ring=QQ)
             else:
                 p0 = self.cells[c0].points
                 p1 = self.cells[c1].points
@@ -1877,6 +1880,7 @@ class PolyhedralComplex:
         def _cell_volume_equal(vols):
             return vols[0] == vols[1]
         def _cell_volume_close(vols):
+            """collapse if close. have to sort because in overlapping cell cases union vol can be smaller than sum of vols."""
             vols.sort()
             return np.isclose(vols[0],vols[1],atol=atol,rtol=rtol)
         
@@ -1888,36 +1892,20 @@ class PolyhedralComplex:
                 cells[k] = scipy.spatial.ConvexHull(np.array(v.vertices_list()))
             self.cells = cells
 
-        if not self.partition_labelled:
-            self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
-            return 0
-
-        if not self.tree_simplified:
-            self.logger.warning("This function is slow. It is recommended to call simplify_tree_based first.")
-
-        # TODO: incooperate the function above into this one. everytime I deal with siblings, I do not have to compute the volume
-            # simply need to update the tree with the correct node_id, how it is already done in simplify_partition_tree_based
-            # furthermore, the case that I previously drew and found to be unsolveable with tree traversal is also solveable with tree traversal
-                # if the two siblings of two graph adjacent nodes were split with the same plane ID they should be collapseable!?
-        # TOOD: save the labelling to file. it takes the most amount of time when prototyping tree collapse and alos graph-cut later
-
-        self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
-
         before = len(self.graph.nodes)
         if not bool(nx.get_node_attributes(self.graph, "volume")):
             nx.set_node_attributes(self.graph, None, "volume")
         if not bool(nx.get_edge_attributes(self.graph, "union_volume")):
             nx.set_edge_attributes(self.graph,None,"union_volume")
+        nx.set_edge_attributes(self.graph,False,"processed")
 
         def filter_edge(c0, c1):
             return not self.graph.edges[c0, c1]["processed"]
-
-        nx.set_edge_attributes(self.graph,False,"processed")
         edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
         while len(edges):
-
             for c0, c1 in edges:
 
+                # TODO: check if the simplification functions work the same if I only restrict them to inside cells.
                 if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
                     self.graph.edges[c0,c1]["processed"] = True
                     continue
@@ -1929,14 +1917,19 @@ class PolyhedralComplex:
                 if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
                 if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
 
-
-
-                # if self.graph.edges[c0, c1]["union_volume"] == (self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]):
                 vols = np.array([self.graph.edges[c0, c1]["union_volume"],self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]])
                 if _collapse(vols):
-                    self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
-                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                    self.cells[c0] = cx if cx is not None else _make_new_cell(c0,c1)
+                    cc = [c0,c1]
+                    if self.graph.nodes[c0]["volume"] < self.graph.nodes[c1]["volume"]: cc.reverse()
+                    c0 = cc[0];
+                    c1 = cc[1]
+
+                    if self.graph.nodes[c1]["volume"] < dtol:
+                        nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                    else:
+                        self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+                        nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                        self.cells[c0] = cx if cx is not None else _make_new_cell(c0,c1)
                     del self.cells[c1]
                     for n0, n1 in self.graph.edges(c0):
                         if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
@@ -1946,22 +1939,17 @@ class PolyhedralComplex:
                     del self.graph.nodes[c0]["contraction"]
                     break
                 else:
-
                     self.graph.edges[c0, c1]["processed"] = True
                     continue
-
-
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
         if not exact:
             cells = dict()
             for k,v in self.cells.items():
-                cells[k] = Polyhedron(vertices=v.points,base_ring=base_ring)
+                cells[k] = Polyhedron(vertices=v.points,base_ring=QQ)
             self.cells = cells
 
-
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
-
         self.polygons_initialized = False
 
 
