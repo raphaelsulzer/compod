@@ -67,7 +67,6 @@ class PolyhedralComplex:
 
         self.verbosity = verbosity
         self.logger = make_logger(name="COMPOD",level=verbosity)
-
         self.logger.debug('Init cell complex with padding {}'.format(padding))
 
         self.cells = dict()
@@ -100,9 +99,6 @@ class PolyhedralComplex:
             self.logger.warning('Debug export activated. Turn off for faster processing.')
 
 
-
-
-
     def _init_bounding_box(self,padding):
 
         self.bounding_verts = []
@@ -114,7 +110,6 @@ class PolyhedralComplex:
         d = d*QQ(padding)
         pmin = pmin-d
         pmax = pmax+d
-
 
         self.bounding_verts.append(pmin)
         self.bounding_verts.append([pmin[0],pmax[1],pmin[2]])
@@ -255,7 +250,6 @@ class PolyhedralComplex:
 
     def insert_exhaustive_planes(self, planes, color=None, points=None, normals=None, classes=None, projected_points=None, polygon=None):
 
-        # TODO: insert footprint planes post construction here
 
         # first: have to call _append_planes_to_vg with the additional planes; because if a cell gets split by additional_plane A
         # it can be further split by additional plane B and the cell needs to know that it is inside
@@ -293,12 +287,6 @@ class PolyhedralComplex:
                 which_side = (which_side < -pl[3])
                 if which_side.all() or (~which_side).all():
                     continue
-
-                # hspace_negative = self.vg.input_halfspaces[plane_id][0]
-                # hspace_positive = self.vg.input_halfspaces[plane_id][1]
-                #
-                # if (current_cell.intersection(hspace_negative).is_empty() or current_cell.intersection(hspace_positive).is_empty()):
-                #     continue
 
                 self.vg.plane_ids.append(plane_id)
                 self.vg.split_planes = np.vstack((self.vg.split_planes, self.vg.input_planes[plane_id]))
@@ -487,6 +475,8 @@ class PolyhedralComplex:
 
         :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
+
+        os.makedirs(os.path.dirname(out_file),exist_ok=True)
 
         try:
             from pycompose import pdse
@@ -1187,7 +1177,7 @@ class PolyhedralComplex:
     def _graph_cut(self,occs,regularization={"cc":0.5}):
 
         # unfortunately necessary for computing edge areas
-        if "area" in regularization.keys():
+        if "area" in regularization.keys() or "beta-skeleton" in regularization.keys():
             self._init_polygons()
 
         graph = nx.convert_node_labels_to_integers(self.graph)
@@ -1223,7 +1213,7 @@ class PolyhedralComplex:
         edges = np.array(graph.edges)
 
         for key in regularization.keys():
-            if key not in ["cc","area","beta_skeleton"]:
+            if key not in ["cc","area","beta-skeleton"]:
                 self.logger.error("{} is not a valid binary type".format(binary_type))
                 raise NotImplementedError
 
@@ -1245,7 +1235,7 @@ class PolyhedralComplex:
             edge_weight = np.array(edge_weight)/sum(edge_weight)
             t_edge_weight+=(edge_weight*regularization["area"])
             binary_weight+=regularization["area"]
-        if "beta_skeleton" in regularization:
+        if "beta-skeleton" in regularization:
             edge_weight = []
             for e0, e1 in self.graph.edges:
                 edge = self.graph.edges[e0,e1]
@@ -1255,8 +1245,8 @@ class PolyhedralComplex:
                              self._beta_skeleton(self.cells[e1].center(),point,-normal))
                 edge_weight.append(ew)
             edge_weight = np.array(edge_weight)/sum(edge_weight)
-            t_edge_weight+=(edge_weight*regularization["beta_skeleton"])
-            binary_weight+=regularization["beta_skeleton"]
+            t_edge_weight+=(edge_weight*regularization["beta-skeleton"])
+            binary_weight+=regularization["beta-skeleton"]
 
         
         # TODO: try to solve orientation with the graph cut
@@ -1844,7 +1834,7 @@ class PolyhedralComplex:
 
 
     # @profile
-    def simplify_partition_graph_based(self,exact=True,atol=0.0,rtol=0.0,dtol=0.0):
+    def simplify_partition_graph_based(self,exact=True,atol=0.0,rtol=0.0,dtol=0.0,only_inside=False):
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
@@ -1905,10 +1895,15 @@ class PolyhedralComplex:
         while len(edges):
             for c0, c1 in edges:
 
-                # TODO: check if the simplification functions work the same if I only restrict them to inside cells.
-                if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
-                    self.graph.edges[c0,c1]["processed"] = True
-                    continue
+                if only_inside:
+                    if not self.graph.nodes[c0]["occupancy"] or not self.graph.nodes[c1]["occupancy"]:
+                        self.graph.edges[c0,c1]["processed"] = True
+                        continue
+                else:
+                    if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
+                        self.graph.edges[c0,c1]["processed"] = True
+                        continue
+
 
                 cx = None
                 if self.graph.edges[c0,c1]["union_volume"] is None:
@@ -2424,6 +2419,7 @@ class PolyhedralComplex:
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
+        self.partition_labelled = True
 
 
     def construct_abspy(self, exhaustive=False, num_workers=0):

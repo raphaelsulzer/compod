@@ -130,7 +130,23 @@ class PlaneExporter:
         f.close()
 
 
-    def save_points_and_planes(self,filenames,points=None,groups=None,planes=None,normals=None,colors=None):
+    def save_points_and_planes_from_array(self,filenames,planes_array):
+
+        groups = []
+        npoints = planes_array["group_num_points"].flatten()
+        verts = planes_array["group_points"].flatten()
+        last = 0
+        for i, npp in enumerate(npoints):
+            ## make the point groups
+            vert_group = verts[last:(npp + last)]
+            assert vert_group.dtype == np.int32
+            groups.append(vert_group)
+            last += npp
+
+        self.save_points_and_planes(filenames,planes_array["points"],planes_array["normals"],groups,planes_array["group_parameters"],planes_array["colors"])
+
+
+    def save_points_and_planes(self,filenames,points=None,normals=None,groups=None,planes=None,colors=None):
 
         """this writes all planes to a ply file"""
 
@@ -164,11 +180,7 @@ class PlaneExporter:
             for j in range(pch.hull.vertices.shape[0]):
                 pcolors.append(colors[i])
 
-
-
-
         all_hull_points = np.concatenate(all_hull_points)
-
 
         ### points
         f = open(filenames[0],"w")

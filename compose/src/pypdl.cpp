@@ -26,7 +26,7 @@ int pyPDL::load_mesh(const string filename){
 //        _logger->error("ERROR: {} does not exist",filename);
         return 1;
     }
-    CGAL::IO::read_OFF(filename, _gt_mesh);
+    CGAL::IO::read_polygon_mesh(filename, _gt_mesh);
     if(_gt_mesh.number_of_faces() == 0){
         cout << "ERROR: " << filename << " has no faces" << endl;
 //        _logger->error("ERROR: Mesh has no faces");
