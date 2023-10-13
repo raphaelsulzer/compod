@@ -52,8 +52,13 @@ class PolyhedralComplex:
         # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
         np.random.seed(42)
 
-        self.planeExporter = PlaneExporter()
-        self.complexExporter = PolyhedralComplexExporter(self)
+        self.verbosity = verbosity
+        self.logger = make_logger(name="COMPOD",level=verbosity)
+        self.logger.debug('Init cell complex with padding {}'.format(padding))
+        
+        self.debug_export = debug_export
+        if self.debug_export:
+            self.logger.warning('Debug export activated. Turn off for faster processing.')
 
         self.vg = vertex_group
         # basically just a name change, to make sure that the negative indices for the boundary planes are never used on this array and not on the split_planes array
@@ -65,9 +70,6 @@ class PolyhedralComplex:
         del self.vg.halfspaces
         del self.vg.groups
 
-        self.verbosity = verbosity
-        self.logger = make_logger(name="COMPOD",level=verbosity)
-        self.logger.debug('Init cell complex with padding {}'.format(padding))
 
         self.cells = dict()
         self.tree = None
@@ -94,9 +96,9 @@ class PolyhedralComplex:
         self.tree_mode = Tree.DEPTH # this is what it always was
         # self.tree_mode = Tree.WIDTH
 
-        self.debug_export = debug_export
-        if self.debug_export:
-            self.logger.warning('Debug export activated. Turn off for faster processing.')
+        self.planeExporter = PlaneExporter()
+        self.complexExporter = PolyhedralComplexExporter(self)
+
 
 
     def _init_bounding_box(self,padding):
@@ -1297,7 +1299,7 @@ class PolyhedralComplex:
             # compute regularization weights
             occs = self._graph_cut(occs,regularization)
         else:
-            occs = occs[:,0]>occs[:,1]
+            occs = occs[:,0]>=occs[:,1]
 
         assert len(occs) == len(self.graph.nodes), "Number of cccupancy labels and graph nodes is not the same."
         occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
@@ -1346,11 +1348,17 @@ class PolyhedralComplex:
         if pl.load_mesh(mesh_file):
             return 1
         occs = pl.label_cells(np.array(points_len),np.concatenate(points,axis=0))
-        del pl
 
         occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
         occs = np.array([occs,1-occs]).transpose()
 
+        # if self.debug_export:
+
+        pl.export_test_points(os.path.join("/home/rsulzer/data/RobustLowPolyDataSet/Thingi10k/DEBUG/label_test_points.ply"))
+
+        # self.complexExporter.export_label_colored_cells(path=self.debug_export, graph=self.graph, cells=self.cells, occs=occs)
+
+        del pl
         return occs
 
 
@@ -1491,32 +1499,10 @@ class PolyhedralComplex:
                 occs = np.array(occs) / (2 * len(self.vg.points))
 
             if self.debug_export:
+                self.complexExporter.export_label_colored_cells(path=self.debug_export,
+                                                                graph=self.graph, cells=self.cells,
+                                                                occs=occs, type_colors=type_colors)
 
-                from fancycolor import GradientColor2D
-
-                inside_weight = occs[:, 0]
-                outside_weight = occs[:, 1]
-
-                icol = GradientColor2D("Reds", inside_weight.min(), inside_weight.max()).get_rgb(inside_weight)
-                ocol = GradientColor2D("Greens", outside_weight.min(), outside_weight.max()).get_rgb(outside_weight)
-
-                for i, node in enumerate(self.graph.nodes):
-
-                    if self.graph.nodes[node].get("bounding_box", 0):
-                        continue
-
-                    st = "out" if inside_weight[i] <= outside_weight[i] else "in"
-                    color = np.array(ocol[i])[:3] if inside_weight[i] <= outside_weight[i] else np.array(icol[i][:3])
-
-                    self.complexExporter.write_cell(os.path.join(self.debug_export, "labelling_cells_{}".format(st)),
-                                                    self.cells[node],
-                                                    count=str(node) + st, color=color)
-                    color = type_colors[i]
-                    self.complexExporter.write_cell(
-                        os.path.join(self.debug_export, "labelling_cells_type_{}".format(st)), self.cells[node],
-                        count=str(node) + st, color=color)
-                    # self.complexExporter.write_points(os.path.join(self.debug_export,"labelling_points"),color=color, count=str(node)+st,
-                    #                                       points=np.concatenate(cell_points),normals=np.concatenate(cell_normals))
 
             return occs
 
@@ -2057,9 +2043,12 @@ class PolyhedralComplex:
             current_edge = self.graph[c0][c1]
             current_facet = current_edge["intersection"]
 
+            sp_id = current_edge["supporting_plane_id"]
+
             for neighbor in list(self.graph[c0]):
                 if neighbor == c1: continue
                 this_edge = self.graph[c0][neighbor]
+                # if sp_id != this_edge["supporting_plane_id"]: continue
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"]+=facet_intersection.vertices_list()
@@ -2067,6 +2056,7 @@ class PolyhedralComplex:
             for neighbor in list(self.graph[c1]):
                 if neighbor == c0: continue
                 this_edge = self.graph[c1][neighbor]
+                # if sp_id != this_edge["supporting_plane_id"]: continue
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
                     current_edge["vertices"] += facet_intersection.vertices_list()
@@ -2365,7 +2355,7 @@ class PolyhedralComplex:
 
 
 
-    def construct_partition(self, insertion_order="product-earlystop",max_child=10**10):
+    def construct_partition(self, insertion_order="product-earlystop"):
         """
         1. Construct the partition
         :param insertion_order: In which order to process the planes.
@@ -2379,8 +2369,6 @@ class PolyhedralComplex:
         pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar))
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
-            # if child > max_child:
-            #     break
             pbar.update(self._compute_split(cell_id=child, insertion_order=insertion_order))
         pbar.close()
 

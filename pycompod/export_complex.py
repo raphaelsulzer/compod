@@ -4,37 +4,50 @@ import logging
 from .logger import make_logger
 
 class PolyhedralComplexExporter:
-    """
-    Class of cell complex from planar primitive arrangement.
-    """
-    def __init__(self, cellComplex, verbosity=logging.WARN):
+    
+    def __init__(self, cellComplex):
         """
-        Init CellComplex.
-        Class of cell complex from planar primitive arrangement.
+        This class is mainly for debugging the PolyhedralComplex class by allowing to export all kinds of intermediate results.
 
-        Parameters
-        ----------
-        planes: (n, 4) float
-            Plana parameters
-        bounds: (n, 2, 3) float
-            Corresponding bounding box bounds of the planar primitives
-        points: (n, ) object of float
-            Points grouped into primitives, points[any]: (m, 3)
-        initial_bound: None or (2, 3) float
-            Initial bound to partition
-        build_graph: bool
-            Build the cell adjacency graph if set True.
-        additional_planes: None or (n, 4) float
-            Additional planes to append to the complex,
-            can be missing planes due to occlusion or incapacity of RANSAC
-        quiet: bool
-            Disable logging and progress bar if set True
+        :param cellComplex: 
+        :param verbosity: 
         """
         self.cellComplex = cellComplex
 
-        self.logger = make_logger(name="COMPOD",level=verbosity)
+        self.logger = cellComplex.logger
+
+    def export_label_colored_cells(self, path, graph, cells, occs, mode="occ", type_colors=None):
+
+        from fancycolor import GradientColor2D
+
+        inside_weight = occs[:, 0]
+        outside_weight = occs[:, 1]
+
+        icol = GradientColor2D("Reds", inside_weight.min(), inside_weight.max()).get_rgb(inside_weight)
+        ocol = GradientColor2D("Greens", outside_weight.min(), outside_weight.max()).get_rgb(outside_weight)
+
+        for i, node in enumerate(graph.nodes):
+
+            if graph.nodes[node].get("bounding_box", 0):
+                continue
 
 
+            st = "out" if inside_weight[i] <= outside_weight[i] else "in"
+            if mode == "occ":
+                color = np.array(ocol[i])[:3] if inside_weight[i] <= outside_weight[i] else np.array(icol[i][:3])
+                self.write_cell(os.path.join(path, "labelling_cells_{}".format(st)),
+                                                cells[node],
+                                                count=str(node) + st, color=color)
+            elif mode == "type":
+                color = type_colors[i]
+                self.write_cell(
+                    os.path.join(path, "labelling_cells_type_{}".format(st)), cells[node],
+                    count=str(node) + st, color=color)
+            else:
+                self.logger.error("not a valid type for labelled cell debug export")
+
+            # self.complexExporter.write_points(os.path.join(path,"labelling_points"),color=color, count=str(node)+st,
+            #                                       points=np.concatenate(cell_points),normals=np.concatenate(cell_normals))
 
     def write_graph(self, m, graph, cells, subfolder="", color = None):
 

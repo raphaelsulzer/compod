@@ -10,8 +10,9 @@ from .logger import make_logger
 
 class PlaneExporter:
 
-    def __init__(self):
-        self.logger = make_logger(name="COMPOD", level=logging.WARN)
+    def __init__(self, logger=None):
+        
+        self.logger = logger
 
     def save_deleted_points(self,path,points,count,subfolder="deleted_points",color=None):
 

@@ -183,6 +183,52 @@ class VertexGroup:
 
         self.hull_vertices = np.array(hull_vertices)
 
+    def _merge_duplicate_planes(self):
+
+        pts = defaultdict(int)
+        primitive_ids = defaultdict(list)
+        polygons = defaultdict(list)
+        cols = defaultdict(list)
+        un, inv = np.unique(self.planes, return_inverse=True, axis=0)
+        for i in range(len(self.planes)):
+            if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
+                pts[inv[i]] = self.points_grouped[i]
+            else:
+                pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
+
+            cols[inv[i]] = colors[i]
+            primitive_ids[inv[i]]+=[i]
+
+        self.plane_colors = list(cols.values())
+        self.planes = un[list(pts.keys())]
+        self.points_grouped = list(pts.values())
+
+        # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
+        self.merged_primitives_to_input_primitives = list(primitive_ids.values())
+
+        self.logger.info("Merged duplicate planes from {} to {}".format(n_planes,self.planes.shape[0]))
+        self.logger.debug("Ie also merged point groups from the same plane to one point group and so on.")
+        
+        
+    def _load_point_groups(self,point_ids,sizes):
+
+
+        current = 0
+        for n in sizes:
+
+            vert_group = verts[last:(npp+last)]
+            assert vert_group.dtype == np.int32
+            pts = self.points[vert_group]
+            self.groups.append(vert_group)
+
+
+
+
+        
+        
+        
+
+
     def _process_npz(self):
         """
         Start processing vertex group.
@@ -201,8 +247,13 @@ class VertexGroup:
 
         npoints = data["group_num_points"].flatten()
         verts = data["group_points"].flatten()
+        
+        self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
+        
+        
         self.plane_colors = data["group_colors"]
-
+        
+        
         self.halfspaces = []
         self.polygons = []
         self.polygon_areas = []

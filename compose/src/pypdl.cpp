@@ -59,7 +59,7 @@ void pyPDL::_init_tree(){
 typedef std::tuple<EPICK::Point_3, CGAL::Color> PC;
 typedef CGAL::Nth_of_tuple_property_map<0, PC> Point_map;
 typedef CGAL::Nth_of_tuple_property_map<1, PC> Color_map;
-void pyPDL::export_points(const string filename){
+void pyPDL::export_test_points(const string filename){
 
     ofstream f(filename, std::ios::binary);
     CGAL::IO::set_binary_mode(f); // The PLY file will be written in the binary format
@@ -127,7 +127,6 @@ pyPDL::label_cells(const nb::ndarray<int, nb::shape<nb::any>>& points_len, const
 
     for(int i = 0; i < points_len.shape(0); i++){
         cgpoints.clear();
-        _all_sampled_points.clear();
         for(int j = 0; j < points_len(i); j++){
             cgpoints.push_back(EPICK::Point_3(points(k,0),points(k,1),points(k,2)));
             k+=1;
@@ -143,6 +142,7 @@ NB_MODULE(libPYPDL, m) {
     nb::class_<pyPDL>(m, "pdl")
             .def(nb::init<int>(),"n_test_points"_a = 100)
             .def("load_mesh", &pyPDL::load_mesh, "filename"_a, "Load a polygon soup.")
-            .def("label_cells", &pyPDL::label_cells, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.");
+            .def("label_cells", &pyPDL::label_cells, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
+            .def("export_test_points", &pyPDL::export_test_points, "filename"_a, "Export the test points colored by occupancy.");
 }
 

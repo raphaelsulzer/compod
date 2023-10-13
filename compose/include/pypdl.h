@@ -55,7 +55,7 @@ public:
     const float _label(vector<EPICK::Point_3>&);
     vector<double>
     label_cells(const nb::ndarray<int, nb::shape<nb::any>>& points_len, const nb::ndarray<double, nb::shape<nb::any, 3>>& points);
-    void export_points(const string filename);
+    void export_test_points(const string filename);
 private:
     void _init_tree();
     // init random generator for coloring
