@@ -15,7 +15,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, input_file, prioritise = None,
+    def __init__(self, input_file, prioritise = None, merge_duplicate_planes = True,
                  points_type="inliers", total_sample_count=100000,
                  recolor=False, verbosity=logging.WARN):
         """
@@ -35,6 +35,7 @@ class VertexGroup:
         self.logger = make_logger(name="COMPOD",level=verbosity)
 
         self.input_file = input_file
+        self.merge_duplicate_planes = merge_duplicate_planes
         self.prioritise = prioritise
         self.total_sample_count = total_sample_count
         self.points_type = points_type
@@ -57,8 +58,9 @@ class VertexGroup:
 
         fc=GradientColor3D(bbox)
         cols = []
-        for p in self.polygons:
-            pt = copy.deepcopy(p.centroid)
+        for group in self.groups:
+            pt = self.points[group].mean(axis=0)
+            # pt = copy.deepcopy(p.centroid)
             cols.append(fc.get_rgb_from_xyz(pt))
         self.plane_colors = np.array(cols)
 
@@ -185,55 +187,45 @@ class VertexGroup:
 
     def _merge_duplicate_planes(self):
 
+        n_input = len(self.planes)
+
         pts = defaultdict(int)
         primitive_ids = defaultdict(list)
-        polygons = defaultdict(list)
         cols = defaultdict(list)
         un, inv = np.unique(self.planes, return_inverse=True, axis=0)
         for i in range(len(self.planes)):
             if isinstance(pts[inv[i]],int): ## hacky way to check if this item already has a value or is empty, ie has the default int assigned
-                pts[inv[i]] = self.points_grouped[i]
+                pts[inv[i]] = self.groups[i]
             else:
-                pts[inv[i]] = np.concatenate((pts[inv[i]],self.points_grouped[i]))
+                pts[inv[i]] = np.concatenate((pts[inv[i]],self.groups[i]))
 
-            cols[inv[i]] = colors[i]
+            cols[inv[i]] = self.plane_colors[i]
             primitive_ids[inv[i]]+=[i]
 
-        self.plane_colors = list(cols.values())
+        self.plane_colors = np.array(list(cols.values()))
         self.planes = un[list(pts.keys())]
-        self.points_grouped = list(pts.values())
+        self.groups = list(pts.values())
 
         # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
         self.merged_primitives_to_input_primitives = list(primitive_ids.values())
 
-        self.logger.info("Merged duplicate planes from {} to {}".format(n_planes,self.planes.shape[0]))
+        self.logger.info("Merged duplicate planes from {} to {}".format(n_input,self.planes.shape[0]))
         self.logger.debug("Ie also merged point groups from the same plane to one point group and so on.")
         
         
     def _load_point_groups(self,point_ids,sizes):
-
-
         current = 0
         for n in sizes:
-
-            vert_group = verts[last:(npp+last)]
-            assert vert_group.dtype == np.int32
-            pts = self.points[vert_group]
-            self.groups.append(vert_group)
-
-
-
-
-        
-        
-        
-
+            pids = point_ids[current:(n+current)]
+            assert pids.dtype == np.int32
+            self.groups.append(pids)
+            current+=n
 
     def _process_npz(self):
         """
-        Start processing vertex group.
+        Load vertex groups and planes from npz file.
+        :return: 
         """
-
         data = np.load(self.input_file)
 
         # read the data and make the point groups
@@ -245,37 +237,37 @@ class VertexGroup:
         else:
             self.classes = np.ones(len(self.points),dtype=np.int32)
 
-        npoints = data["group_num_points"].flatten()
-        verts = data["group_points"].flatten()
-        
+        self.groups = []
+        # TODO: construct the polygons in here, so that I can use them later:
+        # in the merge_duplicate planes function I need to merge the polygon area by taking the sum
+        # in the loop below, I need to use the convex hull, so use it for that as well
         self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
-        
-        
         self.plane_colors = data["group_colors"]
         
+        if self.recolor:
+            self._recolor_planes()
+            # save with new colors
+            data = dict(data)
+            data["group_colors"] = self.plane_colors
+            np.savez(self.input_file,**data)
+
+        if self.merge_duplicate_planes:
+            self._merge_duplicate_planes()
         
         self.halfspaces = []
         self.polygons = []
         self.polygon_areas = []
         self.projected_points = np.zeros(shape=(self.points.shape[0],2))
-        self.groups = []
         self.hull_vertices = []
         self.n_fill = 0
-        last = 0
-        for i,npp in enumerate(npoints):
-            ## make the point groups
-            vert_group = verts[last:(npp+last)]
-            assert vert_group.dtype == np.int32
+        for i, vert_group in enumerate(self.groups):
             pts = self.points[vert_group]
-            self.groups.append(vert_group)
-
             # TODO: i am computing the convex hull twice below; not necessary
-
             ## make the polys
             ## make a trimesh of each input polygon, used for getting the area of each input poly for area based sorting
             pl = PyPlane(self.planes[i])
             try:
-                poly = pl.get_trimesh_of_projected_points(pts,type="convex_hull")
+                poly = pl.get_trimesh_of_projected_points(pts, type="convex_hull")
                 self.polygons.append(poly)
                 self.polygon_areas.append(poly.area)
             except:
@@ -288,33 +280,22 @@ class VertexGroup:
 
             ## this is used for _get_best_plane function
             try:
-                pch = ProjectedConvexHull(self.planes[i],pts)
+                pch = ProjectedConvexHull(self.planes[i], pts)
                 self.hull_vertices.append(vert_group[pch.hull.vertices])
                 n_hull_vertices = len(pch.hull.vertices)
             except:
                 self.hull_vertices.append(vert_group)
                 n_hull_vertices = len(vert_group)
-            
-            
+
             if n_hull_vertices > self.n_fill:
                 self.n_fill = n_hull_vertices
 
             self.halfspaces.append([Polyhedron(ieqs=[inequality]) for inequality in self._inequalities(self.planes[i])])
 
-            last += npp
-
         assert self.points.shape[0] == self.projected_points.shape[0]
-
-        if self.recolor:
-            self._recolor_planes()
-            # save with new colors
-            data = dict(data)
-            data["group_colors"] = self.plane_colors
-            np.savez(self.input_file,**data)
 
         self.polygons = np.array(self.polygons)
         self.polygon_areas = np.array(self.polygon_areas)
-
 
         if self.points_type == "samples":
             self.logger.info("Sample a total of {} points on {} polygons".format(self.total_sample_count,len(self.polygons)))
