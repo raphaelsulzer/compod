@@ -194,10 +194,30 @@ int pyPDSE::load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
         n+=poly.size();
         _smesh._polygons.push_back(poly);
     }
-
     return 0;
+}
 
+int pyPDSE::load_triangle_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
+                      const nb::ndarray<int, nb::shape<nb::any,3>>& triangles
+                      ){
 
+    _smesh = SMesh(_verbosity,_debug_export);
+
+    _smesh._points.clear();
+    _smesh._polygons.clear();
+
+    for (size_t i = 0; i < points.shape(0); i++){
+        _smesh._points.push_back(Point(points(i,0),points(i,1),points(i,2)));
+    }
+
+    for (size_t i = 0; i < triangles.shape(0); i++){
+        Polygon poly;
+        poly.push_back(triangles(i,0));
+        poly.push_back(triangles(i,1));
+        poly.push_back(triangles(i,2));
+        _smesh._polygons.push_back(poly);
+    }
+    return 0;
 }
 
 int pyPDSE::soup_to_mesh(const bool triangulate, const bool stitch_borders){
@@ -210,6 +230,31 @@ int pyPDSE::save_mesh(const string filename){
     return _smesh.save_mesh(filename);
 }
 
+int pyPDSE::is_mesh_intersection_free(const string filename){
+
+    Mesh mesh;
+    if(!PMP::IO::read_polygon_mesh(filename, mesh) || !CGAL::is_triangle_mesh(mesh))
+    {
+      std::cerr << "Invalid input." << std::endl;
+      return 0;
+    }
+    return PMP::does_self_intersect<CGAL::Parallel_if_available_tag>(mesh, CGAL::parameters::vertex_point_map(get(CGAL::vertex_point, mesh)));
+
+}
+
+int pyPDSE::is_mesh_watertight(const string filename){
+
+    Mesh mesh;
+    if(!PMP::IO::read_polygon_mesh(filename, mesh) || !CGAL::is_triangle_mesh(mesh))
+    {
+      std::cerr << "Invalid input." << std::endl;
+      return 0;
+    }
+    return CGAL::is_closed(mesh);
+
+}
+
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////// THIS STUFF IS FOR CONTROLLING THE PURE CGAL VERSION OF PDSE ///////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -219,27 +264,23 @@ int pyPDSE::save_mesh(const string filename){
 
 //}
 
-
-
-
 //int pyPDSE::remesh_planar_regions(){
 
 //    return _PDSE.remesh_planar_regions();
 //}
 
 
-
-
-
-
-
-
-
-
 NB_MODULE(libPYPDSE, m) {
     nb::class_<pyPDSE>(m, "pdse")
             .def(nb::init<int,bool>(),"verbosity"_a = 0, "debug_export"_a = false)
+//            .def("load_soup", nb::overload_cast<const nb::ndarray<double, nb::shape<nb::any, 3>>&,
+//                 const nb::ndarray<int, nb::shape<nb::any>>&>(&pyPDSE::load_soup), "points"_a, "polygons"_a, "Load a polygon soup.")
+//            .def("load_soup", nb::overload_cast<const nb::ndarray<double, nb::shape<nb::any, 3>>&,
+//                 const nb::ndarray<int, nb::shape<nb::any,3>>&>(&pyPDSE::load_soup), "points"_a, "triangles"_a, "Load a triangle soup.")
+            .def("is_mesh_watertight", &pyPDSE::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
+            .def("is_mesh_intersection_free", &pyPDSE::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
             .def("load_soup", &pyPDSE::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
+            .def("load_triangle_soup", &pyPDSE::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
             .def("soup_to_mesh", &pyPDSE::soup_to_mesh, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
             .def("save_mesh", &pyPDSE::save_mesh, "filename"_a, "Save a mesh.")
             .def("get_cycles", &pyPDSE::get_cycles, "boundary_edges"_a ,"Get closed cycles from a set of boundary edges.")

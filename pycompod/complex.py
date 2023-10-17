@@ -215,7 +215,7 @@ class PolyhedralComplex:
             self.vg.input_planes = np.append(plane[np.newaxis,:].astype(self.vg.input_planes.dtype),self.vg.input_planes,axis=0)
             hspace_neg, hspace_pos = self._inequalities(plane)
             self.vg.input_halfspaces = [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])] + self.vg.input_halfspaces
-            self.vg.polygons_from_plane = [np.array([])]+self.vg.polygons_from_plane
+            self.vg.merged_plane_from_input_planes = [np.array([])]+self.vg.merged_plane_from_input_planes
             self.vg.hull_vertices = np.append(np.zeros(shape=(1,self.vg.hull_vertices.shape[1]),dtype=self.vg.hull_vertices.dtype),self.vg.hull_vertices,axis=0)
             self.vg.plane_colors = np.append(color[np.newaxis,:].astype(self.vg.plane_colors.dtype),self.vg.plane_colors,axis=0)
 
@@ -235,7 +235,7 @@ class PolyhedralComplex:
             self.vg.input_planes = np.append(self.vg.input_planes,plane[np.newaxis,:].astype(self.vg.input_planes.dtype),axis=0)
             hspace_neg, hspace_pos = self._inequalities(plane)
             self.vg.input_halfspaces = self.vg.input_halfspaces + [np.array([Polyhedron(ieqs=[hspace_neg]),Polyhedron(ieqs=[hspace_pos])])]
-            self.vg.polygons_from_plane = self.vg.polygons_from_plane + [np.array([])]
+            self.vg.merged_plane_from_input_planes = self.vg.merged_plane_from_input_planes + [np.array([])]
             self.vg.hull_vertices = np.append(self.vg.hull_vertices,np.zeros(shape=(1,self.vg.hull_vertices.shape[1]),dtype=self.vg.hull_vertices.dtype),axis=0)
             self.vg.plane_colors = np.append(self.vg.plane_colors,color[np.newaxis,:].astype(self.vg.plane_colors.dtype),axis=0)
 
@@ -634,11 +634,16 @@ class PolyhedralComplex:
                         if len(vertex_is_corner[c]) > 2:
                             this_cycle.append(c)
                             vertex_is_corner_array[c] = 1
+                    if len(this_cycle) < 3:
+                        continue
                     this_cycle = this_cycle+[this_cycle[0]]
                     this_region_facets.append(this_cycle)
                 else:
                     cyc = cyc+[cyc[0]]
                     this_region_facets.append(cyc)
+
+            if not len(this_region_facets):
+                continue
 
             if triangulate: # triangulate all faces
                 plane = PyPlane(self.vg.input_planes[region[0]])
@@ -819,7 +824,7 @@ class PolyhedralComplex:
                 for pt in poly:
                     face.append(np.argwhere((np.equal(pset,pt,dtype=object)).all(-1))[0][0])
                 facets.append(face)
-            self.complexExporter.write_surface(out_file,points=np.array(pset,dtype=np.float32),facets=facets)
+            self.complexExporter.write_surface(out_file,points=np.array(pset,dtype=np.float64),facets=facets)
 
         elif backend == "trimesh":
             if not triangulate:
@@ -1063,10 +1068,11 @@ class PolyhedralComplex:
 
 
             if plane_id > -1:
-                colors.append(self.vg.plane_colors[plane_id])
-                # primitive_ids.append([self.vg.plane_order[plane_id]])
-                pid = self.vg.plane_order[plane_id]
-                primitive_ids.append(list(self.vg.polygons_from_plane[pid]))
+                colors.append(self.vg.plane_colors[plane_id])                
+                pids = []
+                for pid in self.vg.merged_plane_from_input_planes[plane_id]:
+                    pids.append(self.vg.plane_order[pid])
+                primitive_ids.append(pids)
             else:
                 colors.append(np.random.randint(100, 255, size=3))
                 primitive_ids.append([])
@@ -1184,7 +1190,7 @@ class PolyhedralComplex:
 
         graph = nx.convert_node_labels_to_integers(self.graph)
 
-        labels = (occs[:,0]<occs[:,1]).astype(np.int32)
+        labels = (occs[:,0]>=occs[:,1]).astype(np.int32)
 
         # self.logger.info("Apply occupancy regularization with graph cut (λ={:.3g})...".format(binary_weight))
         self.logger.info("Apply occupancy regularization with graph cut...")
@@ -1201,7 +1207,7 @@ class PolyhedralComplex:
         gc.create_general_graph(len(graph.nodes), 2, energy_is_float=True)
         # data_cost = F.softmax(prediction, dim=-1)
 
-        scale = 4
+        scale = 400
 
         # data_cost = prediction
         data_cost = np.array(occs, dtype=dtype)*scale
@@ -1264,11 +1270,11 @@ class PolyhedralComplex:
         for i, l in enumerate(labels):
             gc.init_label_at_site(i, l)
 
-        self.logger.debug("Energy before GC (D + λ*S): {:.3g} + {:.3g}*{:.3g} = {:.3g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
+        self.logger.info("Energy before GC (D + λ*S): {:.4g} + {:.4g}*{:.4g} = {:.4g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
                                                             gc.compute_data_energy()+gc.compute_smooth_energy()))
 
         gc.expansion()
-        self.logger.debug("Energy after GC (D + λ*S): {:.3g} + {:.3g}*{:.3g} = {:.3g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
+        self.logger.info("Energy after GC (D + λ*S): {:.4g} + {:.4g}*{:.4g} = {:.4g}".format(gc.compute_data_energy(), binary_weight, gc.compute_smooth_energy()/binary_weight,
                                                             gc.compute_data_energy() + gc.compute_smooth_energy()))
 
         labels = gc.get_labels()
@@ -1290,16 +1296,18 @@ class PolyhedralComplex:
                 self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
                 raise ValueError
             occs = self.label_partition_with_mesh(mesh_file,n_test_points)
+            occs = occs/occs.shape[0]
         else:
             self.logger.error("{} is not a valid labelling type. Choose either 'pc', 'mesh' or 'load'.".format(mode))
             raise NotImplementedError
 
         if regularization is not None:
-            # occs = self.graph_cut(occs)
             # compute regularization weights
             occs = self._graph_cut(occs,regularization)
         else:
             occs = occs[:,0]>=occs[:,1]
+
+        # occs = np.invert(occs.astype(bool)).astype(int)
 
         assert len(occs) == len(self.graph.nodes), "Number of cccupancy labels and graph nodes is not the same."
         occs = dict(zip(self.graph.nodes, np.rint(occs).astype(int)))
@@ -1332,7 +1340,8 @@ class PolyhedralComplex:
         for id,cell in self.cells.items():
             # if id < 0:  continue # skip the bounding box cells
             bb = self.graph.nodes[id].get("bounding_box",0)
-            if bb:  continue # skip the bounding box cells
+            if bb:
+                continue # skip the bounding box cells
             # cell = self.cells.get(id)
             if self.debug_export:
                 out_path = os.path.join(self.debug_export,"final_cells")
@@ -1343,14 +1352,16 @@ class PolyhedralComplex:
             points_len.append(pts.shape[0])
 
 
-        # assert(isinstance(points[0].dtype,np.float32))
         pl=pdl(n_test_points)
         if pl.load_mesh(mesh_file):
             return 1
         occs = pl.label_cells(np.array(points_len),np.concatenate(points,axis=0))
 
-        occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
+        occs = np.array(occs)
+        # occs = np.hstack((occs,np.zeros(6))) # this is for the bounding box cells, which are the last 6 cells of the graph
         occs = np.array([occs,1-occs]).transpose()
+
+        occs = np.vstack((occs, [[0,10],[0,10],[0,10],[0,10],[0,10],[0,10]])) # this is for the bounding box cells, which are the last 6 cells of the graph
 
         # if self.debug_export:
 
@@ -1426,10 +1437,67 @@ class PolyhedralComplex:
             self.point_class_weights[67] = 2
             # self.point_class_weights[67] = 20
 
+
         def collect_node_votes(footprint=None, z_range=None):
 
-            if len(self.vg.classes):
-                make_point_class_weight()
+            occs = []
+
+            all_cell_points = []
+            all_cell_normals = []
+            for node in self.graph.nodes:
+
+                cell_verts = np.array(self.cells[node].vertices())
+                centroid = cell_verts.mean(axis=0)
+                # cell_verts = np.vstack((cell_verts,centroid))
+                n = 2 * len(self.vg.points) / len(self.cells)
+                # there is an error here
+                if self.graph.nodes[node].get("bounding_box", 0):
+                    occs.append([0, n])
+                else:
+                    inside_weight = 0;
+                    outside_weight = 0
+                    cell_points = []
+                    cell_normals = []
+                    for edge in self.graph.edges(node):
+                        edge = self.graph.edges[edge]
+                        pts = self.vg.points[edge["point_ids"]]
+                        if not len(pts):
+                            continue
+                        inside_vectors = centroid - pts
+                        normal_vectors = self.vg.normals[edge["point_ids"]]
+                        dp = (normal_vectors * inside_vectors).sum(axis=1)
+                        iweight = (dp < 0).astype(float)
+                        oweight = (dp > 0).astype(float)
+                        if len(self.vg.classes):
+                            class_weights = self.vg.classes[edge["point_ids"]]
+                            class_weights = self.point_class_weights[class_weights].astype(float)
+                            iweight *= class_weights
+                            oweight *= class_weights
+                        inside_weight += iweight.sum()
+                        outside_weight += oweight.sum()
+                        if self.debug_export:
+                            cell_points.append(pts)
+                            cell_normals.append(normal_vectors)
+
+                    # occupancy_dict[node] = (inside_weight,outside_weight)
+                    occs.append([inside_weight, outside_weight])
+
+
+            occs = np.array(occs) / (2 * len(self.vg.points))
+
+            if self.debug_export:
+                self.complexExporter.export_label_colored_cells(path=self.debug_export,
+                                                                graph=self.graph, cells=self.cells,
+                                                                occs=occs, type_colors=type_colors)
+
+
+            return occs
+
+
+
+        def collect_node_votes_with_semantics(footprint=None, z_range=None):
+
+            make_point_class_weight()
 
             occs = []
             # if footprint is not None:
@@ -1493,21 +1561,22 @@ class PolyhedralComplex:
                     # occupancy_dict[node] = (inside_weight,outside_weight)
                     occs.append([inside_weight, outside_weight])
 
-            if len(self.vg.classes):
-                occs = np.array(occs) / (2 * self.point_class_weights[self.vg.classes].sum())
-            else:
-                occs = np.array(occs) / (2 * len(self.vg.points))
+            occs = np.array(occs) / (2 * self.point_class_weights[self.vg.classes].sum())
 
             if self.debug_export:
                 self.complexExporter.export_label_colored_cells(path=self.debug_export,
                                                                 graph=self.graph, cells=self.cells,
                                                                 occs=occs, type_colors=type_colors)
-
-
             return occs
 
         collect_facet_points()
-        return collect_node_votes(footprint=footprint,z_range=z_range)
+
+        if footprint is not None:
+            occs = collect_node_votes_with_semantics(footprint=footprint,z_range=z_range)
+        else:
+            occs = collect_node_votes()
+
+        return occs
 
 
 
@@ -2366,7 +2435,7 @@ class PolyhedralComplex:
             self._init_partition()
 
         progress_bar = True if self.verbosity < 30 else False
-        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar))
+        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar), position=0, leave=True)
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
             pbar.update(self._compute_split(cell_id=child, insertion_order=insertion_order))
