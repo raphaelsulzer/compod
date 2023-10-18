@@ -241,12 +241,13 @@ class VertexGroup:
         """
         data = np.load(self.input_file)
 
+        type = np.float64
         # read the data and make the point groups
-        self.planes = data["group_parameters"].astype(np.float64)
+        self.planes = data["group_parameters"].astype(type)
         # TODO: check why there are planes with a distance less than discretization_distance?
         self.plane_colors = data["group_colors"]
-        self.points = data["points"].astype(np.float64)
-        self.normals = data["normals"].astype(np.float64)
+        self.points = data["points"].astype(type)
+        self.normals = data["normals"].astype(type)
         self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
         # self.classes = data.get("classes", None)
         # TODO: construct the polygons in here, so that I can use them later:

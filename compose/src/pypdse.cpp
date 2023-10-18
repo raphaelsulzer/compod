@@ -276,6 +276,19 @@ NB_MODULE(libPYPDSE, m) {
             .def("get_cdt_of_regions_with_holes", &pyPDSE<EPICK>::get_cdt_of_regions_with_holes, "points2d"_a, "constrained_edges"_a,
                  "Get the Constrained Delaunay Triangulation from 2D points and edges.")
             ;
+
+    nb::class_<pyPDSE<EPECK>>(m, "pdse_exact")
+            .def(nb::init<int,bool>(),"verbosity"_a = 0, "debug_export"_a = false)
+            .def("is_mesh_watertight", &pyPDSE<EPECK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
+            .def("is_mesh_intersection_free", &pyPDSE<EPECK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
+            .def("load_soup", &pyPDSE<EPECK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
+            .def("load_triangle_soup", &pyPDSE<EPECK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
+            .def("soup_to_mesh", &pyPDSE<EPECK>::soup_to_mesh, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
+            .def("save_mesh", &pyPDSE<EPECK>::save_mesh, "filename"_a, "Save a mesh.")
+            .def("get_cycles", &pyPDSE<EPECK>::get_cycles, "boundary_edges"_a ,"Get closed cycles from a set of boundary edges.")
+            .def("get_cdt_of_regions_with_holes", &pyPDSE<EPECK>::get_cdt_of_regions_with_holes, "points2d"_a, "constrained_edges"_a,
+                 "Get the Constrained Delaunay Triangulation from 2D points and edges.")
+            ;
 }
 
 

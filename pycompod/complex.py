@@ -464,7 +464,7 @@ class PolyhedralComplex:
 
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
-    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python"):
+    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python", exact=False):
 
         """
         Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
@@ -481,7 +481,7 @@ class PolyhedralComplex:
         os.makedirs(os.path.dirname(out_file),exist_ok=True)
 
         try:
-            from pycompose import pdse
+            from pycompose import pdse, pdse_exact
         except:
             self.logger.error(
                 "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
@@ -617,7 +617,10 @@ class PolyhedralComplex:
                 vertex_is_corner[vertex].add(polygon_to_region[i])
 
         # init a surface extractor
-        se=pdse(0)
+        if exact:
+            se = pdse_exact(0)
+        else:
+            se=pdse(0)
         region_facets = []
         point_normals = np.ones(shape=points.shape)
         face_colors = []
