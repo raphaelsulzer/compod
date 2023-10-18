@@ -4,7 +4,6 @@
 #include <cgal_typedefs.h>
 #include <boost_typedefs.h>
 
-//#include <cdt.h>
 #include <mesh.h>
 #include <random>
 #include <nanobind/ndarray.h>
