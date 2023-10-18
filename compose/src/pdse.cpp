@@ -6,7 +6,6 @@ using namespace std;
 
 namespace fs = boost::filesystem;
 
-
 PDSE::PDSE(const int verbosity, const bool debug_export){
 
     _debug_export = debug_export;
@@ -36,14 +35,14 @@ PDSE::PDSE(const int verbosity, const bool debug_export){
 
 
 
-
+template <typename Kernel>
 int PDSE::make_mesh(const string filename, string outfilename,
                     const bool triangulate, const bool stitch_borders){
 
     if(outfilename.empty())
         outfilename = filename.substr(filename.size() - 3) + "off";
 
-    auto smesh = SMesh(_verbosity,_debug_export);
+    auto smesh = SMesh<Kernel>(_verbosity,_debug_export);
     smesh.load_soup_from_npz(filename);
     smesh.soup_to_mesh(triangulate, stitch_borders);
 //    smesh.soup_to_mesh2(triangulate, stitch_borders);
@@ -54,7 +53,7 @@ int PDSE::make_mesh(const string filename, string outfilename,
 
 }
 
-
+template <typename Kernel>
 int PDSE::make_simplified_mesh(const string filename, string outfilename,
                     const bool triangulate,
                     const bool simplify_edges){
@@ -63,7 +62,7 @@ int PDSE::make_simplified_mesh(const string filename, string outfilename,
     if(outfilename.empty())
         outfilename = filename.substr(filename.size() - 3) + "off";
 
-    auto smesh = SMesh(_verbosity,_debug_export);
+    auto smesh = SMesh<Kernel>(_verbosity,_debug_export);
     smesh.load_soup_from_npz(filename);
 
 

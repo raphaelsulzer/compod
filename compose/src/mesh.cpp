@@ -79,7 +79,8 @@ int SMesh::save_mesh(const string filename, Mesh& outmesh){
 
 }
 
-int SMesh::save_mesh(const string filename){
+template <typename Kernel>
+int SMesh<Kernel>::save_mesh(const string filename){
 
     Mesh mesh;
     return save_mesh(filename,mesh);
@@ -156,13 +157,10 @@ int SMesh::soup_to_mesh_no_repair(){
     PMP::merge_duplicate_points_in_polygon_soup(_points, _polygons);
     PMP::merge_duplicate_polygons_in_polygon_soup(_points, _polygons);
 
-
-//    PMP::repair_polygon_soup(_points, _polygons);
     vector<Mesh::Vertex_index> duplicate_points;
     Visitor visitor(duplicate_points);
     PMP::orient_polygon_soup(_points, _polygons, CGAL::parameters::visitor(visitor));
 
-//    PMP::duplicate_non_manifold_edges_in_polygon_soup(_points,_polygons);
     PMP::polygon_soup_to_polygon_mesh(_points, _polygons, _mesh,
                                       PMP::parameters::polygon_to_face_map(ptf).point_to_vertex_map(ptv));
 
@@ -170,18 +168,9 @@ int SMesh::soup_to_mesh_no_repair(){
     _vcolor = _mesh.add_property_map<Mesh::Vertex_index, CGAL::Color>("v:color",CGAL::white()).first;
 
     for(auto vid : duplicate_points){
-//        _vertex_is_corner[vid] = true;
-//        _vcolor[vid] = CGAL::blue();
         _vertex_is_corner[_point_to_vertex[vid]] = true;
         _vcolor[_point_to_vertex[vid]] = CGAL::blue();
     }
-
-
-
-//    for(auto vert : _mesh.vertices()){
-//        if(PMP::is_non_manifold_vertex(vert,_mesh))
-//            cout << "found non maifold vertex" << endl;
-//    }
 
     for(auto fid : _mesh.faces()){
         auto pid = _polygon_to_face.find(fid)->first;
@@ -248,68 +237,6 @@ int SMesh::soup_to_mesh(const bool triangulate, const bool stitch_borders){
     return 0;
 
 }
-
-/// the include gives a warning, so I'll comment that part of the code. it is not working anyway.
-//#include <CGAL/Polygon_mesh_processing/remesh_planar_patches.h>
-
-//int SMesh::remesh_planar_patches(const int triangulate){
-
-//    if(!CGAL::is_triangle_mesh(_mesh))
-//        PMP::triangulate_faces(_mesh);
-
-//    _simplified_mesh.clear();
-
-//    PMP::remesh_planar_patches(_mesh,_simplified_mesh,PMP::parameters::do_not_triangulate_faces(!triangulate));
-
-//    return 0;
-
-//}
-
-//int SMesh::remesh_almost_planar_patches(const int triangulate){
-
-//    _logger->info("Input: ");
-//    _logger->info("Vertices: {}",_mesh.number_of_vertices());
-//    _logger->info("Edges: {}",_mesh.number_of_edges());
-//    _logger->info("Faces: {}",_mesh.number_of_faces());
-
-
-//    boost::associative_property_map<map<Mesh::Face_index, int>> ftr(_face_to_region);
-
-//    map<Mesh::Vertex_index,int> vertex_to_corner;
-//    boost::associative_property_map<map<Mesh::Vertex_index,int>> vtc(vertex_to_corner);
-
-
-//    int nb_regions = _region_to_polygons.size();
-
-//    map<Mesh::Edge_index,bool> edge_is_constrained;
-//    for(Mesh::Edge_index e : _mesh.edges())
-//        edge_is_constrained.insert(pair<Mesh::Edge_index,bool>(e, false));
-//    boost::associative_property_map<map<Mesh::Edge_index,bool>> eic(edge_is_constrained);
-
-//    //////// //////// //////// //////// //////// //////// //////// //////// //////// //////// ////////
-//    //////// nb_corners is always 0, so the whole thing doesn't work
-//    int nb_corners = PMP::detect_corners_of_regions(_mesh,ftr,nb_regions,vtc,PMP::parameters::maximum_angle(1).
-//                                   maximum_distance(1).edge_is_constrained_map(eic));
-//    //////// //////// //////// //////// //////// //////// //////// //////// //////// //////// ////////
-
-//    _simplified_mesh.clear();
-
-//    bool succes = PMP::remesh_almost_planar_patches(_mesh,_simplified_mesh,nb_regions,nb_corners,ftr,vtc,eic,PMP::parameters::do_not_triangulate_faces(!triangulate));
-
-//    if(succes){
-//        _logger->info("Simplification succeeded");
-//    }
-//    else{
-//        _logger->info("Simplification did not succeed");
-//    }
-
-//    _logger->info("Output: ");
-//    _logger->info("Vertices: {}",_simplified_mesh.number_of_vertices());
-//    _logger->info("Edges: {}",_simplified_mesh.number_of_edges());
-//    _logger->info("Faces: {}",_simplified_mesh.number_of_faces());
-
-//    return 0;
-//}
 
 void SMesh::_get_corner_vertices(){
 
