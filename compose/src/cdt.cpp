@@ -6,31 +6,32 @@
 #include <CGAL/Constrained_Delaunay_triangulation_2.h>
 #include <CGAL/Triangulation_face_base_with_info_2.h>
 
-SMesh_CDT::SMesh_CDT(Mesh& mesh){
+template <typename Kernel>
+SMesh_CDT<Kernel>::SMesh_CDT(Mesh& mesh){
     _mesh = mesh;
 }
 
 // Marking inside and outside domains of a polygon, from CGAL example: https://doc.cgal.org/latest/Triangulation_2/index.html#title30
 
-
-void SMesh_CDT::mark_domains(CDT& ct,
-             CDT::Face_handle start,
+template <typename Kernel>
+void SMesh_CDT<Kernel>::mark_domains(CDT& ct,
+             typename CDT::Face_handle start,
              int index,
-             std::list<CDT::Edge>& border )
+             std::list<typename CDT::Edge>& border )
 {
   if(start->info().nesting_level != -1){
     return;
   }
-  std::list<CDT::Face_handle> queue;
+  std::list<typename CDT::Face_handle> queue;
   queue.push_back(start);
   while(! queue.empty()){
-    CDT::Face_handle fh = queue.front();
+    typename CDT::Face_handle fh = queue.front();
     queue.pop_front();
     if(fh->info().nesting_level == -1){
       fh->info().nesting_level = index;
       for(int i = 0; i < 3; i++){
-        CDT::Edge e(fh,i);
-        CDT::Face_handle n = fh->neighbor(i);
+        typename CDT::Edge e(fh,i);
+        typename CDT::Face_handle n = fh->neighbor(i);
         if(n->info().nesting_level == -1){
           if(ct.is_constrained(e)) border.push_back(e);
           else queue.push_back(n);
@@ -45,28 +46,30 @@ void SMesh_CDT::mark_domains(CDT& ct,
 //level of 0. Then we recursively consider the non-explored facets incident
 //to constrained edges bounding the former set and increase the nesting level by 1.
 //Facets in the domain are those with an odd nesting level.
-void SMesh_CDT::mark_domains(CDT& cdt)
+template <typename Kernel>
+void SMesh_CDT<Kernel>::mark_domains(CDT& cdt)
 {
-  for(CDT::Face_handle f : cdt.all_face_handles()){
+  for(typename CDT::Face_handle f : cdt.all_face_handles()){
     f->info().nesting_level = -1;
   }
-  std::list<CDT::Edge> border;
+  std::list<typename CDT::Edge> border;
   mark_domains(cdt, cdt.infinite_face(), 0, border);
   while(! border.empty()){
-    CDT::Edge e = border.front();
+    typename CDT::Edge e = border.front();
     border.pop_front();
-    CDT::Face_handle n = e.first->neighbor(e.second);
+    typename CDT::Face_handle n = e.first->neighbor(e.second);
     if(n->info().nesting_level == -1){
       mark_domains(cdt, n, e.first->info().nesting_level+1, border);
     }
   }
 }
 
-Mesh SMesh_CDT::_get_boundary_cdt_of_region_mesh(Plane& plane, vector<vector<Mesh::vertex_index>>& region_corners){
+template <typename Kernel>
+typename SMesh_CDT<Kernel>::Mesh SMesh_CDT<Kernel>::_get_boundary_cdt_of_region_mesh(Plane<Kernel>& plane, vector<vector<typename Mesh::vertex_index>>& region_corners){
 
     // make a 2D constrained delaunay triangulation of the region
     CDT cdt;
-    map<CDT::Vertex_handle,Mesh::Vertex_index> two_d_to_three_d;
+    map<typename CDT::Vertex_handle,typename Mesh::Vertex_index> two_d_to_three_d;
     for(auto patch : region_corners){
 
         // insert points
@@ -83,12 +86,12 @@ Mesh SMesh_CDT::_get_boundary_cdt_of_region_mesh(Plane& plane, vector<vector<Mes
 
     // get back the 3D mesh with a subset of the original vertices
     Mesh region_mesh;
-    CDT::Finite_faces_iterator fit;
+    typename CDT::Finite_faces_iterator fit;
     for(fit = cdt.finite_faces_begin(); fit != cdt.finite_faces_end(); fit++){
         if( !fit->info().in_domain() )
             continue;
-        vector<Mesh::vertex_index> polygon;
-        Mesh::Vertex_index vid;
+        vector<typename Mesh::vertex_index> polygon;
+        typename Mesh::Vertex_index vid;
         auto face = *fit;
         for(size_t i = 0; i < 3; i++){
             // check if there are vertices created by the CDT, can sometimes happen

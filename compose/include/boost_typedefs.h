@@ -9,8 +9,8 @@ using namespace std;
 
 #include <cgal_typedefs.h>
 
-//using Graph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
-////namespace boost { void renumber_vertex_indices(Graph const&) {} }
-//namespace boost { void renumber_vertex_indices(Graph const&); }
+using Graph = boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS>;
+//namespace boost { void renumber_vertex_indices(Graph const&) {} }
+namespace boost { void renumber_vertex_indices(Graph const&); }
 //typedef boost::graph_traits<Graph>::vertex_descriptor BoostVertex;
 //typedef map<Mesh::Vertex_index, BoostVertex> VertexMap;

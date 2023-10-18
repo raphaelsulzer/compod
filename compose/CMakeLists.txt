@@ -52,40 +52,51 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
 ###########################################
 ############ libSurfaceSimplifier ############
 ###########################################
-add_library(SurfaceSimplifier STATIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/pdse.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/cdt.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/plane.cpp"
-)
-target_link_libraries(SurfaceSimplifier ${Boost_LIBRARIES})
-target_link_libraries(SurfaceSimplifier ${CGAL_LIBRARIES})
-target_link_libraries(SurfaceSimplifier ZLIB::ZLIB xtensor xtensor-io)
-target_link_libraries(SurfaceSimplifier spdlog::spdlog)
+#add_library(SurfaceSimplifier STATIC
+#    "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh.cpp"
+#    "${CMAKE_CURRENT_SOURCE_DIR}/src/cdt.cpp"
+#    "${CMAKE_CURRENT_SOURCE_DIR}/src/plane.cpp"
+#)
+#target_link_libraries(SurfaceSimplifier ${Boost_LIBRARIES})
+#target_link_libraries(SurfaceSimplifier ${CGAL_LIBRARIES})
+#target_link_libraries(SurfaceSimplifier ZLIB::ZLIB xtensor xtensor-io)
+#target_link_libraries(SurfaceSimplifier spdlog::spdlog)
 
-if(NOT SKBUILD)
-    add_executable(SurfaceSimplifierExe "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-    target_link_libraries(SurfaceSimplifierExe SurfaceSimplifier)
-    target_link_libraries(SurfaceSimplifierExe ${Boost_LIBRARIES})
-    target_link_libraries(SurfaceSimplifierExe ${CGAL_LIBRARIES})
-    target_link_libraries(SurfaceSimplifierExe ZLIB::ZLIB xtensor xtensor-io)
-    target_link_libraries(SurfaceSimplifierExe spdlog::spdlog)
-    target_link_libraries(SurfaceSimplifierExe)
-endif()
+#if(NOT SKBUILD)
+#    add_executable(SurfaceSimplifierExe "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+#    target_link_libraries(SurfaceSimplifierExe SurfaceSimplifier)
+#    target_link_libraries(SurfaceSimplifierExe ${Boost_LIBRARIES})
+#    target_link_libraries(SurfaceSimplifierExe ${CGAL_LIBRARIES})
+#    target_link_libraries(SurfaceSimplifierExe ZLIB::ZLIB xtensor xtensor-io)
+#    target_link_libraries(SurfaceSimplifierExe spdlog::spdlog)
+#    target_link_libraries(SurfaceSimplifierExe)
+#endif()
 
 ##########################################
 ############# python bindings ############
 ##########################################
+#nanobind_add_module(libPYPDSE "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdse.cpp")
+#if(SKBUILD)
+#    include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+#    target_link_libraries(libPYPDSE PUBLIC SurfaceSimplifier spdlog::spdlog)
+#    install(TARGETS libPYPDSE LIBRARY DESTINATION pycompose)
+#endif()
+
+#nanobind_add_module(libPYPDL "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdl.cpp")
+#if(SKBUILD)
+#    include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+#    target_link_libraries(libPYPDL PUBLIC ${CGAL_LIBRARIES} spdlog::spdlog)
+#    install(TARGETS libPYPDL LIBRARY DESTINATION pycompose)
+#endif()
+
+
 nanobind_add_module(libPYPDSE "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdse.cpp")
-if(SKBUILD)
-    include_directories("${CMAKE_CURRENT_BINARY_DIR}")
-    target_link_libraries(libPYPDSE PUBLIC SurfaceSimplifier spdlog::spdlog)
-    install(TARGETS libPYPDSE LIBRARY DESTINATION pycompose)
-endif()
+include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+#target_link_libraries(libPYPDSE PUBLIC SurfaceSimplifier spdlog::spdlog)
+target_link_libraries(libPYPDSE PUBLIC spdlog::spdlog)
+install(TARGETS libPYPDSE LIBRARY DESTINATION pycompose)
 
 nanobind_add_module(libPYPDL "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdl.cpp")
-if(SKBUILD)
-    include_directories("${CMAKE_CURRENT_BINARY_DIR}")
-    target_link_libraries(libPYPDL PUBLIC ${CGAL_LIBRARIES} spdlog::spdlog)
-    install(TARGETS libPYPDL LIBRARY DESTINATION pycompose)
-endif()
+include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(libPYPDL PUBLIC ${CGAL_LIBRARIES} spdlog::spdlog)
+install(TARGETS libPYPDL LIBRARY DESTINATION pycompose)
