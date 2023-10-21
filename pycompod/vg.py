@@ -1,11 +1,12 @@
-import logging
-import os, sys
-from pathlib import Path
+import logging, os, sys, copy, trimesh
+import math
+
 import numpy as np
-import trimesh
 from collections import defaultdict
 from sage.all import polytopes, QQ, Polyhedron
-import copy
+from sklearn.cluster import DBSCAN, HDBSCAN, AgglomerativeClustering
+from sklearn.metrics.pairwise import cosine_similarity, cosine_distances, euclidean_distances
+
 from .logger import make_logger
 from .plane import PyPlane, ProjectedConvexHull
 from .export_plane import PlaneExporter
@@ -15,7 +16,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, input_file, prioritise = None, merge_duplicate_planes = True,
+    def __init__(self, input_file, prioritise = None, merge_duplicate_planes = True, epsilon=None, alpha = 1,
                  points_type="inliers", total_sample_count=100000,
                  recolor=False, verbosity=logging.WARN):
         """
@@ -37,6 +38,8 @@ class VertexGroup:
         self.input_file = input_file
         self.merge_duplicate_planes = merge_duplicate_planes
         self.prioritise = prioritise
+        self.epsilon = epsilon
+        self.alpha = alpha
         self.total_sample_count = total_sample_count
         self.points_type = points_type
         self.recolor = recolor
@@ -234,6 +237,43 @@ class VertexGroup:
             current+=n
         return groups
 
+    def cluster_planes(self):
+
+        self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon,self.alpha))
+
+        # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+        def custom_distance(x, y):
+            epsilon_cosine = self.alpha
+            epsilon_euclidean = self.epsilon
+
+            cosine_dist = np.abs(cosine_distances(x[:3].reshape(1, -1), y[:3].reshape(1, -1))-1)
+            cosine_dist = np.clip(cosine_dist,0,1)
+            cosine_dist = np.arccos(cosine_dist) * 180/math.pi
+            cosine_dist = cosine_dist.item()
+            euclidean_dist = np.abs(x[3]-y[3])
+            scaled_cosine_dist = cosine_dist / epsilon_cosine
+            scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
+            # return np.sqrt(np.square(scaled_cosine_dist) + np.square(scaled_euclidean_dist))
+            return scaled_cosine_dist+scaled_euclidean_dist
+
+        min_samples = 1
+        # clusters_db = DBSCAN(n_jobs=-1, eps=2.0, min_samples=min_samples, metric=custom_distance,
+        #                 metric_params={'epsilon_cosine': epsilon_cosine, 'epsilon_euclidean': epsilon_euclidean}).fit(self.planes)
+        clusters = DBSCAN(n_jobs=-1, eps=2.0, min_samples=min_samples, metric=custom_distance).fit(self.planes)
+
+        ## AgglomerativeClustering is probably cleaner because one can specify a maximum distance parameter, however it is 3x slower, most likely because it is not parallelized
+        # from sklearn.metrics import pairwise_distances
+        # def custom_affinity(X):
+        #     return pairwise_distances(X, metric=custom_distance)
+        # clusters = AgglomerativeClustering(n_clusters=None, distance_threshold=2.0, metric=custom_affinity, linkage="complete").fit(self.planes)
+
+        # resort so that cluster id = input plane id
+        cluster_dict = {old_label: new_label for new_label, old_label in enumerate(clusters.labels_)}
+        labels_ = np.array([cluster_dict[label] for label in clusters.labels_])
+
+        self.planes = self.planes[labels_]
+
+
     def _process_npz(self):
         """
         Load vertex groups and planes from npz file.
@@ -244,16 +284,17 @@ class VertexGroup:
         type = np.float64
         # read the data and make the point groups
         self.planes = data["group_parameters"].astype(type)
-        # TODO: check why there are planes with a distance less than discretization_distance?
         self.plane_colors = data["group_colors"]
         self.points = data["points"].astype(type)
         self.normals = data["normals"].astype(type)
         self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
-        # self.classes = data.get("classes", None)
-        # TODO: construct the polygons in here, so that I can use them later:
-        # in the merge_duplicate planes function I need to merge the polygon area by taking the sum
-        # in the loop below, I need to use the convex hull, so use it for that as well
         self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
+
+        self.logger.info(
+            "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
+        if self.epsilon is not None:
+            self.cluster_planes()
+
 
         self.halfspaces = []
         self.polygons = []
@@ -315,7 +356,7 @@ class VertexGroup:
                 n_points+=sampled_points.shape[0]
             self.points = np.concatenate(self.points)
         elif self.points_type == "inliers":
-            self.logger.info("Use {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0],len(self.planes)))
+            pass
         else:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             raise NotImplementedError

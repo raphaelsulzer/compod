@@ -488,7 +488,6 @@ class PolyhedralComplex:
             raise ModuleNotFoundError
 
         def _get_region_borders(region):
-
             """
             Get all border edges of region.
 
@@ -519,12 +518,6 @@ class PolyhedralComplex:
             :param facets:
             :return:
             """
-
-            # a = points[facets[0][0]]
-            # b = points[facets[0][1]]
-            # c = points[facets[0][2]]
-
-            # cross = np.cross(a-b,c-b)
 
             i = 0
             cross = 0
@@ -663,7 +656,7 @@ class PolyhedralComplex:
                         for cycle in this_region_facets:
                             t.append(cycle[:-1])
                         this_region_facets = t
-            else:
+            else: # keep the polygons that do not have a hole untriangulated
                 this_region_facets = [this_region_facets[0][:-1]]
 
             ## change orientation of the region if necessary
@@ -734,7 +727,7 @@ class PolyhedralComplex:
                         'python_exact': Extracts a polygon mesh. Works with an exact number type (SAGE rational). It guarantees to extract a watertight surface. The surface may have non-manifold edges. The extraction is slow due to the use of exact numbers.
                         'python': Extracts a polygon mesh. Similar to 'python_exact', but converts from exact to floating point numbers before surface assembly. This speeds up the extraction a lot but may lead to non-watertightness in rare cases.
                         'trimesh': Extracts a triangle mesh. Similar to 'python', but uses trimesh for assembling and storing the mesh.
-                        'cgal': Can extract a polygon or triangle mesh. It is the fastest backend. Because the CGAL polygon mesh does not allow non-manifold edges, they are repair. This may lead to non-watertightness in some cases, especially if the mesh is not triangulated.
+                        'cgal': Can extract a polygon or triangle mesh. It is the fastest backend. Because the CGAL polygon mesh does not allow non-manifold edges, they are repaired. This may lead to non-watertightness in some cases, especially if the mesh is not triangulated.
 
         :param triangulate: Flag that controls if mesh should be triangulated or not. Only taken into account for backend == 'cgal'.
 
