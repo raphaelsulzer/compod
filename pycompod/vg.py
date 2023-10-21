@@ -237,11 +237,13 @@ class VertexGroup:
             current+=n
         return groups
 
-    def cluster_planes(self):
+    @profile
+    def _cluster_planes(self):
 
         self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon,self.alpha))
 
         # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+        @profile
         def custom_distance(x, y):
             epsilon_cosine = self.alpha
             epsilon_euclidean = self.epsilon
@@ -273,6 +275,16 @@ class VertexGroup:
 
         self.planes = self.planes[labels_]
 
+    def _orient_planes(self):
+
+        for i,pl in enumerate(self.planes):
+
+            point_normals = self.normals[self.groups[i]]
+            plane_normal = np.mean(point_normals,axis=0)
+            if np.dot(pl[:3],plane_normal) < 0:
+                self.planes[i] = -pl
+
+
 
     def _process_npz(self):
         """
@@ -290,10 +302,14 @@ class VertexGroup:
         self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
         self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
 
+
         self.logger.info(
             "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
-        if self.epsilon is not None:
-            self.cluster_planes()
+        # if self.epsilon is not None:
+        #     self._cluster_planes()
+
+        # orient planes according to the mean normal orientation of it's input points
+        self._orient_planes()
 
 
         self.halfspaces = []
@@ -337,6 +353,8 @@ class VertexGroup:
         self.polygons = np.array(self.polygons)
         self.polygon_areas = np.array(self.polygon_areas)
 
+
+
         if self.points_type == "samples":
             self.logger.info("Sample a total of {} points on {} polygons".format(self.total_sample_count,len(self.polygons)))
             ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
@@ -373,7 +391,7 @@ class VertexGroup:
         pe = PlaneExporter()
         pt_file = os.path.splitext(self.input_file)[0]+"_samples.ply"
         plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
-        pe.save_points_and_planes([pt_file,plane_file],points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
+        pe.save_points_and_planes(point_filename=pt_file,plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
           
         if self.prioritise is not None:
             order = self._prioritise_planes(self.prioritise)
@@ -400,9 +418,9 @@ class VertexGroup:
 
         ## export planes and samples
         pe = PlaneExporter()
-        pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
+        # pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
         plane_file =  os.path.splitext(self.input_file)[0]+'_merged.ply'
-        pe.save_points_and_planes([pt_file,plane_file],points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
+        pe.save_points_and_planes(plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
 
         ## fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
         ## if torch.nested.nested_tensor ever supports broadcasting and dot products, the code could be simplified a lot.

@@ -24,6 +24,8 @@ from shapely.geometry import Polygon
 from shapely import contains_xy
 from multiprocessing import Process
 
+import open3d as o3d
+
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
     import gco # pip install gco-wrapper
@@ -487,7 +489,7 @@ class PolyhedralComplex:
                 "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
             raise ModuleNotFoundError
 
-        def _get_region_borders(region):
+        def _get_region_borders(all_polygons,this_region_polygons):
             """
             Get all border edges of region.
 
@@ -495,13 +497,10 @@ class PolyhedralComplex:
             :return: All unsorted edges of a region.
             """
 
-            rid = region[0]
-            region = region[1]
-
             region_facets = []
             region_edges = []
-            for pid in region:
-                face = facets[pid]
+            for pid in this_region_polygons:
+                face = all_polygons[pid]
                 region_facets.append(face)
 
                 nf = len(face)
@@ -512,39 +511,30 @@ class PolyhedralComplex:
             unique, inverse, count = np.unique(np.sort(region_edges),return_inverse=True,return_counts=True,axis=0)
             return np.array(region_edges)[(count==1)[inverse]]
 
-        def _orient_facets(facets, region):
+        def _orient_facets(points, facet, plane_id):
             """
             Orient facets by checking if the current orientation is the same as the one of the region.
             :param facets:
             :return:
             """
 
-            i = 0
-            cross = 0
-            while np.sum(cross * cross) == 0:
-                try:
-                    a = points[facets[0][i+1]] - points[facets[0][i]]
-                    # a = a/a.norm()
-                    b = points[facets[0][i+2]] - points[facets[0][i]]
-                    # b = b/b.norm()
-                    cross = np.cross(a,b)
-                    i += 1
-                except:
-                    return facets
+            # to make the normal computation more robust we take the mean normal around the polygon
+            # inspired by "A Simple Method for Correcting Facet Orientations in Polygon Meshes Based on Ray Casting"
+            num_points = len(points[facet])
+            cross = np.zeros(3)
+            for i in range(num_points):
+                v0, v1 = points[facet[i]], points[facet[(i + 1) % num_points]]
+                cross[0] += (v0[1] - v1[1]) * (v0[2] + v1[2])
+                cross[1] += (v0[2] - v1[2]) * (v0[0] + v1[0])
+                cross[2] += (v0[0] - v1[0]) * (v0[1] + v1[1])
 
-            normal = np.array(region_normals[region[0]])
-            for facet in this_region_facets:
-                for vertex in facet:
-                    point_normals[vertex] = normal
+            cross = cross/np.linalg.norm(cross)
 
+            normal = np.array(self.vg.input_planes[plane_id,:3])
             if np.dot(cross,normal) < 0:
-                t = []
-                for i,face in enumerate(facets):
-                    t.append(np.flip(face))
-                return t
+                return np.flip(facet),cross,np.array([1,0,0])
             else:
-                return facets
-
+                return facet,cross,np.array([0,1,0])
 
         if not self.polygons_constructed:
             self.construct_polygons()
@@ -569,22 +559,11 @@ class PolyhedralComplex:
                 plane = self.vg.input_planes[plane_id]
                 correct_order = self._sort_vertex_indices_by_angle_exact(intersection_points,plane)
 
-                assert(len(intersection_points)==len(correct_order))
                 intersection_points = intersection_points[correct_order]
-
-                ## orient polygon
-                outside = self.cells.get(e0).center() if c1["occupancy"] else self.cells.get(e1).center()
-                flip, normal = self._orient_polygon_exact(intersection_points,outside,return_orientation=True)
-                if flip:
-                    intersection_points = np.flip(intersection_points, axis=0)
-                    normal = -normal
-                region_normals[plane_id] = normal
-
                 polygons.append(intersection_points.astype(np.float64))
 
                 # region_to_polygons
                 region_to_polygons[plane_id].append(npolygons)
-
                 # polygon_to_region
                 polygon_to_region.append(plane_id)
 
@@ -609,17 +588,19 @@ class PolyhedralComplex:
             for vertex in face:
                 vertex_is_corner[vertex].add(polygon_to_region[i])
 
-        # init a surface extractor
+        ## init a surface extractor
         if exact:
             se = pdse_exact(0)
         else:
             se=pdse(0)
         region_facets = []
-        point_normals = np.ones(shape=points.shape)
+        # point_normals = np.ones(shape=points.shape)
         face_colors = []
+        ### get all the polygons
+        facet_to_plane_id = []
         for region in region_to_polygons.items():
             this_region_facets = []
-            boundary = _get_region_borders(region)
+            boundary = _get_region_borders(facets,region[1])
 
             g = nx.Graph(boundary.tolist())
             cycles = nx.cycle_basis(g)
@@ -660,7 +641,9 @@ class PolyhedralComplex:
                 this_region_facets = [this_region_facets[0][:-1]]
 
             ## change orientation of the region if necessary
-            this_region_facets = _orient_facets(this_region_facets, region)
+            # this_region_facets = _orient_facets(this_region_facets, region[0])
+            for f in this_region_facets:
+                facet_to_plane_id.append(region[0])
             region_facets += this_region_facets
             face_colors.append(np.repeat(self.vg.plane_colors[region[0],np.newaxis],len(this_region_facets),axis=0))
 
@@ -670,17 +653,24 @@ class PolyhedralComplex:
         if simplify_edges:
             ## remove unreferenced vertices and reindex
             points = points[vertex_is_corner_array>0]
-            point_normals = point_normals[vertex_is_corner_array>0]
+            # point_normals = point_normals[vertex_is_corner_array>0]
             vertex_is_corner_array[vertex_is_corner_array>0] = np.arange(vertex_is_corner_array.sum())
             t = []
             for facet in region_facets:
                 t.append(vertex_is_corner_array[np.array(facet)])
             region_facets = t
 
+        ## reorient facets with plane normal, do it here because with simplified points it is probably more robust, and certainly faster
+        t = []
+        for i,f in enumerate(region_facets):
+            facet,_,_ = _orient_facets(points,f,facet_to_plane_id[i])
+            t.append(facet)
+        region_facets=t
+
         if(os.path.splitext(out_file)[1] == ".ply"):
             self.logger.warning(
                 ".ply files do not display the simplified mesh correctly in Meshlab! It is displayed correctly in Blender and "
-                                ".obj and .off files of the exact same mesh are also displayed correctly in Meshlab.")
+                                ".obj and .off files of the same mesh are also displayed correctly in Meshlab.")
         if not triangulate:
             self.logger.warning(
                 "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need the faces to be consistently oriented.")

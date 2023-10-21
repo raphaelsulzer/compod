@@ -147,7 +147,7 @@ class PlaneExporter:
         self.save_points_and_planes(filenames,planes_array["points"],planes_array["normals"],groups,planes_array["group_parameters"],planes_array["colors"])
 
 
-    def save_points_and_planes(self,filenames,points=None,normals=None,groups=None,planes=None,colors=None):
+    def save_points_and_planes(self,plane_filename=None,point_filename=None,points=None,normals=None,groups=None,planes=None,colors=None):
 
         """this writes all planes to a ply file"""
 
@@ -183,73 +183,74 @@ class PlaneExporter:
 
         all_hull_points = np.concatenate(all_hull_points)
 
-        ### points
-        f = open(filenames[0],"w")
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("element vertex {}\n".format(pcount))
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        if normals is not None:
-            f.write("property float nx\n")
-            f.write("property float ny\n")
-            f.write("property float nz\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write("end_header\n")
+        if point_filename is not None:
+            ### points
+            f = open(point_filename,"w")
+            f.write("ply\n")
+            f.write("format ascii 1.0\n")
+            f.write("element vertex {}\n".format(pcount))
+            f.write("property float x\n")
+            f.write("property float y\n")
+            f.write("property float z\n")
+            if normals is not None:
+                f.write("property float nx\n")
+                f.write("property float ny\n")
+                f.write("property float nz\n")
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+            f.write("end_header\n")
 
-        if normals is not None:
-            for i,group in enumerate(groups):
-                col = colors[i]
-                pts = points[group]
-                norms = normals[group]
-                for i,pt in enumerate(pts):
-                    norm = norms[i]
-                    f.write("{:.6} {:.6} {:.6} {:.6} {:.6} {:.6} {} {} {}\n".format(pt[0],pt[1],pt[2],norm[0],norm[1],norm[2],col[0],col[1],col[2]))
-        else:
-            for i,group in enumerate(groups):
-                col = colors[i]
-                pts = points[group]
-                for pt in pts:
-                    f.write("{:.6} {:.6} {:.6} {} {} {}\n".format(pt[0],pt[1],pt[2],col[0],col[1],col[2]))
+            if normals is not None:
+                for i,group in enumerate(groups):
+                    col = colors[i]
+                    pts = points[group]
+                    norms = normals[group]
+                    for i,pt in enumerate(pts):
+                        norm = norms[i]
+                        f.write("{:.6} {:.6} {:.6} {:.6} {:.6} {:.6} {} {} {}\n".format(pt[0],pt[1],pt[2],norm[0],norm[1],norm[2],col[0],col[1],col[2]))
+            else:
+                for i,group in enumerate(groups):
+                    col = colors[i]
+                    pts = points[group]
+                    for pt in pts:
+                        f.write("{:.6} {:.6} {:.6} {} {} {}\n".format(pt[0],pt[1],pt[2],col[0],col[1],col[2]))
 
-        f.close()
+            f.close()
 
+        if plane_filename is not None:
+            ### planes
+            f = open(plane_filename,"w")
+            f.write("ply\n")
+            f.write("format ascii 1.0\n")
+            f.write("element vertex {}\n".format(all_hull_points.shape[0]))
+            f.write("property float x\n")
+            f.write("property float y\n")
+            f.write("property float z\n")
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+            f.write("element face {}\n".format(planes.shape[0]))
+            f.write("property list uchar int vertex_indices\n")
+            f.write("property uchar red\n")
+            f.write("property uchar green\n")
+            f.write("property uchar blue\n")
+            f.write("end_header\n")
 
-        ### planes
-        f = open(filenames[1],"w")
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("element vertex {}\n".format(all_hull_points.shape[0]))
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write("element face {}\n".format(planes.shape[0]))
-        f.write("property list uchar int vertex_indices\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write("end_header\n")
+            for i,p in enumerate(all_hull_points):
+                f.write("{:.6} {:.6} {:.6} {} {} {}\n".format(p[0],p[1],p[2],pcolors[i][0],pcolors[i][1],pcolors[i][2]))
 
-        for i,p in enumerate(all_hull_points):
-            f.write("{:.6} {:.6} {:.6} {} {} {}\n".format(p[0],p[1],p[2],pcolors[i][0],pcolors[i][1],pcolors[i][2]))
+            for i,plane in enumerate(all_hull_verts):
+                f.write(str(plane.shape[0]))
+                f.write(" ")
+                for id in plane:
+                    f.write(str(id)+" ")
 
-        for i,plane in enumerate(all_hull_verts):
-            f.write(str(plane.shape[0]))
-            f.write(" ")
-            for id in plane:
-                f.write(str(id)+" ")
+                c = colors[i]
+                f.write("{} ".format(c[0]))
+                f.write("{} ".format(c[1]))
+                f.write("{}\n".format(c[2]))
 
-            c = colors[i]
-            f.write("{} ".format(c[0]))
-            f.write("{} ".format(c[1]))
-            f.write("{}\n".format(c[2]))
-
-        f.close()
+            f.close()
 
 
