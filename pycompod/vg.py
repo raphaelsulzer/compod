@@ -237,37 +237,87 @@ class VertexGroup:
             current+=n
         return groups
 
-    @profile
+    # def _cluster_planes(self):
+    #
+    #     def acos(x):
+    #         # range is -1 to 1 !!
+    #         return (-0.69813170079773212 * x * x - 0.87266462599716477) * x + 1.5707963267948966
+    #
+    #     self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon,self.alpha))
+    #
+    #     ### orient planes to a corner, important to run this before cluster_planes() so that planes with the same normal but d = -d are not clustered
+    #     self._orient_planes(to_corner=True)
+    #
+    #     epsilon_cosine = self.alpha
+    #     epsilon_euclidean = self.epsilon
+    #
+    #     # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+    #     def custom_distance(x, y):
+    #
+    #         # cosine_dist = np.abs(cosine_distances(x[:3].reshape(1, -1), y[:3].reshape(1, -1))-1)
+    #         # cosine_dist = np.clip(cosine_dist,0,1)
+    #         # cosine_dist = np.arccos(cosine_dist) * 180/math.pi
+    #         # cosine_dist = cosine_dist.item()
+    #         # cosine_dist = 1-np.dot(x[:3],y[:3])
+    #         cosine_dist = np.dot(x[:3],y[:3])
+    #         # cosine_dist = np.abs(cosine_distances(x[:3].reshape(1, -1), y[:3].reshape(1, -1)))
+    #         euclidean_dist = np.abs(x[3]-y[3])
+    #         # scaled_cosine_dist = 100000*cosine_dist
+    #         scaled_cosine_dist = acos(cosine_dist)*180/math.pi / epsilon_cosine
+    #         scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
+    #         # return np.sqrt(np.square(scaled_cosine_dist) + np.square(scaled_euclidean_dist))
+    #         return scaled_cosine_dist+scaled_euclidean_dist
+    #
+    #     # clusters = DBSCAN(n_jobs=-1, eps=2.0, min_samples=1, metric=custom_distance).fit(self.planes)
+    #
+    #     ## AgglomerativeClustering is probably cleaner because one can specify a maximum distance parameter, however it is 3x slower, most likely because it is not parallelized
+    #     from sklearn.metrics import pairwise_distances
+    #     def custom_affinity(X):
+    #         return pairwise_distances(X, metric=custom_distance)
+    #     clusters = AgglomerativeClustering(n_clusters=None, distance_threshold=0.99, metric=custom_affinity, linkage="single").fit(self.planes)
+    #
+    #     # resort so that cluster id = input plane id
+    #     cluster_dict = {old_label: new_label for new_label, old_label in enumerate(clusters.labels_)}
+    #     labels_ = np.array([cluster_dict[label] for label in clusters.labels_])
+    #
+    #     self.planes = self.planes[labels_]
+    #
+
     def _cluster_planes(self):
+
+        def acos(x):
+            # range is -1 to 1 !!
+            return (-0.69813170079773212 * x * x - 0.87266462599716477) * x + 1.5707963267948966
 
         self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon,self.alpha))
 
-        # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
-        @profile
-        def custom_distance(x, y):
-            epsilon_cosine = self.alpha
-            epsilon_euclidean = self.epsilon
+        ### orient planes to a corner, important to run this before cluster_planes() so that planes with the same normal but d = -d are not clustered
+        self._orient_planes(to_corner=True)
 
-            cosine_dist = np.abs(cosine_distances(x[:3].reshape(1, -1), y[:3].reshape(1, -1))-1)
-            cosine_dist = np.clip(cosine_dist,0,1)
-            cosine_dist = np.arccos(cosine_dist) * 180/math.pi
-            cosine_dist = cosine_dist.item()
-            euclidean_dist = np.abs(x[3]-y[3])
-            scaled_cosine_dist = cosine_dist / epsilon_cosine
+        epsilon_cosine = self.alpha
+        epsilon_euclidean = self.epsilon
+
+        # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+        def custom_distance(x, y):
+
+            dist1 = np.abs(np.dot(x[4:],y[:3])+y[3])
+            dist2 = np.abs(np.dot(y[4:],x[:3])+x[3])
+            euclidean_dist = (dist1+dist2)/2
+
+            cosine_dist = np.dot(x[:3],y[:3])
+            scaled_cosine_dist = acos(cosine_dist)*180/math.pi / epsilon_cosine
             scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
-            # return np.sqrt(np.square(scaled_cosine_dist) + np.square(scaled_euclidean_dist))
             return scaled_cosine_dist+scaled_euclidean_dist
 
-        min_samples = 1
-        # clusters_db = DBSCAN(n_jobs=-1, eps=2.0, min_samples=min_samples, metric=custom_distance,
-        #                 metric_params={'epsilon_cosine': epsilon_cosine, 'epsilon_euclidean': epsilon_euclidean}).fit(self.planes)
-        clusters = DBSCAN(n_jobs=-1, eps=2.0, min_samples=min_samples, metric=custom_distance).fit(self.planes)
+        self.plane_centroids = []
+        for gr in self.groups:
+            pts = self.points[gr]
+            self.plane_centroids.append(pts.mean(axis=0))
+        self.plane_centroids = np.array(self.plane_centroids)
+        self.features = np.hstack((self.planes,self.plane_centroids))
 
-        ## AgglomerativeClustering is probably cleaner because one can specify a maximum distance parameter, however it is 3x slower, most likely because it is not parallelized
-        # from sklearn.metrics import pairwise_distances
-        # def custom_affinity(X):
-        #     return pairwise_distances(X, metric=custom_distance)
-        # clusters = AgglomerativeClustering(n_clusters=None, distance_threshold=2.0, metric=custom_affinity, linkage="complete").fit(self.planes)
+        clusters = DBSCAN(n_jobs=-1, eps=0.99, min_samples=1, metric=custom_distance).fit(self.features)
+
 
         # resort so that cluster id = input plane id
         cluster_dict = {old_label: new_label for new_label, old_label in enumerate(clusters.labels_)}
@@ -275,14 +325,21 @@ class VertexGroup:
 
         self.planes = self.planes[labels_]
 
-    def _orient_planes(self):
+    def _orient_planes(self,to_corner=False):
 
-        for i,pl in enumerate(self.planes):
+        if to_corner:
+            corner = self.points.max(axis=0)
+            for i, pl in enumerate(self.planes):
+                if np.dot(pl[:3], corner) < 0:
+                    self.planes[i] = -pl
 
-            point_normals = self.normals[self.groups[i]]
-            plane_normal = np.mean(point_normals,axis=0)
-            if np.dot(pl[:3],plane_normal) < 0:
-                self.planes[i] = -pl
+        else:
+            for i,pl in enumerate(self.planes):
+
+                point_normals = self.normals[self.groups[i]]
+                plane_normal = np.mean(point_normals,axis=0)
+                if np.dot(pl[:3],plane_normal) < 0:
+                    self.planes[i] = -pl
 
 
 
@@ -303,12 +360,14 @@ class VertexGroup:
         self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
 
 
+
         self.logger.info(
             "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
-        # if self.epsilon is not None:
-        #     self._cluster_planes()
 
-        # orient planes according to the mean normal orientation of it's input points
+        if self.epsilon is not None:
+            self._cluster_planes()
+
+        ### orient planes according to the mean normal orientation of it's input points
         self._orient_planes()
 
 
