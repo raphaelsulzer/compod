@@ -1933,6 +1933,8 @@ class PolyhedralComplex:
         def filter_edge(c0, c1):
             return not self.graph.edges[c0, c1]["processed"]
         edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+        # maybe this double loop type thing is not necessary anymore, because I am now only dealing with the graph, and not tree and graph
+        # nx.subgraph_view is maybe allowed to change during a for loop
         while len(edges):
             for c0, c1 in edges:
 
