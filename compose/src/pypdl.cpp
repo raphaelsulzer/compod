@@ -3,6 +3,9 @@
 #include <pypdl.h>
 #include <random>
 #include <sys/stat.h>
+#include <CGAL/IO/polygon_soup_io.h>
+#include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
+#include <CGAL/Polygon_mesh_processing/triangulate_faces.h>
 
 pyPDL::pyPDL(int n_test_points)
 {
@@ -29,17 +32,35 @@ int pyPDL::load_mesh(const string filename){
     CGAL::IO::read_polygon_mesh(filename, _gt_mesh);
     if(_gt_mesh.number_of_faces() == 0){
         cout << "ERROR: " << filename << " has no faces" << endl;
-//        _logger->error("ERROR: Mesh has no faces");
+        cout << "Will try to read a soup and make a mesh out of it" << endl;
+    }
+    else{
+        _init_tree();
+        return 0;
+    }
+
+    _gt_mesh.clear();
+    vector<EPICK::Point_3> pts;
+    vector<vector<int>> polys;
+
+    CGAL::IO::read_polygon_soup(filename, pts,polys);
+    CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(pts,polys,_gt_mesh);
+
+    if(_gt_mesh.number_of_faces() == 0){
+        cout << "ERROR: " << filename << " has no faces. Cannot do anything." << endl;
         return 1;
     }
-//    _logger->debug("Mesh loaded successfully");
+    else{
+        if(!CGAL::is_triangle_mesh(_gt_mesh))
+            CGAL::Polygon_mesh_processing::triangulate_faces(_gt_mesh);
 
-//    if(!_gt_mesh.is_pure_triangle())
-//        CGAL::Polygon_mesh_processing::triangulate_faces(_gt_mesh);
+        string outfile = filename.substr(0,filename.size()-4)+"_repaired.off";
+        cout << "Mesh loading worked. Will export the mesh as " << outfile << endl;
+        CGAL::IO::write_polygon_mesh(outfile,_gt_mesh);
 
-    _init_tree();
-
-    return 0;
+        _init_tree();
+        return 0;
+    }
 
 }
 
