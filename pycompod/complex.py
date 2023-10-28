@@ -69,6 +69,7 @@ class PolyhedralComplex:
             self.vg.input_halfspaces = copy.deepcopy(self.vg.halfspaces)
             self.vg.input_groups = copy.deepcopy(self.vg.groups)
             self.n_points = np.concatenate(self.vg.groups).shape[0]
+            
             del self.vg.planes
             del self.vg.halfspaces
             del self.vg.groups
@@ -1288,6 +1289,10 @@ class PolyhedralComplex:
                 self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
                 raise ValueError
                 return 1
+            if not os.path.isfile(mesh_file):
+                self.logger.error("File not found {}".format(mesh_file))
+                raise ValueError
+                return 1
             occs = self.label_partition_with_mesh(mesh_file,n_test_points)
             occs = occs/occs.shape[0]
         else:
@@ -1759,11 +1764,19 @@ class PolyhedralComplex:
         '''
 
         # convex hull - line intersection (from here: https://stackoverflow.com/a/30654855)
-        def line_hull_intersection(U, hull):
-            eq = hull.equations.T
-            V, b = eq[:-1], eq[-1]
-            alpha = -b / np.dot(V, U)
-            return np.min(alpha[alpha > 0]) * U
+        def intersect_plane_and_line(plane, point1, point2):
+            a, b, c, d = plane
+            p1 = np.array(point1)
+            p2 = np.array(point2)
+
+            line_vector = p2 - p1
+
+            if np.dot([a, b, c], line_vector) == 0:
+                return None
+
+            t = -(np.dot([a, b, c], p1) + d) / np.dot([a, b, c], line_vector)
+            intersection_point = p1 + t * line_vector
+            return intersection_point
 
         assert self.insertion_threshold >= 0,"Threshold must be >= 0"
 
@@ -1780,6 +1793,8 @@ class PolyhedralComplex:
 
             this_group = self.vg.split_groups[id]
             which_side = np.dot(best_plane[:3],self.vg.points[this_group].transpose())
+            right_farthest_point = self.vg.points[this_group][np.argmax(which_side)]
+            left_farthest_point = self.vg.points[this_group][np.argmin(which_side)]
             left_point_ids = this_group[which_side < -best_plane[3]]
             right_point_ids = this_group[which_side > -best_plane[3]]
 
@@ -1788,12 +1803,20 @@ class PolyhedralComplex:
             elif(this_group.shape[0] - right_point_ids.shape[0]) <= self.insertion_threshold:
                 right_plane_ids.append(id)
             else:
+                
+                # if np.linalg.norm((left_farthest_point-right_farthest_point)) > self.vg.epsilon:
+                #     hullline_plane_intersection = intersect_plane_and_line(best_plane,left_farthest_point,right_farthest_point)
+                #     if hullline_plane_intersection is not None:
+                #         self.n_auxiliary_points+=1
+                #         left_point_ids = np.hstack((left_point_ids,self.vg.points.shape[0]))
+                #         right_point_ids = np.hstack((right_point_ids,self.vg.points.shape[0]))
+                #
+                #         self.vg.points = np.vstack((self.vg.points,hullline_plane_intersection))
+                #         self.vg.normals = np.vstack((self.vg.normals,[0,0,0]))
+                #         self.vg.classes = np.hstack((self.vg.classes,1))
+                # else:
+                #     print("skip because of epsilon")
 
-                # TODO: to make the partition exact (within floating point precision), I need to add the intersection of 'best plane' with the current convex hull, ie 'ProjectedConvexHull(self.vg.split_planes[id],self.vg.points[left_point_ids])'
-                # one way to do this would be to:
-                    # 1. compute the line of 'best_plane' intersect 'self.vg.split_planes[id]'
-                    # 2. project the line to self.vg.split_planes[id]
-                    # 3. intersect the line with the convex hull: https://stackoverflow.com/questions/30486312/intersection-of-nd-line-with-convex-hull-in-python
 
                 if (left_point_ids.shape[0] > self.insertion_threshold):
                     left_plane_ids.append(self.vg.split_planes.shape[0])
@@ -1801,10 +1824,6 @@ class PolyhedralComplex:
                     self.vg.plane_ids.append(self.vg.plane_ids[id])
                     self.vg.split_halfspaces.append(self.vg.split_halfspaces[id])
                     self.vg.split_groups.append(left_point_ids)
-
-
-                    # intersect best_plane with current hull
-
 
 
                     # get all hull points and  make a new hull on the left side
@@ -1840,16 +1859,17 @@ class PolyhedralComplex:
                     self.vg.split_halfspaces.append(self.vg.split_halfspaces[id])
                     self.vg.split_groups.append(right_point_ids)
 
-                    # if not enough points for making a convex hull we simply keep the points
 
                     # get all hull points and  make a new hull on the right side
                     if right_point_ids.shape[0] > 2:
                         try:
                             new_hull = ProjectedConvexHull(self.vg.split_planes[id], self.vg.points[right_point_ids])
                             new_group = right_point_ids[new_hull.hull.vertices]
+                        # if not enough points for making a convex hull we simply keep the points
                         except:
                             # putting this except here, because even if there are more than 2 points, but they lie on the same line, you cannot get a convex hull.
                             new_group = right_point_ids
+                    # if not enough points for making a convex hull we simply keep the points
                     else:
                         new_group = right_point_ids
 
@@ -1868,8 +1888,6 @@ class PolyhedralComplex:
 
                 self.split_count+=1
 
-                # planes[id, :] = np.nan
-                # point_groups[id][:, :] = np.nan
 
         return left_plane_ids,right_plane_ids
 
@@ -2435,6 +2453,8 @@ class PolyhedralComplex:
         """
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
 
+        self.n_auxiliary_points = 0
+
         if not self.partition_initialized:
             self._init_partition()
 
@@ -2449,6 +2469,7 @@ class PolyhedralComplex:
         self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
         self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
+        self.logger.info("{} auxiliary points inserted!".format(self.n_auxiliary_points))
 
     def save_partition_to_pickle(self,outpath):
 

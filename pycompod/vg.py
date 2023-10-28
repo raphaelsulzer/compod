@@ -369,7 +369,6 @@ class VertexGroup:
         self.polygon_areas = np.array(self.polygon_areas)
 
 
-
         if self.points_type == "samples":
             self.logger.info("Sample a total of {} points on {} polygons".format(self.total_sample_count,len(self.polygons)))
             ### scale sample_count_per_area by total area of input polygons. like this n_sample_points should roughly be constant for each mesh + (convex hull points)
@@ -411,11 +410,17 @@ class VertexGroup:
         if self.prioritise is not None:
             order = self._prioritise_planes(self.prioritise)
             self.plane_order = order
-            self.groups = list(np.array(self.groups,dtype=object)[order])
+            self.groups = np.array(self.groups,dtype=object)[order]
+            if not self.groups[0].dtype == np.int32: # this line is only here for the rare case that all group arrays are of the same size, then numpy sets the dtype of each individual array to object
+                self.groups = list(self.groups.astype(np.int32))
+            else:
+                self.groups = list(self.groups)
             self.planes = self.planes[order]
             self.plane_colors = self.plane_colors[order]
             self.halfspaces = list(np.array(self.halfspaces)[order])
             self.hull_vertices = np.array(self.hull_vertices,dtype=object)[order]
+            if not self.hull_vertices[0].dtype == np.int32: # this line is only here for the rare case that all hull_vertices arrays are of the same size, then numpy sets the dtype of each individual array to object
+                self.hull_vertices = self.hull_vertices.astype(np.int32)
         else:
             self.plane_order = np.arange(len(self.planes))
             self.logger.info("No plane prioritisation applied")

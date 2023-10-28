@@ -131,7 +131,7 @@ class PlaneExporter:
         f.close()
 
 
-    def save_points_and_planes_from_array(self,filenames,planes_array):
+    def save_points_and_planes_from_array(self,plane_filename,point_filename,planes_array):
 
         groups = []
         npoints = planes_array["group_num_points"].flatten()
@@ -144,7 +144,7 @@ class PlaneExporter:
             groups.append(vert_group)
             last += npp
 
-        self.save_points_and_planes(filenames[0],filenames[1],planes_array["points"],planes_array["normals"],groups,planes_array["group_parameters"],planes_array["colors"])
+        self.save_points_and_planes(plane_filename,point_filename,planes_array["points"],planes_array["normals"],groups,planes_array["group_parameters"],planes_array["colors"])
 
 
     def save_points_and_planes(self,plane_filename=None,point_filename=None,points=None,normals=None,groups=None,planes=None,colors=None):
