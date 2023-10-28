@@ -62,15 +62,16 @@ class PolyhedralComplex:
         if self.debug_export:
             self.logger.warning('Debug export activated. Turn off for faster processing.')
 
-        self.vg = vertex_group
-        # basically just a name change, to make sure that the negative indices for the boundary planes are never used on this array and not on the split_planes array
-        self.vg.input_planes = copy.deepcopy(self.vg.planes)
-        self.vg.input_halfspaces = copy.deepcopy(self.vg.halfspaces)
-        self.vg.input_groups = copy.deepcopy(self.vg.groups)
-        self.n_points = np.concatenate(self.vg.groups).shape[0]
-        del self.vg.planes
-        del self.vg.halfspaces
-        del self.vg.groups
+        if vertex_group is not None:
+            self.vg = vertex_group
+            # basically just a name change, to make sure that the negative indices for the boundary planes are never used on this array and not on the split_planes array
+            self.vg.input_planes = copy.deepcopy(self.vg.planes)
+            self.vg.input_halfspaces = copy.deepcopy(self.vg.halfspaces)
+            self.vg.input_groups = copy.deepcopy(self.vg.groups)
+            self.n_points = np.concatenate(self.vg.groups).shape[0]
+            del self.vg.planes
+            del self.vg.halfspaces
+            del self.vg.groups
 
 
         self.cells = dict()
@@ -92,7 +93,8 @@ class PolyhedralComplex:
 
         # init the bounding box
         self.padding = padding
-        self.bounding_poly = self._init_bounding_box(padding=self.padding)
+        if vertex_group is not None:
+            self.bounding_poly = self._init_bounding_box(padding=self.padding)
 
         self.insertion_threshold = insertion_threshold
         self.tree_mode = Tree.DEPTH # this is what it always was
@@ -645,10 +647,10 @@ class PolyhedralComplex:
             for f in this_region_facets:
                 facet_to_plane_id.append(region[0])
             region_facets += this_region_facets
-            face_colors.append(np.repeat(self.vg.plane_colors[region[0],np.newaxis],len(this_region_facets),axis=0))
+            # face_colors.append(np.repeat(self.vg.plane_colors[region[0],np.newaxis],len(this_region_facets),axis=0))
 
         # region_facets = np.array(region_facets)
-        face_colors = np.concatenate(face_colors)
+        # face_colors = np.concatenate(face_colors)
 
         if simplify_edges:
             ## remove unreferenced vertices and reindex
@@ -1179,7 +1181,11 @@ class PolyhedralComplex:
         labels = (occs[:,0]>=occs[:,1]).astype(np.int32)
 
         # self.logger.info("Apply occupancy regularization with graph cut (λ={:.3g})...".format(binary_weight))
-        self.logger.info("Apply occupancy regularization with graph cut...")
+        rs = ""
+        for k, v in regularization.items():
+            rs+="{}-{} ".format(k, v)
+        self.logger.info("Apply occupancy regularization with graph-cut: {}...".format(rs))
+
 
         assert len(occs) == len(graph.nodes)
 
@@ -1281,6 +1287,7 @@ class PolyhedralComplex:
             if mesh_file is None:
                 self.logger.error("Please provide a closed mesh_file to label partition with a mesh.")
                 raise ValueError
+                return 1
             occs = self.label_partition_with_mesh(mesh_file,n_test_points)
             occs = occs/occs.shape[0]
         else:
@@ -1742,7 +1749,6 @@ class PolyhedralComplex:
 
 
     def _split_support_points(self,best_plane_id,current_ids):
-
         '''
         Split all primitive (ie 2D convex hulls) in the current cell with the best plane.
 
@@ -1752,10 +1758,16 @@ class PolyhedralComplex:
         :return: IDs of primitives falling left and right of the best plane.
         '''
 
+        # convex hull - line intersection (from here: https://stackoverflow.com/a/30654855)
+        def line_hull_intersection(U, hull):
+            eq = hull.equations.T
+            V, b = eq[:-1], eq[-1]
+            alpha = -b / np.dot(V, U)
+            return np.min(alpha[alpha > 0]) * U
+
         assert self.insertion_threshold >= 0,"Threshold must be >= 0"
 
         best_plane = self.vg.split_planes[current_ids[best_plane_id]]
-
 
         ### now put the planes into the left and right subspace of the best_plane split
         ### planes that lie in both subspaces are split (ie their point_groups are split) and appended as new planes to the planes array, and added to both subspaces
@@ -1791,16 +1803,20 @@ class PolyhedralComplex:
                     self.vg.split_groups.append(left_point_ids)
 
 
-                    # if not enough points for making a convex hull we simply keep the points 
-                    
+                    # intersect best_plane with current hull
+
+
+
                     # get all hull points and  make a new hull on the left side
                     if left_point_ids.shape[0] > 2:
                         try:
                             new_hull = ProjectedConvexHull(self.vg.split_planes[id],self.vg.points[left_point_ids])
                             new_group = left_point_ids[new_hull.hull.vertices]
+                        # if not enough points for making a convex hull we simply keep the points
                         except:
                             # putting this except here, because even if there are more than 2 points, but they lie on the same line, you cannot get a convex hull.
                             new_group = left_point_ids
+                    # if not enough points for making a convex hull we simply keep the points
                     else:
                         new_group = left_point_ids
 
@@ -2445,10 +2461,9 @@ class PolyhedralComplex:
             pickle.dump(self.tree,open(os.path.join(outpath,'tree.pickle'),'wb'))
         pickle.dump(self.graph,open(os.path.join(outpath,'graph.pickle'),'wb'))
         pickle.dump(self.cells,open(os.path.join(outpath,'cells.pickle'),'wb'))
-        pickle.dump(self.vg.input_groups,open(os.path.join(outpath,'groups.pickle'),'wb'))
-        pickle.dump(self.vg.input_planes,open(os.path.join(outpath,'planes.pickle'),'wb'))
-
-
+        # pickle.dump(self.vg.input_groups,open(os.path.join(outpath,'groups.pickle'),'wb'))
+        # pickle.dump(self.vg.input_planes,open(os.path.join(outpath,'planes.pickle'),'wb'))
+        pickle.dump(self.vg,open(os.path.join(outpath,'vg.pickle'),'wb'))
 
 
     def load_partition_from_pickle(self,inpath):
@@ -2458,8 +2473,9 @@ class PolyhedralComplex:
         self.tree = pickle.load(open(os.path.join(inpath,'tree.pickle'),'rb'))
         self.graph = pickle.load(open(os.path.join(inpath,'graph.pickle'),'rb'))
         self.cells = pickle.load(open(os.path.join(inpath,'cells.pickle'),'rb'))
-        self.vg.input_groups = pickle.load(open(os.path.join(inpath,'groups.pickle'),'rb'))
-        self.vg.input_planes = pickle.load(open(os.path.join(inpath,'planes.pickle'),'rb'))
+        self.vg = pickle.load(open(os.path.join(inpath,'vg.pickle'),'rb'))
+        # self.vg.input_groups = pickle.load(open(os.path.join(inpath,'groups.pickle'),'rb'))
+        # self.vg.input_planes = pickle.load(open(os.path.join(inpath,'planes.pickle'),'rb'))
 
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 

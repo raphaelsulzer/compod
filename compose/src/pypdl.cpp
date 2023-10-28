@@ -61,7 +61,6 @@ int pyPDL::load_mesh(const string filename){
         _init_tree();
         return 0;
     }
-
 }
 
 
