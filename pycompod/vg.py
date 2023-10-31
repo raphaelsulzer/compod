@@ -6,6 +6,7 @@ from collections import defaultdict
 from sage.all import polytopes, QQ, Polyhedron
 from sklearn.cluster import DBSCAN, HDBSCAN, AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity, cosine_distances, euclidean_distances
+from sklearn.neighbors import NearestNeighbors
 
 from .logger import make_logger
 from .plane import PyPlane, ProjectedConvexHull
@@ -17,7 +18,7 @@ class VertexGroup:
     """
 
     def __init__(self, input_file, prioritise = None, merge_duplicate_planes = True, epsilon=None, alpha = 1,
-                 points_type="inliers", total_sample_count=100000,
+                 points_type="inliers", total_sample_count=100000, export=True,
                  recolor=False, verbosity=logging.WARN):
         """
         Init VertexGroup.
@@ -43,6 +44,9 @@ class VertexGroup:
         self.total_sample_count = total_sample_count
         self.points_type = points_type
         self.recolor = recolor
+        self.export = export
+
+        self.plane_exporter = PlaneExporter(verbosity=verbosity)
 
         ending = os.path.splitext(self.input_file)[1]
         if ending == ".npz":
@@ -50,6 +54,8 @@ class VertexGroup:
         else:
             self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
             sys.exit(1)
+
+
 
 
 
@@ -237,8 +243,64 @@ class VertexGroup:
             current+=n
         return groups
 
-
     def _cluster_planes(self):
+
+        # TODO: implement a new clustering with a KD tree with custom distance
+
+        def acos(x):
+            # range is -1 to 1 !!
+            return (-0.69813170079773212 * x * x - 0.87266462599716477) * x + 1.5707963267948966
+
+        self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon,self.alpha))
+
+        ### orient planes to a corner, important to run this before cluster_planes() so that planes with the same normal but d = -d are not clustered
+        self._orient_planes(to_corner=True)
+
+        epsilon_cosine = self.alpha
+        epsilon_euclidean = self.epsilon
+
+        # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+        def custom_distance(x, y):
+
+            dist1 = np.abs(np.dot(x[4:],y[:3])+y[3])
+            dist2 = np.abs(np.dot(y[4:],x[:3])+x[3])
+            euclidean_dist = (dist1+dist2)/2
+
+            cosine_dist = np.dot(x[:3],y[:3])
+            # better to keep the degree scaling in here, even if it is more expensive, but it is awful to tune the epsilon alpha parameter otherwise
+            scaled_cosine_dist = acos(cosine_dist)*180/math.pi / epsilon_cosine
+            scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
+            return scaled_cosine_dist+scaled_euclidean_dist
+
+        self.plane_centroids = []
+        for gr in self.groups:
+            pts = self.points[gr]
+            self.plane_centroids.append(pts.mean(axis=0))
+        self.plane_centroids = np.array(self.plane_centroids)
+        self.features = np.hstack((self.planes,self.plane_centroids))
+
+        ### clustering
+
+        clusters = NearestNeighbors(n_jobs=-1, radius=0.99, metric=custom_distance).fit(self.features)
+        clusters = clusters.radius_neighbors(return_distance=False)
+        
+        processed = np.zeros(self.planes.shape[0])
+        new_planes = np.zeros(self.planes.shape)
+        for i,cl in enumerate(clusters):
+            if processed[i]:
+                continue
+            if not len(cl):
+                new_planes[i] = self.planes[i]
+                processed[i] = True
+            else:
+                ids = np.hstack((cl, i))
+                new_planes[ids] = np.mean(self.planes[ids,:],axis=0)
+                processed[ids] = True
+            
+        
+        self.planes = new_planes
+
+    def _cluster_planes_DBSCAN(self):
 
         def acos(x):
             # range is -1 to 1 !!
@@ -401,12 +463,12 @@ class VertexGroup:
             data["group_colors"] = self.plane_colors
             np.savez(self.input_file,**data)
 
-        ## export planes and samples
-        pe = PlaneExporter()
-        pt_file = os.path.splitext(self.input_file)[0]+"_samples.ply"
-        plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
-        pe.save_points_and_planes(point_filename=pt_file,plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
-          
+        if self.export:
+            ## export planes and samples
+            pt_file = os.path.splitext(self.input_file)[0]+"_samples.ply"
+            plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
+            self.plane_exporter.save_points_and_planes(point_filename=pt_file,plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
+
         if self.prioritise is not None:
             order = self._prioritise_planes(self.prioritise)
             self.plane_order = order
@@ -437,10 +499,10 @@ class VertexGroup:
                 self.merged_plane_from_input_planes.append(np.where((p==self.planes).all(axis=1))[0])
 
         ## export planes and samples
-        pe = PlaneExporter()
-        # pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
-        plane_file =  os.path.splitext(self.input_file)[0]+'_merged.ply'
-        pe.save_points_and_planes(plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
+        if self.export:
+            # pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
+            plane_file =  os.path.splitext(self.input_file)[0]+'_merged.ply'
+            self.plane_exporter.save_points_and_planes(plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
 
         ## fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
         ## if torch.nested.nested_tensor ever supports broadcasting and dot products, the code could be simplified a lot.

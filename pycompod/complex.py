@@ -101,7 +101,7 @@ class PolyhedralComplex:
         self.tree_mode = Tree.DEPTH # this is what it always was
         # self.tree_mode = Tree.WIDTH
 
-        self.planeExporter = PlaneExporter()
+        self.planeExporter = PlaneExporter(verbosity=verbosity)
         self.complexExporter = PolyhedralComplexExporter(self)
 
 
@@ -1810,7 +1810,7 @@ class PolyhedralComplex:
                 #         self.n_auxiliary_points+=1
                 #         left_point_ids = np.hstack((left_point_ids,self.vg.points.shape[0]))
                 #         right_point_ids = np.hstack((right_point_ids,self.vg.points.shape[0]))
-                #
+                # 
                 #         self.vg.points = np.vstack((self.vg.points,hullline_plane_intersection))
                 #         self.vg.normals = np.vstack((self.vg.normals,[0,0,0]))
                 #         self.vg.classes = np.hstack((self.vg.classes,1))
