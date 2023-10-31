@@ -483,6 +483,8 @@ class PolyhedralComplex:
         :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
 
+        # TODO: write a wrapper around this that automatically first runs in inexact mode and iff fails in exact mode
+
         os.makedirs(os.path.dirname(out_file),exist_ok=True)
 
         try:
@@ -2642,18 +2644,20 @@ class PolyhedralComplex:
         if num_workers > 0:
             pool = multiprocessing.Pool(processes=num_workers)
 
-        pbar = trange(len(self.vg.bounds),file=sys.stdout)
-        for i in pbar:  # kinetic for each primitive
+        progress_bar = True if self.verbosity < 30 else False
+        pbar = tqdm(total=len(self.vg.bounds),file=sys.stdout, disable=np.invert(progress_bar))
+
+        for i in range(len(self.vg.bounds)):  # kinetic for each primitive
             # bounding box intersection test
             # indices of existing cells with potential intersections
-            indices_cells = _intersect_bound_plane(self.vg.bounds[i], self.vg.split_planes[i], exhaustive)
+            indices_cells = _intersect_bound_plane(self.vg.bounds[i], self.vg.input_planes[i], exhaustive)
             assert len(indices_cells), 'intersection failed! check the initial bound'
 
             # half-spaces defined by inequalities
             # no change_ring() here (instead, QQ() in _inequalities) speeds up 10x
             # init before the loop could possibly speed up a bit
             hspace_positive, hspace_negative = [Polyhedron(ieqs=[inequality]) for inequality in
-                                                self._inequalities(self.vg.split_planes[i])]
+                                                self._inequalities(self.vg.input_planes[i])]
 
 
             # partition the intersected cells and their bounds while doing mesh slice plane
@@ -2727,6 +2731,9 @@ class PolyhedralComplex:
                     del cell_dict[list(self.graph.nodes)[index_parent]]
                     self.graph.remove_node(list(self.graph.nodes)[index_parent])
 
+            pbar.update(1)
+
+        pbar.close()
         self.logger.debug('cell complex constructed: {:.2f} s'.format(time.time() - tik))
 
         self.cells=cell_dict
