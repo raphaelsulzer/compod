@@ -2480,7 +2480,7 @@ class PolyhedralComplex:
 
         os.makedirs(outpath,exist_ok=True)
 
-        if self.tree is not None:
+        if self.tree is not None: # for storing abspy
             pickle.dump(self.tree,open(os.path.join(outpath,'tree.pickle'),'wb'))
         pickle.dump(self.graph,open(os.path.join(outpath,'graph.pickle'),'wb'))
         pickle.dump(self.cells,open(os.path.join(outpath,'cells.pickle'),'wb'))
@@ -2493,7 +2493,8 @@ class PolyhedralComplex:
 
         self.logger.info("Load partition from pickle...")
 
-        self.tree = pickle.load(open(os.path.join(inpath,'tree.pickle'),'rb'))
+        if os.path.isfile(os.path.join(inpath,'tree.pickle')): # for loading abspy
+            self.tree = pickle.load(open(os.path.join(inpath,'tree.pickle'),'rb'))
         self.graph = pickle.load(open(os.path.join(inpath,'graph.pickle'),'rb'))
         self.cells = pickle.load(open(os.path.join(inpath,'cells.pickle'),'rb'))
         self.vg = pickle.load(open(os.path.join(inpath,'vg.pickle'),'rb'))
@@ -2504,6 +2505,7 @@ class PolyhedralComplex:
 
         self.polygons_initialized = False # false because I do not initialize the sibling facets
         self.partition_labelled = True
+        self.bounding_poly = self._init_bounding_box(self.padding)
 
 
     def construct_abspy(self, exhaustive=False, num_workers=0):

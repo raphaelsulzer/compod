@@ -17,7 +17,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, input_file, prioritise = None, merge_duplicate_planes = True, epsilon=None, alpha = 1,
+    def __init__(self, input_file, prioritise=None, merge_duplicate_planes=True, epsilon=None, alpha=0.3,
                  points_type="inliers", total_sample_count=100000, export=True,
                  recolor=False, verbosity=logging.WARN):
         """
@@ -29,7 +29,6 @@ class VertexGroup:
         filepath: str or Path
             Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
         """
-
 
         # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
         np.random.seed(42)
@@ -54,9 +53,6 @@ class VertexGroup:
         else:
             self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
             sys.exit(1)
-
-
-
 
 
     def _recolor_planes(self):
@@ -387,7 +383,6 @@ class VertexGroup:
 
         ### orient planes according to the mean normal orientation of it's input points
         self._orient_planes()
-
 
         self.halfspaces = []
         self.polygons = []
