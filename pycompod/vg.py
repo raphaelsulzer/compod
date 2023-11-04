@@ -440,8 +440,8 @@ class VertexGroup:
                 sampled_points = poly.sample(n)
                 sampled_points = np.concatenate((poly.vertices, sampled_points), axis=0, dtype=np.float64)
                 self.points.append(sampled_points)
-                self.groups.append(np.arange(len(sampled_points))+n_points)
-                self.hull_vertices.append(np.arange(len(poly.vertices))+n_points)
+                self.groups.append(np.arange(len(sampled_points),dtype=np.int32)+n_points)
+                self.hull_vertices.append(np.arange(len(poly.vertices),dtype=np.int32)+n_points)
                 n_points+=sampled_points.shape[0]
             self.points = np.concatenate(self.points)
         elif self.points_type == "inliers":

@@ -285,8 +285,8 @@ class PolyhedralComplexExporter:
             f.write("v {:6f} {:6f} {:6f}".format(p[0], p[1], p[2]))
             # f.write("v {} {} {}".format(p[0], p[1], p[2]))
             if len(pcolors):
-                c = pcolor[i]
-                f.write(" {} {} {}".format(int(c[0]/255), int(c[1]/255), int(c[2]/255)))
+                c = pcolors[i]
+                f.write(" {} {} {}".format(int(c[0]), int(c[1]), int(c[2])))
             f.write("\n")
 
         for i,face in enumerate(facets):
@@ -348,9 +348,6 @@ class PolyhedralComplexExporter:
 
 
 
-
-
-
     def write_colored_soup_to_ply(self, filename, points, facets, pcolors=None, fcolors=None):
 
         # col = colors if colors is not None else (np.random.random(size=3) * 255).astype(int)
@@ -381,6 +378,8 @@ class PolyhedralComplexExporter:
             for c in fcolors[i]:
                 f.write(" {}".format(c))
             f.write("\n")
-
+    
+    
+       
 
 

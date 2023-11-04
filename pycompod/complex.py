@@ -904,32 +904,10 @@ class PolyhedralComplex:
                 facets.append(tf)
             vert_count+=len(ss[2])
 
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("comment : in_cells:{}\n".format(len(view.nodes)))
-        f.write("element vertex {}\n".format(len(outverts)))
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write("element face {}\n".format(len(facets)))
-        f.write("property list uchar int vertex_indices\n")
-        f.write("end_header\n")
-        for v in outverts:
-            f.write("{} {} {} {} {} {}\n".format(v[0],v[1],v[2],v[3],v[4],v[5]))
-        for fa in facets:
-            f.write("{} ".format(len(fa)))
-            for v in fa:
-                f.write("{}".format(v))
-            f.write("\n")
-
-        f.close()
+        self.complexExporter.write_surface(out_file, points=outverts, facets=facets)
 
 
     def save_in_cells(self,out_file):
-
 
         os.makedirs(os.path.dirname(out_file),exist_ok=True)
         f = open(out_file,'w')
@@ -938,6 +916,7 @@ class PolyhedralComplex:
             return self.graph.nodes[node_id]["occupancy"]
 
         verts = []
+        vcolors = []
         facets = []
         vert_count = 0
         view = nx.subgraph_view(self.graph,filter_node=filter_node)
@@ -952,37 +931,20 @@ class PolyhedralComplex:
             ss = polyhedron.render_solid().obj_repr(polyhedron.render_solid().default_render_params())
             for v in ss[2]:
                 v = v.split(' ')
-                verts.append([v[1], v[2], v[3], str(c[0]), str(c[1]), str(c[2])])
+                verts.append([float(v[1]), float(v[2]), float(v[3])])
+                vcolors.append(c)
 
             for fa in ss[3]:
                 tf = []
                 for ffa in fa[2:].split(' '):
-                    tf.append(str(int(ffa) + vert_count -1) + " ")
+                    tf.append(int(ffa) + vert_count -1)
                 facets.append(tf)
             vert_count+=len(ss[2])
 
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("comment : in_cells:{}\n".format(len(view.nodes)))
-        f.write("element vertex {}\n".format(len(verts)))
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        f.write("element face {}\n".format(len(facets)))
-        f.write("property list uchar int vertex_indices\n")
-        f.write("end_header\n")
-        for v in verts:
-            f.write("{} {} {} {} {} {}\n".format(v[0],v[1],v[2],v[3],v[4],v[5]))
-        for fa in facets:
-            f.write("{} ".format(len(fa)))
-            for v in fa:
-                f.write("{}".format(v))
-            f.write("\n")
 
-        f.close()
+        self.complexExporter.write_surface(out_file, points=verts, facets=facets, pcolors=vcolors)
+
+
 
 
 
@@ -1909,9 +1871,129 @@ class PolyhedralComplex:
 
         self.logger.info("Deleted {} nodes, reducing the partition from {} to {} nodes.".format(ilen-len(self.graph.nodes),ilen,len(self.graph.nodes)))
 
+    # @profile
+    def simplify_partition_graph_based(self, exact=True, atol=0.0, rtol=0.0, dtol=0.0, only_inside=False):
+
+        self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
+
+        if not exact:
+            self.logger.info("You are about to apply a simplification process based on inexact coordinates. "
+                             "This will most likely lead to a degenerate complex.")
+        if atol != 0.0 or rtol != 0.0:
+            atol *= self.bounding_poly.volume()
+            dtol *= self.bounding_poly.volume()
+            self.logger.info("You are about to apply a simplification process with atol={}, rtol={} and dtol={} "
+                             "that will most likely lead to intersecting cells.".format(atol, rtol, dtol))
+        if not self.partition_labelled:
+            self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
+            return 0
+        if not self.tree_simplified:
+            self.logger.warning("This function is slow. It is recommended to call simplify_tree_based first.")
+
+        def _make_new_cell(c0, c1):
+            if exact:
+                return Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list(),
+                                  base_ring=QQ)
+            else:
+                p0 = self.cells[c0].points
+                p1 = self.cells[c1].points
+                pts = np.vstack((p0, p1))
+                return scipy.spatial.ConvexHull(pts)
+
+        def _get_cell_volume(cell):
+            if exact:
+                return cell.volume()
+            else:
+                return cell.volume
+
+        def _cell_volume_equal(vols):
+            return vols[0] == vols[1]
+
+        def _cell_volume_close(vols):
+            """collapse if close. have to sort because in overlapping cell cases union vol can be smaller than sum of vols."""
+            vols.sort()
+            return np.isclose(vols[0], vols[1], atol=atol, rtol=rtol)
+
+        _collapse = _cell_volume_equal if (atol == 0.0 and rtol == 0.0) else _cell_volume_close
+
+        if not exact:
+            cells = dict()
+            for k, v in self.cells.items():
+                cells[k] = scipy.spatial.ConvexHull(np.array(v.vertices_list()))
+            self.cells = cells
+
+        before = len(self.graph.nodes)
+        if not bool(nx.get_node_attributes(self.graph, "volume")):
+            nx.set_node_attributes(self.graph, None, "volume")
+        if not bool(nx.get_edge_attributes(self.graph, "union_volume")):
+            nx.set_edge_attributes(self.graph, None, "union_volume")
+        nx.set_edge_attributes(self.graph, False, "processed")
+
+        def filter_edge(c0, c1):
+            return not self.graph.edges[c0, c1]["processed"]
+
+        edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+        # maybe this double loop type thing is not necessary anymore, because I am now only dealing with the graph, and not tree and graph
+        # nx.subgraph_view is maybe allowed to change during a for loop
+        while len(edges):
+            for c0, c1 in edges:
+
+                if only_inside:
+                    if not self.graph.nodes[c0]["occupancy"] or not self.graph.nodes[c1]["occupancy"]:
+                        self.graph.edges[c0, c1]["processed"] = True
+                        continue
+                else:
+                    if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
+                        self.graph.edges[c0, c1]["processed"] = True
+                        continue
+
+                cx = None
+                if self.graph.edges[c0, c1]["union_volume"] is None:
+                    cx = _make_new_cell(c0, c1)
+                    self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(cx)
+                if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = _get_cell_volume(
+                    self.cells[c0])
+                if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = _get_cell_volume(
+                    self.cells[c1])
+
+                vols = np.array([self.graph.edges[c0, c1]["union_volume"],
+                                 self.graph.nodes[c0]["volume"] + self.graph.nodes[c1]["volume"]])
+                if _collapse(vols):
+                    cc = [c0, c1]
+                    if self.graph.nodes[c0]["volume"] < self.graph.nodes[c1]["volume"]: cc.reverse()
+                    c0 = cc[0];
+                    c1 = cc[1]
+
+                    if self.graph.nodes[c1]["volume"] < dtol:
+                        nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                    else:
+                        self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+                        nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                        self.cells[c0] = cx if cx is not None else _make_new_cell(c0, c1)
+                    del self.cells[c1]
+                    for n0, n1 in self.graph.edges(c0):
+                        if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
+                            new_union = _make_new_cell(n0, n1)
+                            self.graph.edges[n0, n1]["union_volume"] = _get_cell_volume(new_union)
+                            self.graph.edges[n0, n1]["processed"] = False
+                    del self.graph.nodes[c0]["contraction"]
+                    break
+                else:
+                    self.graph.edges[c0, c1]["processed"] = True
+                    continue
+            edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+
+        if not exact:
+            cells = dict()
+            for k, v in self.cells.items():
+                cells[k] = Polyhedron(vertices=v.points, base_ring=QQ)
+            self.cells = cells
+
+        self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
+        self.polygons_initialized = False
 
     # @profile
-    def simplify_partition_graph_based(self,exact=True,atol=0.0,rtol=0.0,dtol=0.0,only_inside=False):
+    def simplify_partition_graph_based_new(self,exact=True,atol=0.0,rtol=0.0,dtol=0.0,only_inside=False):
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
@@ -1968,54 +2050,54 @@ class PolyhedralComplex:
 
         def filter_edge(c0, c1):
             return not self.graph.edges[c0, c1]["processed"]
-        edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
-        # maybe this double loop type thing is not necessary anymore, because I am now only dealing with the graph, and not tree and graph
-        # nx.subgraph_view is maybe allowed to change during a for loop
-        while len(edges):
-            for c0, c1 in edges:
-
-                if only_inside:
-                    if not self.graph.nodes[c0]["occupancy"] or not self.graph.nodes[c1]["occupancy"]:
-                        self.graph.edges[c0,c1]["processed"] = True
-                        continue
-                else:
-                    if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
-                        self.graph.edges[c0,c1]["processed"] = True
-                        continue
 
 
-                cx = None
-                if self.graph.edges[c0,c1]["union_volume"] is None:
-                    cx = _make_new_cell(c0,c1)
-                    self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(cx)
-                if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
-                if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
+        
 
-                vols = np.array([self.graph.edges[c0, c1]["union_volume"],self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]])
-                if _collapse(vols):
-                    cc = [c0,c1]
-                    if self.graph.nodes[c0]["volume"] < self.graph.nodes[c1]["volume"]: cc.reverse()
-                    c0 = cc[0];
-                    c1 = cc[1]
+        for c0, c1 in nx.subgraph_view(self.graph, filter_edge=filter_edge).edges:
 
-                    if self.graph.nodes[c1]["volume"] < dtol:
-                        nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                    else:
-                        self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
-                        nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                        self.cells[c0] = cx if cx is not None else _make_new_cell(c0,c1)
-                    del self.cells[c1]
-                    for n0, n1 in self.graph.edges(c0):
-                        if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
-                            new_union = _make_new_cell(n0,n1)
-                            self.graph.edges[n0, n1]["union_volume"] = _get_cell_volume(new_union)
-                            self.graph.edges[n0, n1]["processed"] = False
-                    del self.graph.nodes[c0]["contraction"]
-                    break
-                else:
-                    self.graph.edges[c0, c1]["processed"] = True
+            if only_inside:
+                if not self.graph.nodes[c0]["occupancy"] or not self.graph.nodes[c1]["occupancy"]:
+                    self.graph.edges[c0,c1]["processed"] = True
                     continue
-            edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
+            else:
+                if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
+                    self.graph.edges[c0,c1]["processed"] = True
+                    continue
+
+
+            cx = None
+            if self.graph.edges[c0,c1]["union_volume"] is None:
+                cx = _make_new_cell(c0,c1)
+                self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(cx)
+            if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
+            if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
+
+            vols = np.array([self.graph.edges[c0, c1]["union_volume"],self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]])
+            if _collapse(vols):
+                cc = [c0,c1]
+                if self.graph.nodes[c0]["volume"] < self.graph.nodes[c1]["volume"]: cc.reverse()
+                c0 = cc[0];
+                c1 = cc[1]
+
+                if self.graph.nodes[c1]["volume"] < dtol:
+                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                else:
+                    self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+                    self.cells[c0] = cx if cx is not None else _make_new_cell(c0,c1)
+                del self.cells[c1]
+                for n0, n1 in self.graph.edges(c0):
+                    if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
+                        new_union = _make_new_cell(n0,n1)
+                        self.graph.edges[n0, n1]["union_volume"] = _get_cell_volume(new_union)
+                        self.graph.edges[n0, n1]["processed"] = False
+                del self.graph.nodes[c0]["contraction"]
+                break
+            else:
+                self.graph.edges[c0, c1]["processed"] = True
+                continue
+
 
         if not exact:
             cells = dict()
@@ -2471,7 +2553,7 @@ class PolyhedralComplex:
         self.logger.debug("Plane insertion order {}".format(self.best_plane_ids))
         self.logger.debug("{} input planes were split {} times, making a total of {} planes now".format(len(self.vg.input_planes),self.split_count,len(self.vg.split_planes)))
 
-        self.logger.info("{} auxiliary points inserted!".format(self.n_auxiliary_points))
+        # self.logger.info("{} auxiliary points inserted!".format(self.n_auxiliary_points))
 
     def save_partition_to_pickle(self,outpath):
 
