@@ -26,6 +26,7 @@ typedef CGAL::Surface_mesh<EPICK::Point_3>   Inexact_Mesh;
 #include <CGAL/Side_of_triangle_mesh.h>
 #include <CGAL/point_generators_3.h>
 #include <CGAL/Random.h>
+#include <boost/optional.hpp>
 typedef CGAL::Side_of_triangle_mesh<Inexact_Mesh, EPICK> Point_inside;
 typedef CGAL::AABB_face_graph_triangle_primitive<Inexact_Mesh> Primitive;
 typedef CGAL::AABB_traits<EPICK, Primitive> AABB_Traits;
