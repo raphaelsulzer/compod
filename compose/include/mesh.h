@@ -22,6 +22,7 @@ namespace fs = boost::filesystem;
 #include <CGAL/Polygon_mesh_processing/orient_polygon_soup.h>
 #include <CGAL/Polygon_mesh_processing/polygon_soup_to_polygon_mesh.h>
 #include <CGAL/Polygon_mesh_processing/orientation.h>
+#include <CGAL/Polygon_mesh_processing/orient_polygon_soup_extension.h>
 #include <CGAL/Polygon_mesh_processing/stitch_borders.h>
 #include <CGAL/Polygon_mesh_processing/compute_normal.h>
 #include <CGAL/Polygon_mesh_processing/repair_polygon_soup.h>
@@ -68,9 +69,6 @@ public:
 
 };
 
-
-#include <CGAL/Polygon_mesh_processing/region_growing.h>
-#include <CGAL/Polygon_mesh_processing/orient_polygon_soup_extension.h>
 
 using namespace std;
 namespace fs = boost::filesystem;

@@ -57,6 +57,8 @@ class PolyhedralComplex:
         self.verbosity = verbosity
         self.logger = make_logger(name="COMPOD",level=verbosity)
         self.logger.debug('Init cell complex with padding {}'.format(padding))
+        self.progress_bar = True if self.verbosity < 30 else False
+
         
         self.debug_export = debug_export
         if self.debug_export:
@@ -267,8 +269,7 @@ class PolyhedralComplex:
             self._init_partition()
 
 
-        progress_bar = True if self.verbosity < 30 else False
-        pbar = tqdm(total=len(planes),file=sys.stdout, disable=np.invert(progress_bar))
+        pbar = tqdm(total=len(planes),file=sys.stdout, disable=np.invert(self.progress_bar))
 
         for i,pl in enumerate(planes):
             
@@ -1993,23 +1994,38 @@ class PolyhedralComplex:
         self.polygons_initialized = False
 
     # @profile
-    def simplify_partition_graph_based_new(self,exact=True,atol=0.0,rtol=0.0,dtol=0.0,only_inside=False):
+    def simplify_partition_graph_based_new(self,exact=True,n_target_cells=None,tolerance=None):
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
+
+        if n_target_cells is None and tolerance is None:
+            self.logger.error('Please specify either the number of target cells or a volume tolerance for simplification...')
+            return 1
 
         if not exact:
             self.logger.info("You are about to apply a simplification process based on inexact coordinates. "
                                 "This will most likely lead to a degenerate complex.")
-        if atol != 0.0 or rtol != 0.0:
-            atol *= self.bounding_poly.volume()
-            dtol *= self.bounding_poly.volume()
-            self.logger.info("You are about to apply a simplification process with atol={}, rtol={} and dtol={} "
-                             "that will most likely lead to intersecting cells.".format(atol,rtol,dtol))
+
+
         if not self.partition_labelled:
             self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
             return 0
         if not self.tree_simplified:
             self.logger.warning("This function is slow. It is recommended to call simplify_tree_based first.")
+
+        # first count all inside cells
+        def _n_in_cells():
+            occs = nx.get_node_attributes(self.graph, "occupancy")
+            return sum(list(occs.values()))
+
+        if tolerance is not None:
+            tolerance *= self.bounding_poly.volume()
+            pbar = tqdm(total=_n_in_cells(),disable=np.invert(self.progress_bar))
+        else:
+            pbar = tqdm(total=_n_in_cells() - n_target_cells,disable=np.invert(self.progress_bar))
+
+
+        self.logger.info("Simplify from {} to {} cells".format(_n_in_cells(),n_target_cells))
 
         def _make_new_cell(c0,c1):
             if exact:
@@ -2025,15 +2041,6 @@ class PolyhedralComplex:
                 return cell.volume()
             else:
                 return cell.volume
-        
-        def _cell_volume_equal(vols):
-            return vols[0] == vols[1]
-        def _cell_volume_close(vols):
-            """collapse if close. have to sort because in overlapping cell cases union vol can be smaller than sum of vols."""
-            vols.sort()
-            return np.isclose(vols[0],vols[1],atol=atol,rtol=rtol)
-        
-        _collapse = _cell_volume_equal if (atol == 0.0 and rtol == 0.0) else _cell_volume_close
 
         if not exact:
             cells = dict()
@@ -2049,54 +2056,88 @@ class PolyhedralComplex:
         nx.set_edge_attributes(self.graph,False,"processed")
 
         def filter_edge(c0, c1):
-            return not self.graph.edges[c0, c1]["processed"]
+            return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
 
 
-        
+        vol_diffs = []
+        edges = []
+        def _init_queue(vol_diffs,edges):
 
-        for c0, c1 in nx.subgraph_view(self.graph, filter_edge=filter_edge).edges:
+            for c0,c1 in nx.subgraph_view(self.graph, filter_edge=filter_edge).edges:
+                self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
+                self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
 
-            if only_inside:
-                if not self.graph.nodes[c0]["occupancy"] or not self.graph.nodes[c1]["occupancy"]:
-                    self.graph.edges[c0,c1]["processed"] = True
-                    continue
-            else:
-                if not (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]):
-                    self.graph.edges[c0,c1]["processed"] = True
-                    continue
-
-
-            cx = None
-            if self.graph.edges[c0,c1]["union_volume"] is None:
                 cx = _make_new_cell(c0,c1)
                 self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(cx)
-            if self.graph.nodes[c0]["volume"] is None: self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
-            if self.graph.nodes[c1]["volume"] is None: self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
 
-            vols = np.array([self.graph.edges[c0, c1]["union_volume"],self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]])
-            if _collapse(vols):
-                cc = [c0,c1]
-                if self.graph.nodes[c0]["volume"] < self.graph.nodes[c1]["volume"]: cc.reverse()
-                c0 = cc[0];
-                c1 = cc[1]
+                vol_diffs.append(abs((self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]) - self.graph.edges[c0,c1]["union_volume"]))
+                edges.append((c0,c1))
 
-                if self.graph.nodes[c1]["volume"] < dtol:
-                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                else:
-                    self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
-                    nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
-                    self.cells[c0] = cx if cx is not None else _make_new_cell(c0,c1)
-                del self.cells[c1]
-                for n0, n1 in self.graph.edges(c0):
-                    if (self.graph.nodes[n0]["occupancy"] == self.graph.nodes[n1]["occupancy"]):
-                        new_union = _make_new_cell(n0,n1)
-                        self.graph.edges[n0, n1]["union_volume"] = _get_cell_volume(new_union)
-                        self.graph.edges[n0, n1]["processed"] = False
-                del self.graph.nodes[c0]["contraction"]
-                break
-            else:
-                self.graph.edges[c0, c1]["processed"] = True
-                continue
+            vol_diffs = np.array(vol_diffs)
+            sort = np.argsort(vol_diffs)
+            return vol_diffs[sort], np.array(edges)[sort]
+
+        def _update_queue(vol_diffs,edges,cell):
+
+            for c0, c1 in self.graph.edges(cell):
+                if (self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]):
+                    new_union = _make_new_cell(c0,c1)
+                    self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
+
+                    new_diff = abs((self.graph.nodes[c0]["volume"] + self.graph.nodes[c1]["volume"])
+                                   - self.graph.edges[c0, c1]["union_volume"])
+
+                    idx = vol_diffs.searchsorted(new_diff)
+                    vol_diffs = np.concatenate((vol_diffs[:idx], [new_diff], vol_diffs[idx:]))
+                    edges = np.concatenate((edges[:idx,:], [(c0,c1)], edges[idx:,:]))
+
+            return vol_diffs, edges
+
+        vol_diffs, edges = _init_queue(vol_diffs,edges)
+
+        def condition(vol_diffs):
+
+            c0 = False
+            if n_target_cells is not None:
+                c0 = _n_in_cells() > n_target_cells
+
+            c1 = False
+            if tolerance is not None:
+                c1 = vol_diffs[0] < tolerance
+
+            return (c0 or c1)
+
+        # while(_n_in_cells() > n_target_cells):
+
+        while(condition(vol_diffs)):
+
+
+            while edges[0,0] not in self.cells or edges[0,1] not in self.cells:
+                vol_diffs = np.delete(vol_diffs,0,axis=0)
+                edges = np.delete(edges,0,axis=0)
+
+            pbar.update(1)
+
+            cc = edges[0]
+            if self.graph.nodes[edges[0,0]]["volume"] < self.graph.nodes[edges[0,1]]["volume"]: cc = np.flip(cc)
+            c0 = cc[0];
+            c1 = cc[1]
+
+            self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+
+            self.cells[c0] = _make_new_cell(c0, c1)
+
+            nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
+            del self.cells[c1]
+            del self.graph.nodes[c0]["contraction"]
+
+            vol_diffs, edges = _update_queue(vol_diffs,edges,c0)
+
+
+
+
+        pbar.close()
 
 
         if not exact:
@@ -2542,8 +2583,7 @@ class PolyhedralComplex:
         if not self.partition_initialized:
             self._init_partition()
 
-        progress_bar = True if self.verbosity < 30 else False
-        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(progress_bar), position=0, leave=True)
+        pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True)
         children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
         for child in children:
             pbar.update(self._compute_split(cell_id=child, insertion_order=insertion_order))
@@ -2728,8 +2768,7 @@ class PolyhedralComplex:
         if num_workers > 0:
             pool = multiprocessing.Pool(processes=num_workers)
 
-        progress_bar = True if self.verbosity < 30 else False
-        pbar = tqdm(total=len(self.vg.bounds),file=sys.stdout, disable=np.invert(progress_bar))
+        pbar = tqdm(total=len(self.vg.bounds),file=sys.stdout, disable=np.invert(self.progress_bar))
 
         for i in range(len(self.vg.bounds)):  # kinetic for each primitive
             # bounding box intersection test
