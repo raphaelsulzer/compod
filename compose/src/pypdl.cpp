@@ -134,6 +134,14 @@ const float pyPDL::_label(vector<EPICK::Point_3>& inexact_polyhedron_points){
     return pin/(pout+pin);
 }
 
+double
+pyPDL::label_one_cell(const nb::ndarray<double, nb::shape<nb::any, 3>>& points){
+
+    vector<EPICK::Point_3> cgpoints;
+    for(int j = 0; j < points.shape(0); j++)
+        cgpoints.push_back(EPICK::Point_3(points(j,0),points(j,1),points(j,2)));
+    return this->_label(cgpoints);
+}
 
 
 vector<double>
@@ -163,7 +171,8 @@ NB_MODULE(libPYPDL, m) {
     nb::class_<pyPDL>(m, "pdl")
             .def(nb::init<int>(),"n_test_points"_a = 100)
             .def("load_mesh", &pyPDL::load_mesh, "filename"_a, "Load a polygon soup.")
-            .def("label_cells", &pyPDL::label_cells, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
+            .def("label_cells", &pyPDL::label_cells, "number_of_cell_points"_a, "cell_vertices"_a, "Generate a polygon mesh from the polygon soup.")
+            .def("label_one_cell", &pyPDL::label_one_cell, "cell_vertices"_a, "Generate a polygon mesh from the polygon soup.")
             .def("export_test_points", &pyPDL::export_test_points, "filename"_a, "Export the test points colored by occupancy.");
 }
 

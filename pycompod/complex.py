@@ -542,10 +542,10 @@ class PolyhedralComplex:
             else:
                 return facet,cross,np.array([0,1,0])
 
+        self.logger.info('Save simplified surface mesh...')
+
         if not self.polygons_constructed:
             self.construct_polygons()
-
-        self.logger.info('Save simplified surface mesh...')
 
         region_to_polygons = defaultdict(list)
         region_normals = dict()
@@ -1326,9 +1326,8 @@ class PolyhedralComplex:
 
         occs = np.vstack((occs, [[0,10],[0,10],[0,10],[0,10],[0,10],[0,10]])) # this is for the bounding box cells, which are the last 6 cells of the graph
 
-        # if self.debug_export:
-
-        pl.export_test_points(os.path.join("/home/rsulzer/data/RobustLowPolyDataSet/Thingi10k/DEBUG/label_test_points.ply"))
+        if self.debug_export:
+            pl.export_test_points(os.path.join("/home/rsulzer/data/RobustLowPolyDataSet/Thingi10k/DEBUG/label_test_points.ply"))
 
         # self.complexExporter.export_label_colored_cells(path=self.debug_export, graph=self.graph, cells=self.cells, occs=occs)
 
@@ -1994,7 +1993,7 @@ class PolyhedralComplex:
         self.polygons_initialized = False
 
     # @profile
-    def simplify_partition_graph_based_new(self,exact=True,n_target_cells=None,tolerance=None):
+    def simplify_partition_graph_based_vol_diff(self,exact=True,n_target_cells=None,tolerance=None,mesh_file=None):
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
@@ -2002,9 +2001,6 @@ class PolyhedralComplex:
             self.logger.error('Please specify either the number of target cells or a volume tolerance for simplification...')
             return 1
 
-        if not exact:
-            self.logger.info("You are about to apply a simplification process based on inexact coordinates. "
-                                "This will most likely lead to a degenerate complex.")
 
 
         if not self.partition_labelled:
@@ -2056,7 +2052,8 @@ class PolyhedralComplex:
         nx.set_edge_attributes(self.graph,False,"processed")
 
         def filter_edge(c0, c1):
-            return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
+            # return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
+            return True
 
 
         vol_diffs = []
@@ -2079,17 +2076,22 @@ class PolyhedralComplex:
 
         def _update_queue(vol_diffs,edges,cell):
 
+            # remove the old values from the queue
+            ids = (edges == cell).any(axis=1)
+            vol_diffs = np.delete(vol_diffs, ids, axis=0)
+            edges = np.delete(edges, ids, axis=0)
+
             for c0, c1 in self.graph.edges(cell):
-                if (self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]):
-                    new_union = _make_new_cell(c0,c1)
-                    self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
 
-                    new_diff = abs((self.graph.nodes[c0]["volume"] + self.graph.nodes[c1]["volume"])
-                                   - self.graph.edges[c0, c1]["union_volume"])
+                new_union = _make_new_cell(c0,c1)
+                self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
 
-                    idx = vol_diffs.searchsorted(new_diff)
-                    vol_diffs = np.concatenate((vol_diffs[:idx], [new_diff], vol_diffs[idx:]))
-                    edges = np.concatenate((edges[:idx,:], [(c0,c1)], edges[idx:,:]))
+                new_diff = abs((self.graph.nodes[c0]["volume"] + self.graph.nodes[c1]["volume"])
+                               - self.graph.edges[c0, c1]["union_volume"])
+
+                idx = vol_diffs.searchsorted(new_diff)
+                vol_diffs = np.concatenate((vol_diffs[:idx], [new_diff], vol_diffs[idx:]))
+                edges = np.concatenate((edges[:idx,:], [(c0,c1)], edges[idx:,:]))
 
             return vol_diffs, edges
 
@@ -2107,10 +2109,8 @@ class PolyhedralComplex:
 
             return (c0 or c1)
 
-        # while(_n_in_cells() > n_target_cells):
 
         while(condition(vol_diffs)):
-
 
             while edges[0,0] not in self.cells or edges[0,1] not in self.cells:
                 vol_diffs = np.delete(vol_diffs,0,axis=0)
@@ -2124,6 +2124,205 @@ class PolyhedralComplex:
             c1 = cc[1]
 
             self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+            self.cells[c0] = _make_new_cell(c0, c1)
+            nx.contracted_edge(self.graph, (c0, c1), self_loops=False, copy=False)
+
+            del self.cells[c1]
+            del self.graph.nodes[c0]["contraction"]
+
+            vol_diffs, edges = _update_queue(vol_diffs,edges,c0)
+
+        pbar.close()
+
+        if not exact:
+            cells = dict()
+            for k,v in self.cells.items():
+                cells[k] = Polyhedron(vertices=v.points[v.vertices],base_ring=QQ)
+            self.cells = cells
+
+        self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
+        self.polygons_initialized = False
+
+    # @profile
+    def simplify_partition_graph_based_occ_diff(self,n_target_cells=None,tolerance=None,mesh_file=None):
+
+        self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
+
+        if n_target_cells is None and tolerance is None:
+            self.logger.error('Please specify either the number of target cells or a volume tolerance for simplification...')
+            return 1
+
+        if mesh_file is not None:
+            try:
+                from pycompose import pdl
+            except:
+                self.logger.error(
+                    "Labeling partition with 'mesh' not available. Either install COMPOSE from https://github.com/raphaelsulzer/compod#compose"
+                    " or use type 'normals' for labeling.")
+                raise ModuleNotFoundError
+            pl=pdl(50)
+            if pl.load_mesh(mesh_file):
+                return 1
+
+        if not self.partition_labelled:
+            self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
+            return 0
+        if not self.tree_simplified:
+            self.logger.warning("This function is slow. It is recommended to call simplify_tree_based first.")
+
+        # first count all inside cells
+        def _n_in_cells():
+            occs = nx.get_node_attributes(self.graph, "occupancy")
+            return sum(list(occs.values()))
+
+        if tolerance is not None:
+            tolerance *= self.bounding_poly.volume()
+            pbar = tqdm(total=_n_in_cells(),disable=np.invert(self.progress_bar))
+        else:
+            pbar = tqdm(total=_n_in_cells() - n_target_cells,disable=np.invert(self.progress_bar))
+
+
+        self.logger.info("Simplify from {} to {} cells".format(_n_in_cells(),n_target_cells))
+
+        def _make_new_cell(c0,c1):
+
+            p0 = self.cells[c0].points[self.cells[c0].vertices]
+            p1 = self.cells[c1].points[self.cells[c1].vertices]
+            pts = np.vstack((p0,p1))
+            return scipy.spatial.ConvexHull(pts)
+
+        def _get_cell_volume(cell):
+            return cell.volume
+
+        def _get_cell_occupancy(cell):
+            return pl.label_one_cell(cell.points[cell.vertices])
+
+        cells = dict()
+        for k,v in self.cells.items():
+            cells[k] = scipy.spatial.ConvexHull(np.array(v.vertices_list()))
+        self.cells = cells
+
+        before = len(self.graph.nodes)
+        if not bool(nx.get_node_attributes(self.graph, "volume")):
+            nx.set_node_attributes(self.graph, None, "volume")
+        if not bool(nx.get_edge_attributes(self.graph, "union_volume")):
+            nx.set_edge_attributes(self.graph,None,"union_volume")
+        if not bool(nx.get_node_attributes(self.graph, "float_occ")):
+            nx.set_node_attributes(self.graph, None, "float_occ")
+        if not bool(nx.get_edge_attributes(self.graph, "union_occ")):
+            nx.set_edge_attributes(self.graph,None,"union_occ")
+
+        def filter_edge(c0, c1):
+            return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
+            # return True
+
+        # def check_convex_hull_intersection(hull1, hull2):
+        #     for point in hull1.points:
+        #         if hull2.find_simplex(point) >= 0:
+        #             return True
+        #     for point in hull2.points:
+        #         if hull1.find_simplex(point) >= 0:
+        #             return True
+        #     return False
+
+        occ_diffs = []
+        vol_diffs = []
+        edges = []
+        def _init_queue(occ_diffs, vol_diffs, edges):
+
+            for c0,c1 in nx.subgraph_view(self.graph, filter_edge=filter_edge).edges:
+                self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
+                self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
+
+                self.graph.nodes[c0]["float_occ"] = _get_cell_occupancy(self.cells[c0])
+                self.graph.nodes[c1]["float_occ"] = _get_cell_occupancy(self.cells[c1])
+
+                cx = _make_new_cell(c0,c1)
+                self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(cx)
+                self.graph.edges[c0,c1]["union_occ"] = _get_cell_occupancy(cx)
+
+                occ_diff = 1 - self.graph.edges[c0,c1]["union_occ"]
+                vol_diff = abs((self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]) - self.graph.edges[c0,c1]["union_volume"])
+
+                # if check_convex_hull_intersection(self.cells[c0], self.cells[c1]):
+                #     continue
+
+                occ_diffs.append(occ_diff)
+                vol_diffs.append(vol_diff)
+                edges.append((c0,c1))
+
+            occ_diffs = np.array(occ_diffs)
+            sort = np.argsort(occ_diffs)
+            return occ_diffs[sort], np.array(vol_diffs)[sort], np.array(edges)[sort]
+
+
+
+        def _update_queue(occ_diffs,vol_diffs,edges,cell):
+            
+            # remove the old values from the queue
+            ids = (edges == cell).any(axis=1)
+            occ_diffs = np.delete(occ_diffs, ids, axis=0)
+            vol_diffs = np.delete(vol_diffs, ids, axis=0)
+            edges = np.delete(edges, ids, axis=0)
+
+            for c0, c1 in self.graph.edges(cell):
+                if (not self.graph.nodes[c0]["occupancy"]) or (not self.graph.nodes[c1]["occupancy"]):
+                    continue
+
+                new_union = _make_new_cell(c0,c1)
+                self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
+                self.graph.edges[c0, c1]["union_occ"] = _get_cell_occupancy(new_union)
+
+                occ_diff = 1 - self.graph.edges[c0,c1]["union_occ"]
+                vol_diff = abs((self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]) - self.graph.edges[c0,c1]["union_volume"])
+
+                # if check_convex_hull_intersection(self.cells[c0],self.cells[c1]):
+                #     continue
+
+                idx = occ_diffs.searchsorted(occ_diff)
+                occ_diffs = np.concatenate((occ_diffs[:idx], [occ_diff], occ_diffs[idx:]))
+                vol_diffs = np.concatenate((vol_diffs[:idx], [vol_diff], vol_diffs[idx:]))
+                edges = np.concatenate((edges[:idx,:], [(c0,c1)], edges[idx:,:]))
+
+            return occ_diffs, vol_diffs, edges
+
+        occ_diffs, vol_diffs, edges = _init_queue(occ_diffs, vol_diffs,edges)
+
+        def condition():
+
+            return _n_in_cells() > n_target_cells
+
+
+        while(condition()):
+
+            while edges.shape[0] > 0 and (edges[0,0] not in self.cells or edges[0,1] not in self.cells):
+                occ_diffs = np.delete(occ_diffs,0,axis=0)
+                vol_diffs = np.delete(vol_diffs,0,axis=0)
+                edges = np.delete(edges,0,axis=0)
+
+
+            if not len(occ_diffs) or (occ_diffs[0] > 0.51):
+                self.logger.warning("Cannot achieve {} target cells without missing data".format(n_target_cells))
+                break
+
+
+            pbar.update(1)
+
+            cc = edges[0]
+            if self.graph.nodes[edges[0,0]]["volume"] < self.graph.nodes[edges[0,1]]["volume"]: cc = np.flip(cc)
+            c0 = cc[0];
+            c1 = cc[1]
+
+            self.graph.nodes[c0]["volume"] = self.graph.edges[c0, c1]["union_volume"]
+
+            self.graph.nodes[c0]["float_occ"] = self.graph.edges[c0, c1]["union_occ"]
+            self.graph.nodes[c0]["occupancy"] = round(self.graph.edges[c0, c1]["union_occ"])
+
+            if occ_diffs[0] != (1 -  self.graph.edges[c0, c1]["union_occ"]):
+                a=5
+
+            if(not self.graph.nodes[c0]["occupancy"]):
+                q=5
 
             self.cells[c0] = _make_new_cell(c0, c1)
 
@@ -2132,22 +2331,23 @@ class PolyhedralComplex:
             del self.cells[c1]
             del self.graph.nodes[c0]["contraction"]
 
-            vol_diffs, edges = _update_queue(vol_diffs,edges,c0)
 
 
+            occ_diffs, vol_diffs, edges = _update_queue(occ_diffs, vol_diffs,edges,c0)
 
 
         pbar.close()
 
 
-        if not exact:
-            cells = dict()
-            for k,v in self.cells.items():
-                cells[k] = Polyhedron(vertices=v.points,base_ring=QQ)
-            self.cells = cells
+        cells = dict()
+        for k,v in self.cells.items():
+            cells[k] = Polyhedron(vertices=v.points[v.vertices],base_ring=QQ)
+        self.cells = cells
 
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
         self.polygons_initialized = False
+
+
 
 
     def simplify_partition_tree_based(self):
