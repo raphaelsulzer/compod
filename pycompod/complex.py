@@ -1993,15 +1993,13 @@ class PolyhedralComplex:
         self.polygons_initialized = False
 
     # @profile
-    def simplify_partition_graph_based_vol_diff(self,exact=True,n_target_cells=None,tolerance=None,mesh_file=None):
+    def simplify_partition_graph_based_vol_diff(self,n_target_cells=None,tolerance=None):
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
         if n_target_cells is None and tolerance is None:
             self.logger.error('Please specify either the number of target cells or a volume tolerance for simplification...')
             return 1
-
-
 
         if not self.partition_labelled:
             self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
@@ -2024,37 +2022,29 @@ class PolyhedralComplex:
         self.logger.info("Simplify from {} to {} cells".format(_n_in_cells(),n_target_cells))
 
         def _make_new_cell(c0,c1):
-            if exact:
-                return Polyhedron(vertices=self.cells[c0].vertices_list() + self.cells[c1].vertices_list(),base_ring=QQ)
-            else:
-                p0 = self.cells[c0].points
-                p1 = self.cells[c1].points
-                pts = np.vstack((p0,p1))
-                return scipy.spatial.ConvexHull(pts)
+            p0 = self.cells[c0].points[self.cells[c0].vertices]
+            p1 = self.cells[c1].points[self.cells[c1].vertices]
+            pts = np.vstack((p0,p1))
+            return scipy.spatial.ConvexHull(pts)
 
         def _get_cell_volume(cell):
-            if exact:
-                return cell.volume()
-            else:
-                return cell.volume
+            return cell.volume
 
-        if not exact:
-            cells = dict()
-            for k,v in self.cells.items():
-                cells[k] = scipy.spatial.ConvexHull(np.array(v.vertices_list()))
-            self.cells = cells
+
+        cells = dict()
+        for k,v in self.cells.items():
+            cells[k] = scipy.spatial.ConvexHull(np.array(v.vertices_list()))
+        self.cells = cells
 
         before = len(self.graph.nodes)
         if not bool(nx.get_node_attributes(self.graph, "volume")):
             nx.set_node_attributes(self.graph, None, "volume")
         if not bool(nx.get_edge_attributes(self.graph, "union_volume")):
             nx.set_edge_attributes(self.graph,None,"union_volume")
-        nx.set_edge_attributes(self.graph,False,"processed")
 
         def filter_edge(c0, c1):
-            # return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
-            return True
-
+            return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
+            # return True
 
         vol_diffs = []
         edges = []
@@ -2082,13 +2072,12 @@ class PolyhedralComplex:
             edges = np.delete(edges, ids, axis=0)
 
             for c0, c1 in self.graph.edges(cell):
-
+                if (not self.graph.nodes[c0]["occupancy"]) or (not self.graph.nodes[c1]["occupancy"]):
+                    continue
                 new_union = _make_new_cell(c0,c1)
                 self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
-
                 new_diff = abs((self.graph.nodes[c0]["volume"] + self.graph.nodes[c1]["volume"])
                                - self.graph.edges[c0, c1]["union_volume"])
-
                 idx = vol_diffs.searchsorted(new_diff)
                 vol_diffs = np.concatenate((vol_diffs[:idx], [new_diff], vol_diffs[idx:]))
                 edges = np.concatenate((edges[:idx,:], [(c0,c1)], edges[idx:,:]))
@@ -2134,11 +2123,10 @@ class PolyhedralComplex:
 
         pbar.close()
 
-        if not exact:
-            cells = dict()
-            for k,v in self.cells.items():
-                cells[k] = Polyhedron(vertices=v.points[v.vertices],base_ring=QQ)
-            self.cells = cells
+        cells = dict()
+        for k,v in self.cells.items():
+            cells[k] = Polyhedron(vertices=v.points[v.vertices],base_ring=QQ)
+        self.cells = cells
 
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
         self.polygons_initialized = False
@@ -2216,14 +2204,6 @@ class PolyhedralComplex:
             return self.graph.nodes[c0]["occupancy"] and self.graph.nodes[c1]["occupancy"]
             # return True
 
-        # def check_convex_hull_intersection(hull1, hull2):
-        #     for point in hull1.points:
-        #         if hull2.find_simplex(point) >= 0:
-        #             return True
-        #     for point in hull2.points:
-        #         if hull1.find_simplex(point) >= 0:
-        #             return True
-        #     return False
 
         occ_diffs = []
         vol_diffs = []
