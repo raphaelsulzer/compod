@@ -536,7 +536,11 @@ class PolyhedralComplex:
 
             cross = cross/np.linalg.norm(cross)
 
-            normal = np.array(self.vg.input_planes[plane_id,:3])
+            # normal = np.array(self.vg.input_planes[plane_id,:3])
+            normal = np.array(self.vg.input_groups[plane_id,:]).mean(axis=0)
+            # TODO: use only the input points that fall on the current facet to compute the normal, instead of all (merged) inliers of the plane
+            # poly = Polygon(np.array(plane.to_2d(vertices)))
+            # contain = contains_xy(poly, self.vg.projected_points[group])
             if np.dot(cross,normal) < 0:
                 return np.flip(facet),cross,np.array([1,0,0])
             else:
@@ -2030,6 +2034,39 @@ class PolyhedralComplex:
         def _get_cell_volume(cell):
             return cell.volume
 
+        import polytope as pc
+        def _intersect(c0, c1):
+
+            poly1 = pc.Polytope(c0.equations[:,:3],-c0.equations[:,-1])
+            poly2 = pc.Polytope(c1.equations[:,:3],-c1.equations[:,-1])
+
+            intersection = poly1.intersect(poly2)
+
+            if intersection.volume < 0.00001:
+                return False
+            return True
+
+        def _intersect_neighbors(c0,c1,new_union):
+
+            intersect = False
+            for n0, n1 in self.graph.edges(c0):
+                if n1 == c1:
+                    continue
+                if (not self.graph.nodes[n0]["occupancy"]) or (not self.graph.nodes[n1]["occupancy"]):
+                    continue
+                intersect = _intersect(new_union, self.cells[n1])
+                if intersect: return True
+
+            for n0, n1 in self.graph.edges(c1):
+                if n1 == c0:
+                    continue
+                if (not self.graph.nodes[n0]["occupancy"]) or (not self.graph.nodes[n1]["occupancy"]):
+                    continue
+                intersect = _intersect(new_union, self.cells[n1])
+                if intersect: return True
+
+            return intersect
+
 
         cells = dict()
         for k,v in self.cells.items():
@@ -2054,8 +2091,13 @@ class PolyhedralComplex:
                 self.graph.nodes[c0]["volume"] = _get_cell_volume(self.cells[c0])
                 self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
 
-                cx = _make_new_cell(c0,c1)
-                self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(cx)
+                new_union = _make_new_cell(c0,c1)
+                if tolerance is None and _intersect_neighbors(c0,c1,new_union):
+                    continue
+
+                self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(new_union)
+
+
 
                 vol_diffs.append(abs((self.graph.nodes[c0]["volume"]+self.graph.nodes[c1]["volume"]) - self.graph.edges[c0,c1]["union_volume"]))
                 edges.append((c0,c1))
@@ -2074,10 +2116,15 @@ class PolyhedralComplex:
             for c0, c1 in self.graph.edges(cell):
                 if (not self.graph.nodes[c0]["occupancy"]) or (not self.graph.nodes[c1]["occupancy"]):
                     continue
+
                 new_union = _make_new_cell(c0,c1)
+                if tolerance is None and _intersect_neighbors(c0,c1,new_union):
+                    continue
+
                 self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
                 new_diff = abs((self.graph.nodes[c0]["volume"] + self.graph.nodes[c1]["volume"])
                                - self.graph.edges[c0, c1]["union_volume"])
+
                 idx = vol_diffs.searchsorted(new_diff)
                 vol_diffs = np.concatenate((vol_diffs[:idx], [new_diff], vol_diffs[idx:]))
                 edges = np.concatenate((edges[:idx,:], [(c0,c1)], edges[idx:,:]))
@@ -2088,22 +2135,25 @@ class PolyhedralComplex:
 
         def condition(vol_diffs):
 
-            c0 = False
+            c0 = True
             if n_target_cells is not None:
                 c0 = _n_in_cells() > n_target_cells
 
-            c1 = False
+            c1 = True
             if tolerance is not None:
                 c1 = vol_diffs[0] < tolerance
 
-            return (c0 or c1)
+            return (c0 and c1)
 
 
         while(condition(vol_diffs)):
 
-            while edges[0,0] not in self.cells or edges[0,1] not in self.cells:
+            while edges.shape[0] > 0 and (edges[0,0] not in self.cells or edges[0,1] not in self.cells):
                 vol_diffs = np.delete(vol_diffs,0,axis=0)
                 edges = np.delete(edges,0,axis=0)
+
+            if edges.shape[0] == 0:
+                break
 
             pbar.update(1)
 

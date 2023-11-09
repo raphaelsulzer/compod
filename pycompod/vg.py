@@ -382,7 +382,9 @@ class VertexGroup:
             self._cluster_planes()
 
         ### orient planes according to the mean normal orientation of it's input points
-        self._orient_planes()
+        ### cannot actually use this before merging, because I want to merge oppositely oriented planes!
+        ### can also not do it after merge, see below!
+        # self._orient_planes()
 
         self.halfspaces = []
         self.polygons = []
@@ -492,6 +494,10 @@ class VertexGroup:
             self.merged_plane_from_input_planes = []
             for p in self.planes:
                 self.merged_plane_from_input_planes.append(np.where((p==self.planes).all(axis=1))[0])
+
+        ### orient planes according to the mean normal orientation of it's input points
+        ### leads to a crash to do this down here, most likely because hspace orientations do not correspond to planes anymore
+        # self._orient_planes()
 
         ## export planes and samples
         if self.export:
