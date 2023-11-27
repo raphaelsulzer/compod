@@ -239,7 +239,7 @@ class VertexGroup:
             current+=n
         return groups
 
-    def _cluster_planes(self):
+    def _cluster_planes_centroid(self):
 
         # TODO: implement a new clustering with a KD tree with custom distance
 
@@ -264,7 +264,7 @@ class VertexGroup:
 
             cosine_dist = np.dot(x[:3],y[:3])
             # better to keep the degree scaling in here, even if it is more expensive, but it is awful to tune the epsilon alpha parameter otherwise
-            scaled_cosine_dist = acos(cosine_dist)*180/math.pi / epsilon_cosine
+            scaled_cosine_dist = (acos(cosine_dist)*180/math.pi) / epsilon_cosine
             scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
             return scaled_cosine_dist+scaled_euclidean_dist
 
@@ -296,6 +296,51 @@ class VertexGroup:
         
         self.planes = new_planes
 
+    def _cluster_planes(self):
+
+        # TODO: implement a new clustering with a KD tree with custom distance
+
+        def acos(x):
+            # range is -1 to 1 !!
+            return (-0.69813170079773212 * x * x - 0.87266462599716477) * x + 1.5707963267948966
+
+        self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon, self.alpha))
+
+        ### orient planes to a corner, important to run this before cluster_planes() so that planes with the same normal but d = -d are not clustered
+        self._orient_planes(to_corner=True)
+
+        epsilon_cosine = self.alpha
+        epsilon_euclidean = self.epsilon
+
+        # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+        def custom_distance(x, y):
+
+            euclidean_dist = np.abs(x[3] - y[3])
+            cosine_dist = np.dot(x[:3], y[:3])
+            # better to keep the degree scaling in here, even if it is more expensive, but it is awful to tune the epsilon alpha parameter otherwise
+            scaled_cosine_dist = (acos(cosine_dist) * 180 / math.pi) / epsilon_cosine
+            scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
+            return scaled_cosine_dist + scaled_euclidean_dist
+
+        ### clustering
+        clusters = NearestNeighbors(n_jobs=-1, radius=0.99, metric=custom_distance).fit(self.planes)
+        clusters = clusters.radius_neighbors(return_distance=False)
+
+        processed = np.zeros(self.planes.shape[0])
+        new_planes = np.zeros(self.planes.shape)
+        for i, cl in enumerate(clusters):
+            if processed[i]:
+                continue
+            if not len(cl):
+                new_planes[i] = self.planes[i]
+                processed[i] = True
+            else:
+                ids = np.hstack((cl, i))
+                new_planes[ids] = np.mean(self.planes[ids, :], axis=0)
+                processed[ids] = True
+
+        self.planes = new_planes
+        
     def _cluster_planes_DBSCAN(self):
 
         def acos(x):
@@ -310,7 +355,7 @@ class VertexGroup:
         epsilon_cosine = self.alpha
         epsilon_euclidean = self.epsilon
 
-        # def custom_distance(x, y, epsilon_cosine, epsilon_euclidean):
+        
         def custom_distance(x, y):
 
             dist1 = np.abs(np.dot(x[4:],y[:3])+y[3])
@@ -323,15 +368,14 @@ class VertexGroup:
             scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
             return scaled_cosine_dist+scaled_euclidean_dist
 
+
         self.plane_centroids = []
         for gr in self.groups:
             pts = self.points[gr]
             self.plane_centroids.append(pts.mean(axis=0))
         self.plane_centroids = np.array(self.plane_centroids)
         self.features = np.hstack((self.planes,self.plane_centroids))
-
         clusters = DBSCAN(n_jobs=-1, eps=0.99, min_samples=1, metric=custom_distance).fit(self.features)
-
 
         # resort so that cluster id = input plane id
         cluster_dict = {old_label: new_label for new_label, old_label in enumerate(clusters.labels_)}
@@ -346,7 +390,6 @@ class VertexGroup:
             for i, pl in enumerate(self.planes):
                 if np.dot(pl[:3], corner) < 0:
                     self.planes[i] = -pl
-
         else:
             for i,pl in enumerate(self.planes):
 
@@ -354,8 +397,6 @@ class VertexGroup:
                 plane_normal = np.mean(point_normals,axis=0)
                 if np.dot(pl[:3],plane_normal) < 0:
                     self.planes[i] = -pl
-
-
 
     def _process_npz(self):
         """
@@ -372,8 +413,6 @@ class VertexGroup:
         self.normals = data["normals"].astype(type)
         self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
         self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
-
-
 
         self.logger.info(
             "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
@@ -501,9 +540,9 @@ class VertexGroup:
 
         ## export planes and samples
         if self.export:
-            # pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
+            pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
             plane_file =  os.path.splitext(self.input_file)[0]+'_merged.ply'
-            self.plane_exporter.save_points_and_planes(plane_filename=plane_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
+            self.plane_exporter.save_points_and_planes(plane_filename=plane_file,point_filename=pt_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
 
         ## fill the hull_vertices array to make it a matrix instead of jagged array for an efficient _get_best_plane function with matrix multiplications
         ## if torch.nested.nested_tensor ever supports broadcasting and dot products, the code could be simplified a lot.

@@ -144,7 +144,7 @@ class PlaneExporter:
             groups.append(vert_group)
             last += npp
 
-        self.save_points_and_planes(plane_filename,point_filename,planes_array["points"],planes_array["normals"],groups,planes_array["group_parameters"],planes_array["colors"])
+        self.save_points_and_planes(plane_filename,point_filename,planes_array["points"],planes_array["normals"],groups,planes_array["group_parameters"],planes_array["group_colors"])
 
 
     def save_points_and_planes(self,plane_filename=None,point_filename=None,points=None,normals=None,groups=None,planes=None,colors=None):
