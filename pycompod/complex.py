@@ -39,7 +39,7 @@ class PolyhedralComplex:
     """
     Class of cell complex from planar primitive arrangement.
     """
-    def __init__(self, vertex_group, padding=0.02, insertion_threshold=0, device='cpu', debug_export=False, verbosity=logging.WARN):
+    def __init__(self, vertex_group, padding=0.02, insertion_threshold=0, device='cpu', debug_export=False, verbosity=logging.WARN, construct_graph=True):
         """
         Init PolyhedralComplex.
         Class of polyhedral complex from planar primitive arrangement.
@@ -86,6 +86,7 @@ class PolyhedralComplex:
         else:
             self.torch = None
 
+        self.construct_graph = construct_graph
         self.partition_initialized = False
         self.polygons_initialized = False
         self.polygons_constructed = False
@@ -201,6 +202,7 @@ class PolyhedralComplex:
         self.vg.plane_colors = np.vstack((self.vg.plane_colors,bb_color.astype(self.vg.plane_colors.dtype)))
 
         max_node_id = max(list(self.graph.nodes))
+        # max_node_id = max(list(self.cells.keys()))
         for i,plane in enumerate(bb_planes):
 
 
@@ -211,15 +213,17 @@ class PolyhedralComplex:
                 self.complexExporter.write_cell(os.path.join(self.debug_export,"bounding_box_cells"),op,count=-(i+1))
 
             self.cells[i+1+max_node_id] = op
+
             self.graph.add_node(i+1+max_node_id, bounding_box=i)
+            if self.construct_graph:
+                for cell_id in list(self.graph.nodes):
 
-            for cell_id in list(self.graph.nodes):
+                    intersection = op.intersection(self.cells.get(cell_id))
 
-                intersection = op.intersection(self.cells.get(cell_id))
-
-                if intersection.dim() == 2:
-                    self.graph.add_edge(i+1+max_node_id,cell_id, intersection=None, vertices=[],
-                                   supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=i)
+                    if intersection.dim() == 2:
+                        self.graph.add_edge(i+1+max_node_id,cell_id,
+                                            # intersection=None, vertices=[],
+                                       supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=i)
 
 
     def _prepend_planes_to_vg(self, planes, color=None, points=None, normals=None, classes=None, projected_points=None):
@@ -558,7 +562,7 @@ class PolyhedralComplex:
         self.logger.info('Save simplified surface mesh...')
 
         if not self.polygons_constructed:
-            self.construct_polygons()
+            self._construct_polygons()
 
         region_to_polygons = defaultdict(list)
         region_normals = dict()
@@ -815,7 +819,7 @@ class PolyhedralComplex:
 
 
         if not self.polygons_constructed:
-            self.construct_polygons()
+            self._construct_polygons()
 
         self.logger.info('Save surface mesh ({})...'.format(backend))
 
@@ -1025,15 +1029,11 @@ class PolyhedralComplex:
                 facets.append(tf)
             vert_count+=len(ss[2])
 
-
         self.complexExporter.write_surface(out_file, points=verts, facets=facets, pcolors=vcolors)
 
 
 
-
-
-
-    def save_partition(self, filepath, rand_colors=True, export_boundary=True, with_primitive_id=True):
+    def save_partition(self, out_file, rand_colors=True, export_boundary=True):
         """
         Save polygon soup of indexed convexes to a ply file.
 
@@ -1046,6 +1046,10 @@ class PolyhedralComplex:
         use_mtl: bool
             Use mtl attribute in obj if set True
         """
+
+        if not self.construct_graph:
+            self.logger.error("Cannot export partition when construct_graph = False")
+            return 1
 
         def _sorted_vertex_indices(adjacency_matrix):
 
@@ -1063,19 +1067,15 @@ class PolyhedralComplex:
 
 
         self.logger.info('Save partition...')
-        self.logger.debug("to {}".format(filepath))
+        self.logger.debug("to {}".format(out_file))
 
 
-        # create the dir if not exists
+        # have to initialize polygons, ie graph edges to export the partition
         if not self.polygons_initialized:
             self._init_polygons()
 
-
-        filepath = Path(filepath)
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-
         points = []
-        indices = []
+        facets = []
         primitive_ids = []
         count = 0
         ecount = 0
@@ -1093,7 +1093,7 @@ class PolyhedralComplex:
             correct_vertex_order = _sorted_vertex_indices(face.adjacency_matrix())
             points.append(np.array(verts)[correct_vertex_order])
             # points.append(verts)
-            indices.append(list(np.arange(count,len(verts)+count)))
+            facets.append(list(np.arange(count,len(verts)+count)))
 
 
             # plane = self.graph.edges[c0,c1]["supporting_plane"]
@@ -1111,60 +1111,14 @@ class PolyhedralComplex:
                 colors.append(np.random.randint(100, 255, size=3))
                 primitive_ids.append([])
 
-
             count+=len(verts)
 
         if rand_colors:
             colors = np.random.randint(100, 255, size=(len(self.graph.edges), 3))
 
-
         points = np.concatenate(points)
+        self.complexExporter.write_surface(out_file, points=points, facets=facets, fcolors=colors)
 
-        f = open(str(filepath),"w")
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write("comment number_of_cells {}\n".format(len(self.graph.nodes)))
-        # f.write("comment number_of_faces {}\n".format(len(self.graph.edges)))
-        f.write("comment number_of_faces {}\n".format(ecount))
-        f.write("element vertex {}\n".format(len(points)))
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        # f.write("property uchar red\n")
-        # f.write("property uchar green\n")
-        # f.write("property uchar blue\n")
-        # f.write("element face {}\n".format(len(self.graph.edges)))
-        f.write("element face {}\n".format(ecount))
-        f.write("property list uchar int vertex_indices\n")
-        f.write("property uchar red\n")
-        f.write("property uchar green\n")
-        f.write("property uchar blue\n")
-        if with_primitive_id:
-            f.write("property list uchar int primitive_indices\n")
-        # f.write("property float a\n")
-        # f.write("property float b\n")
-        # f.write("property float c\n")
-        # f.write("property float d\n")
-        f.write("end_header\n")
-        for v in points:
-            f.write("{:.3f} {:.3f} {:.3f}\n".format(v[0],v[1],v[2]))
-        for i,fa in enumerate(indices):
-            f.write("{} ".format(len(fa)))
-            for v in fa:
-                f.write("{} ".format(v))
-            c = colors[i]
-            f.write("{} {} {}".format(c[0],c[1],c[2]))
-            if with_primitive_id:
-                pi = primitive_ids[i]
-                f.write(" {} ".format(len(pi)))
-                for v in pi:
-                    f.write("{} ".format(v))
-            # sp = supporting_planes[i]
-            # f.write("{} {} {} {}".format(sp[0],sp[1],sp[2],sp[3]))
-            f.write("\n")
-
-
-        f.close()
 
     def _polygon_area(self,poly):
         """Compute polygon area, from here: https://stackoverflow.com/a/12643315"""
@@ -1962,6 +1916,10 @@ class PolyhedralComplex:
     # @profile
     def simplify_partition_graph_based(self, exact=True, atol=0.0, rtol=0.0, dtol=0.0, only_inside=False):
 
+        if not self.construct_graph:
+            self.logger.error("Cannot export partition when construct_graph = False")
+            return 1
+
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
         if not exact:
@@ -2082,6 +2040,10 @@ class PolyhedralComplex:
 
     # @profile
     def simplify_partition_graph_based_vol_diff(self,n_target_cells=0,merge_tolerance=0.0,delete_tolerance=None,simplify_outside=False):
+
+        if not self.construct_graph:
+            self.logger.error("Cannot export partition when construct_graph = False")
+            return 1
 
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
@@ -2300,9 +2262,11 @@ class PolyhedralComplex:
     # @profile
     def simplify_partition_graph_based_occ_diff(self,mesh_file,n_target_cells=0,merge_tolerance=0,delete_tolerance=None):
 
+        if not self.construct_graph:
+            self.logger.error("Cannot export partition when construct_graph = False")
+            return 1
+
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
-
-
 
         try:
             from pycompose import pdl
@@ -2492,9 +2456,16 @@ class PolyhedralComplex:
 
     def simplify_partition_tree_based(self):
 
+        if not self.construct_graph:
+            self.logger.error("Cannot export partition when construct_graph = False")
+            return 1
+
         if not self.partition_labelled:
             self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
             return 0
+
+        # if not self.polygons_initialized:
+        #     self._init_polygons()
 
         ### this is nice and very fast, but it cannot simplify every case. because the tree would need to be restructured.
         ### there are cases where two cells are on the same side of the surface, there union is convex, but they are not siblings in the tree -> they cannot be simplified with this function
@@ -2554,20 +2525,15 @@ class PolyhedralComplex:
 
         """
         Initialize the polygons
-        - intersects all pairs of polyhedra that share an edge in the graph and store the intersections on the edge
-        - init an empty vertices list needed for self.construct_polygons
+        - intersects all pairs of polyhedra that share an edge in the graph (ie have a positive bounding box intersection test) and store the intersections on the edge
         """
 
         self.logger.info("Initialise polygons...")
-
-        for e0,e1 in self.graph.edges:
+        for e0,e1 in tqdm(self.graph.edges,file=sys.stdout,disable=np.invert(self.progress_bar),position=0,leave=True):
 
             edge = self.graph.edges[e0,e1]
             c0 = self.cells.get(e0)
             c1 = self.cells.get(e1)
-            ### this doesn't work, because after simplify some intersections are set, but are set with the wrong intersection from a collapse.
-            ### I could just say if self.simplified or something like that, but for now will just recompute all the intersections here
-            # if not self.graph.edges[e0,e1]["intersection"]:
             intersection = c0.intersection(c1)
             if intersection.dim() == 2:
                 edge["intersection"] = intersection
@@ -2575,12 +2541,10 @@ class PolyhedralComplex:
             else:
                 self.graph.remove_edge(e0,e1)
 
-            # edge["vertices"] = edge["intersection"].vertices_list()
-
         self.polygons_initialized = True
 
-    def construct_polygons(self):
 
+    def _construct_polygons(self):
         """
         Add missing vertices to the polyhedron facets by intersecting all facets of neighboring cells of the partition.
         """
@@ -2590,8 +2554,8 @@ class PolyhedralComplex:
 
         self.logger.info("Construct polygons...")
 
-
-        for c0,c1 in list(self.graph.edges):
+        for c0,c1 in tqdm(self.graph.edges, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True):
+        # for c0,c1 in list(self.graph.edges):
 
             if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
                 continue
@@ -2658,7 +2622,74 @@ class PolyhedralComplex:
                 hspaces.append(self._inequalities(self.planes[plane_id]))
             p=Polyhedron(ieqs=hspaces)
 
+    @profile
+    def _polyhedron_intersection(self,this,other):
 
+        new_ieqs = this.inequalities() + other.inequalities()
+        new_eqns = this.equations() + other.equations()
+        parent = this.parent()
+        intersection = parent.element_class(parent, None, [new_ieqs, new_eqns])
+        return intersection
+
+
+    def _polyhedron_bb_intersection_test(self,this,other):
+
+        def _1d_intersection(t,o,dim):
+            return t[1][dim] >= o[0][dim] and o[1][dim] >= t[0][dim]
+
+        return _1d_intersection(this,other,0) and _1d_intersection(this,other,1) and _1d_intersection(this,other,2)
+
+
+    def _update_graph(self,parent_cell_id,new_cell_negative,new_cell_positive,new_cell_negative_id,new_cell_positive_id,split_id,best_plane_id_input):
+
+        if (new_cell_positive.dim() == 3 and new_cell_negative.dim() == 3):
+            # new_intersection = new_cell_negative.intersection(new_cell_positive)
+            self.graph.add_edge(new_cell_negative_id, new_cell_positive_id,
+                                # intersection=new_intersection, vertices=[],
+                                split_id=split_id,
+                                supporting_plane_id=best_plane_id_input, bounding_box_edge=False)
+            if self.debug_export:
+                new_intersection = new_cell_negative.intersection(new_cell_positive)
+                self.complexExporter.write_facet(os.path.join(self.debug_export, "construct_facets"), new_intersection,
+                                                 count=self.plane_count)
+
+        neighbors_of_old_cell = list(self.graph[parent_cell_id])
+        for neighbor_id_old_cell in neighbors_of_old_cell:
+            # self.logger.debug("make neighbors")
+
+            # get the neighboring convex
+            nconvex = self.cells.get(neighbor_id_old_cell)
+            nconvex_bb = nconvex.bounding_box()
+            # intersect new cells with old neighbors to make the new facets
+            # TODO: instead of computing the intersection explicitly, just do an intersection test
+            # if test is positive, add the edge. Later in _init_polygons, all intersections are recomputed anyway!!
+            n_nonempty = False
+            p_nonempty = False
+            if new_cell_negative.dim() == 3:
+                # negative_intersection = self._polyhedron_intersection(nconvex,new_cell_negative)
+                # n_nonempty = negative_intersection.dim() == 2
+                n_nonempty = self._polyhedron_bb_intersection_test(nconvex_bb, new_cell_negative.bounding_box())
+            if new_cell_positive.dim() == 3:
+                # positive_intersection = self._polyhedron_intersection(nconvex, new_cell_positive)
+                # p_nonempty = positive_intersection.dim() == 2
+                p_nonempty = self._polyhedron_bb_intersection_test(nconvex_bb, new_cell_positive.bounding_box())
+            # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
+            if n_nonempty:
+                self.graph.add_edge(neighbor_id_old_cell, new_cell_negative_id,
+                                    # intersection=negative_intersection, vertices=[],
+                                    split_id=self.graph[neighbor_id_old_cell][parent_cell_id]["split_id"],
+                                    supporting_plane_id=self.graph[neighbor_id_old_cell][parent_cell_id][
+                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
+            if p_nonempty:
+                self.graph.add_edge(neighbor_id_old_cell, new_cell_positive_id,
+                                    # intersection=positive_intersection, vertices=[],
+                                    split_id=self.graph[neighbor_id_old_cell][parent_cell_id]["split_id"],
+                                    supporting_plane_id=self.graph[neighbor_id_old_cell][parent_cell_id][
+                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
+
+
+
+    @profile
     def _insert_new_plane(self,cell_id,split_id,left_planes=[],right_planes=[],cell_negative=None,cell_positive=None):
 
         current_cell = self.cells.get(cell_id)
@@ -2672,15 +2703,10 @@ class PolyhedralComplex:
             cell_negative = current_cell.intersection(hspace_negative)
             cell_positive = current_cell.intersection(hspace_positive)
 
-        # # if not construct_partition and (cell_positive.is_empty() or cell_negative.is_empty()):
-        # if (cell_positive.is_empty() or cell_negative.is_empty()):
-        #     # when constructing the partition I expand a tree. so even if this is a meaningless split, i.e. one where one of the cells is empty,
-        #     # I still need to add a new tree node, so the parent node gets visited again and another split plane is used (in case the cell contains more planes).
-        #     # However, when inserting additional planes, I don't expand a tree, but loop over all the planes and cells, i.e. I can just pass the meaningless splits.
-        #     return 0
-
+        ## UPDATE TREE
         ## update tree by creating the new nodes with the planes that fall into it
         ## and update graph with new nodes
+        neg_cell_id = None
         if (cell_negative.dim() == 3):
             if self.debug_export:
                 self.complexExporter.write_cell(os.path.join(self.debug_export, "construct_cells"), cell_negative,
@@ -2692,6 +2718,7 @@ class PolyhedralComplex:
             self.graph.add_node(neg_cell_id)
             self.cells[neg_cell_id] = cell_negative
 
+        pos_cell_id = None
         if (cell_positive.dim() == 3):
             if self.debug_export:
                 self.complexExporter.write_cell(os.path.join(self.debug_export, "construct_cells"), cell_positive,
@@ -2703,51 +2730,14 @@ class PolyhedralComplex:
             self.graph.add_node(pos_cell_id)
             self.cells[pos_cell_id] = cell_positive
 
-
         ## add the split plane to the parent node of the tree
         self.tree.nodes[cell_id].data["supporting_plane_id"] = best_plane_id_input
 
-        if (cell_positive.dim() == 3 and cell_negative.dim() == 3):
 
-            new_intersection = cell_negative.intersection(cell_positive)
-            self.graph.add_edge(neg_cell_id, pos_cell_id, intersection=new_intersection, vertices=[],
-                                split_id=split_id,
-                                supporting_plane_id=best_plane_id_input, bounding_box_edge=False)
-            if self.debug_export:
-                self.complexExporter.write_facet(os.path.join(self.debug_export, "construct_facets"), new_intersection,
-                                                 count=self.plane_count)
-
-        ## add edges to other cells, these must be neigbors of the parent (her named child) of the new subspaces
-        neighbors_of_old_cell = list(self.graph[cell_id])
-        old_cell_id = cell_id
-        for neighbor_id_old_cell in neighbors_of_old_cell:
-            # self.logger.debug("make neighbors")
-
-            # get the neighboring convex
-            nconvex = self.cells.get(neighbor_id_old_cell)
-            # intersect new cells with old neighbors to make the new facets
-            # TODO: instead of computing the intersection explicitly, just do an intersection test
-            # if test is positive, add the edge. Later in _init_polygons, all intersections are recomputed anyway!!
-            n_nonempty = False
-            p_nonempty = False
-            if cell_negative.dim() == 3:
-                negative_intersection = nconvex.intersection(cell_negative)
-                n_nonempty = negative_intersection.dim() == 2
-            if cell_positive.dim() == 3:
-                positive_intersection = nconvex.intersection(cell_positive)
-                p_nonempty = positive_intersection.dim() == 2
-            # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
-            if n_nonempty:
-                self.graph.add_edge(neighbor_id_old_cell, neg_cell_id, intersection=negative_intersection, vertices=[],
-                                    split_id=self.graph[neighbor_id_old_cell][old_cell_id]["split_id"],
-                                    supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id][
-                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
-            if p_nonempty:
-                self.graph.add_edge(neighbor_id_old_cell, pos_cell_id, intersection=positive_intersection, vertices=[],
-                                    split_id=self.graph[neighbor_id_old_cell][old_cell_id]["split_id"],
-                                    supporting_plane_id=self.graph[neighbor_id_old_cell][old_cell_id][
-                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
-
+        ## UPDATE GRAPH
+        ## add edges to other cells, these must be neigbors of the parent cell_id
+        if self.construct_graph:
+            self._update_graph(cell_id,cell_negative,cell_positive,neg_cell_id,pos_cell_id,split_id,best_plane_id_input)
         self.graph.remove_node(cell_id)
         del self.cells[cell_id]
         
@@ -2852,7 +2842,7 @@ class PolyhedralComplex:
 
         self.partition_initialized = True
 
-
+    @profile
     def _compute_split(self, cell_id, insertion_order):
 
 
@@ -2908,9 +2898,7 @@ class PolyhedralComplex:
         return n_points_processed
 
 
-
-
-
+    @profile
     def construct_partition(self, insertion_order="product-earlystop"):
         """
         1. Construct the partition

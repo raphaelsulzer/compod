@@ -341,7 +341,7 @@ class PolyhedralComplexExporter:
                 f.write(" {}".format(v))
             if len(fcolors):
                 c = fcolors[i]
-                f.write("{} {} {}".format(c[0],c[1],c[2]))
+                f.write(" {} {} {}".format(c[0],c[1],c[2]))
             f.write("\n")
 
         f.close()

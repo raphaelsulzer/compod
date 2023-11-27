@@ -17,7 +17,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, input_file, prioritise=None, merge_duplicate_planes=True, epsilon=None, alpha=0.3,
+    def __init__(self, input_file, prioritise=None, merge_duplicate_planes=True, epsilon=None, alpha=0.05,
                  points_type="inliers", total_sample_count=100000, export=True,
                  recolor=False, verbosity=logging.WARN):
         """
