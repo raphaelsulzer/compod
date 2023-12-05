@@ -21,7 +21,7 @@ class SagePlane:
 
         ### project inlier points to plane
         ## https://www.baeldung.com/cs/3d-point-2d-plane
-        pp = self.project_points_to_plane(points)
+        pp = self.orthogonal_project_points_to_plane(points)
 
         ## take the max coordinate coords away to make the 2d points
         if return_max_coord:
@@ -33,7 +33,7 @@ class SagePlane:
 
 
 
-    def project_points_to_plane(self,points):
+    def orthogonal_project_points_to_plane(self,points):
 
         ones = [QQ(1.0)]*points.shape[0]
         ones = np.array(ones,dtype=object).reshape((points.shape[0],1))
@@ -75,7 +75,7 @@ class ProjectedConvexHull:
 
         self.pyplane = PyPlane(plane_params)
 
-        self.all_projected_points_3d = self.pyplane.project_points_to_plane(points)
+        self.all_projected_points_3d = self.pyplane.orthogonal_project_points_to_plane(points)
         self.all_projected_points_2d = np.delete(self.all_projected_points_3d, self.pyplane.max_coord, axis=1)
 
         self.hull = ConvexHull(self.all_projected_points_2d)
@@ -111,8 +111,8 @@ class PyPlane:
 
         ### project inlier points to plane
         ## https://www.baeldung.com/cs/3d-point-2d-plane
-        # pp = self.project_points_to_plane(points).transpose()
-        pp = self.project_points_to_plane(points).transpose()
+        # pp = self.orthogonal_project_points_to_plane(points).transpose()
+        pp = self.orthogonal_project_points_to_plane(points).transpose()
 
         ## make e1 and e2 (see bottom of page linked above)
         ## take a starting vector (e0) and take a component of this vector which is nonzero (see here: https://stackoverflow.com/a/33758795)
@@ -130,10 +130,10 @@ class PyPlane:
         e12 = np.array([e1,e2])
         return (e12@pp).transpose()
 
-    def project_points_to_plane(self,points):
+    def orthogonal_project_points_to_plane(self,points):
 
         """
-        Project points to plane.
+        Project points to plane along the normal vector of the plane
         :param points:
         :return:
         """
@@ -145,13 +145,18 @@ class PyPlane:
         # return np.asarray([points[:, 0] + k * self.a, points[:, 1] + k * self.b, points[:, 2] + k * self.c]).transpose()
         return np.asarray([points[:, 0] + k * self.a, points[:, 1] + k * self.b, points[:, 2] + k * self.c]).transpose()
 
+    def xy_project_points_to_plane(self,points):
+        
+        z = (self.a*points[:,0] + self.b*points[:,1] - self.d)/self.c
+        return np.array((points[:,0],points[:,1],z)).transpose()
+        
 
 
     def to_2d(self,points,return_max_coord=False):
 
         ### project inlier points to plane
         ## https://www.baeldung.com/cs/3d-point-2d-plane
-        pp = self.project_points_to_plane(points)
+        pp = self.orthogonal_project_points_to_plane(points)
 
         ## take the max coordinate coords away to make the 2d points
         if return_max_coord:
@@ -177,9 +182,16 @@ class PyPlane:
             raise RuntimeError
 
 
-    def get_convex_hull_points_of_projected_points(self,points,dim=2,return_index=False):
-
-        pp = self.project_points_to_plane(points)
+    def get_convex_hull_points_of_projected_points(self,points,dim=2,return_index=False,projection="orthogonal"):
+        
+        if projection == "orthogonal":
+            pp = self.orthogonal_project_points_to_plane(points)
+        elif projection == "xy":
+            pp = self.xy_project_points_to_plane(points)
+        else:
+            print("{} is not a valid projection".format(projection))
+            raise NotImplementedError
+            
         p2d = np.delete(pp, self.max_coord, axis=1)
 
         ch = ConvexHull(p2d)
@@ -197,17 +209,29 @@ class PyPlane:
             return pts
 
 
-    def get_trimesh_of_projected_points(self,points,type="convex_hull"):
+    def get_trimesh_of_projected_points(self,points,type="convex_hull",projection="orthogonal"):
 
         if type == "convex_hull":
-            pp = self.project_points_to_plane(points)
+            if projection == "orthogonal":
+                pp = self.orthogonal_project_points_to_plane(points)
+            elif projection == "xy":
+                pp = self.xy_project_points_to_plane(points)
+            else:
+                print("{} is not a valid projection".format(projection))
+                raise NotImplementedError
             p2d = np.delete(pp, self.max_coord, axis=1)
             ch = ConvexHull(p2d)
             tri = Delaunay(p2d[ch.vertices,:])
             return trimesh.Trimesh(vertices=pp[ch.vertices],faces=tri.simplices)
 
         elif type == "all":
-            pp = self.project_points_to_plane(points)
+            if projection == "orthogonal":
+                pp = self.orthogonal_project_points_to_plane(points)
+            elif projection == "xy":
+                pp = self.xy_project_points_to_plane(points)
+            else:
+                print("{} is not a valid projection".format(projection))
+                raise NotImplementedError
             p2d = np.delete(pp, self.max_coord, axis=1)
             tri = Delaunay(p2d)
             return trimesh.Trimesh(vertices=pp,faces=tri.simplices)

@@ -5,16 +5,17 @@ from .logger import make_logger
 
 class PolyhedralComplexExporter:
     
-    def __init__(self, cellComplex):
+    def __init__(self, logger=None, verbosity=logging.INFO):
         """
         This class is mainly for debugging the PolyhedralComplex class by allowing to export all kinds of intermediate results.
 
-        :param cellComplex: 
         :param verbosity: 
         """
-        self.cellComplex = cellComplex
 
-        self.logger = cellComplex.logger
+        if logger is None:
+            self.logger = make_logger(name="COMPOD_EXPORTER", level=verbosity)
+        else:
+            self.logger = logger
 
     def export_label_colored_cells(self, path, graph, cells, occs, mode="occ", type_colors=None):
 
@@ -154,48 +155,48 @@ class PolyhedralComplexExporter:
         f.close()
 
 
-    def write_graph_edge(self,m,graph,e0,e1):
-
-        assert (len(graph[e0][e1]["vertices"]) > 2)
-
-        pts = []
-        for v in graph[e0][e1]["vertices"]:
-            pts.append(tuple(v))
-        pts = list(set(pts))
-        intersection_points = np.array(pts, dtype=object)
-
-        correct_order = self.cellComplex._sort_vertex_indices_by_angle(intersection_points.astype(float),
-                                                     graph[e0][e1]["supporting_plane"])
-        assert (len(intersection_points) == len(correct_order))
-        intersection_points = intersection_points[correct_order]
-
-        if (len(intersection_points) < 3):
-            self.logger.warn("Graph edge with less than three polygon vertices")
-            return
-
-        ## orient triangle
-
-        ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
-        outside = graph.nodes[e0]["convex"].centroid()
-        ei1 = (intersection_points[1] - intersection_points[0]).astype(float)
-        ei1 = ei1 / np.linalg.norm(ei1)
-        ei2 = (intersection_points[-1] - intersection_points[0]).astype(float)
-        ei2 = ei2 / np.linalg.norm(ei2)
-        # e2 = e1
-        # s=1
-        # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
-        #     s+=1
-        #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
-        #     e2 = e2/np.linalg.norm(e2)
-        ei3 = (outside - intersection_points[0]).astype(float)
-        ei3 = ei3 / np.linalg.norm(ei3)
-        if self.cellComplex._orient_triangle(ei1, ei2, ei3):
-            intersection_points = np.flip(intersection_points, axis=0)
-
-        id = graph[e0][e1]["id"]
-        filename = os.path.join(os.path.dirname(m["planes"]),"graph_facets",str(id)+".off")
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        self.write_off(filename, points=intersection_points.astype(float),facets=[np.arange(len(intersection_points))],color=graph[e0][e1]["color"])
+    # def write_graph_edge(self,m,graph,e0,e1):
+    # 
+    #     assert (len(graph[e0][e1]["vertices"]) > 2)
+    # 
+    #     pts = []
+    #     for v in graph[e0][e1]["vertices"]:
+    #         pts.append(tuple(v))
+    #     pts = list(set(pts))
+    #     intersection_points = np.array(pts, dtype=object)
+    # 
+    #     correct_order = self.cellComplex._sort_vertex_indices_by_angle(intersection_points.astype(float),
+    #                                                  graph[e0][e1]["supporting_plane"])
+    #     assert (len(intersection_points) == len(correct_order))
+    #     intersection_points = intersection_points[correct_order]
+    # 
+    #     if (len(intersection_points) < 3):
+    #         self.logger.warn("Graph edge with less than three polygon vertices")
+    #         return
+    # 
+    #     ## orient triangle
+    # 
+    #     ## TODO: problem here is that orientation doesn't work when points are on the same line, because then e1 and e2 are coplanar
+    #     outside = graph.nodes[e0]["convex"].centroid()
+    #     ei1 = (intersection_points[1] - intersection_points[0]).astype(float)
+    #     ei1 = ei1 / np.linalg.norm(ei1)
+    #     ei2 = (intersection_points[-1] - intersection_points[0]).astype(float)
+    #     ei2 = ei2 / np.linalg.norm(ei2)
+    #     # e2 = e1
+    #     # s=1
+    #     # while np.isclose(np.arccos(np.dot(e1,e2)),0,rtol=1e-02):
+    #     #     s+=1
+    #     #     e2 = (intersection_points[s] - intersection_points[0]).astype(float)
+    #     #     e2 = e2/np.linalg.norm(e2)
+    #     ei3 = (outside - intersection_points[0]).astype(float)
+    #     ei3 = ei3 / np.linalg.norm(ei3)
+    #     if self.cellComplex._orient_triangle(ei1, ei2, ei3):
+    #         intersection_points = np.flip(intersection_points, axis=0)
+    # 
+    #     id = graph[e0][e1]["id"]
+    #     filename = os.path.join(os.path.dirname(m["planes"]),"graph_facets",str(id)+".off")
+    #     os.makedirs(os.path.dirname(filename), exist_ok=True)
+    #     self.write_off(filename, points=intersection_points.astype(float),facets=[np.arange(len(intersection_points))],color=graph[e0][e1]["color"])
 
     def write_facet_with_outside_centroid(self, m, points, outside, count=0):
 

@@ -15,7 +15,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 ###################### EXTERNAL ######################
 ######################################################
 find_package(CGAL REQUIRED)
-include(${CGAL_USE_FILE})
+#include(${CGAL_USE_FILE})
 ## issues with eigen? Do this: https://stackoverflow.com/a/25537967
 
 if(NOT SKBUILD)

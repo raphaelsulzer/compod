@@ -104,7 +104,8 @@ class PolyhedralComplex:
         # self.tree_mode = Tree.WIDTH
 
         self.planeExporter = PlaneExporter(verbosity=verbosity)
-        self.complexExporter = PolyhedralComplexExporter(self)
+        # self.complexExporter = PolyhedralComplexExporter(self)
+        self.complexExporter = PolyhedralComplexExporter(self.logger)
 
 
 
@@ -213,17 +214,17 @@ class PolyhedralComplex:
                 self.complexExporter.write_cell(os.path.join(self.debug_export,"bounding_box_cells"),op,count=-(i+1))
 
             self.cells[i+1+max_node_id] = op
-
+            op_bb = op.bounding_box()
             self.graph.add_node(i+1+max_node_id, bounding_box=i)
             if self.construct_graph:
                 for cell_id in list(self.graph.nodes):
 
-                    intersection = op.intersection(self.cells.get(cell_id))
-
-                    if intersection.dim() == 2:
-                        self.graph.add_edge(i+1+max_node_id,cell_id,
-                                            # intersection=None, vertices=[],
-                                       supporting_plane_id=-(i+1), convex_intersection=False, bounding_box=i)
+                    if self._polyhedron_bb_intersection_test(op_bb,self.cells.get(cell_id).bounding_box()):
+                        self.graph.add_edge(i + 1 + max_node_id, cell_id, supporting_plane_id=-(i+1), bounding_box=i)
+                    # intersection = op.intersection(self.cells.get(cell_id))
+                    # if intersection.dim() == 2:
+                    #     self.graph.add_edge(i+1+max_node_id,cell_id,
+                    #                    supporting_plane_id=-(i+1), bounding_box=i)
 
 
     def _prepend_planes_to_vg(self, planes, color=None, points=None, normals=None, classes=None, projected_points=None):
@@ -481,6 +482,7 @@ class PolyhedralComplex:
 
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
+    # @profile
     def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python", exact=False, translation=None):
 
         """
@@ -592,6 +594,10 @@ class PolyhedralComplex:
 
                 npolygons+=1
 
+        if not npolygons:
+            self.logger.error("0 interface facets found. There must be something wrong")
+            return 1
+
         points = np.concatenate(polygons).astype(np.float64)
         points = np.unique(points, axis=0)
 
@@ -601,6 +607,8 @@ class PolyhedralComplex:
             face = []
             for pt in poly:
                 face.append(np.argwhere((np.equal(points, pt, dtype=object)).all(-1))[0][0])
+                # TODO: try to use the line below instead. the line above is a huge bottleneck
+                # face.append(np.argwhere((np.equal(points, pt)).all(-1))[0][0])
             facets.append(face)
         assert(len(facets)==len(polygons))
 
@@ -862,6 +870,10 @@ class PolyhedralComplex:
                 faces.append(np.arange(len(intersection_points))+n_points)
                 face_lens.append(len(intersection_points))
                 n_points+=len(intersection_points)
+
+        if not face_lens:
+            self.logger.error("0 interface facets found. There must be something wrong")
+            return 1
 
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
@@ -1648,7 +1660,7 @@ class PolyhedralComplex:
 
         return best_plane_id
 
-
+    # @profile    
     def _get_best_split_gpu(self,current_ids,insertion_order):
 
 
@@ -1758,7 +1770,7 @@ class PolyhedralComplex:
         else:
             raise NotImplementedError
 
-
+    # @profile    
     def _split_support_points(self,best_plane_id,current_ids):
         '''
         Split all primitive (ie 2D convex hulls) in the current cell with the best plane.
@@ -1799,8 +1811,8 @@ class PolyhedralComplex:
 
             this_group = self.vg.split_groups[id]
             which_side = np.dot(best_plane[:3],self.vg.points[this_group].transpose())
-            right_farthest_point = self.vg.points[this_group][np.argmax(which_side)]
-            left_farthest_point = self.vg.points[this_group][np.argmin(which_side)]
+            # right_farthest_point = self.vg.points[this_group][np.argmax(which_side)]
+            # left_farthest_point = self.vg.points[this_group][np.argmin(which_side)]
             left_point_ids = this_group[which_side < -best_plane[3]]
             right_point_ids = this_group[which_side > -best_plane[3]]
 
@@ -1822,7 +1834,6 @@ class PolyhedralComplex:
                 #         self.vg.classes = np.hstack((self.vg.classes,1))
                 # else:
                 #     print("skip because of epsilon")
-
 
                 if (left_point_ids.shape[0] > self.insertion_threshold):
                     left_plane_ids.append(self.vg.split_planes.shape[0])
@@ -1913,7 +1924,6 @@ class PolyhedralComplex:
 
         self.logger.info("Deleted {} nodes, reducing the partition from {} to {} nodes.".format(ilen-len(self.graph.nodes),ilen,len(self.graph.nodes)))
 
-    # @profile
     def simplify_partition_graph_based(self, exact=True, atol=0.0, rtol=0.0, dtol=0.0, only_inside=False):
 
         if not self.construct_graph:
@@ -2038,7 +2048,6 @@ class PolyhedralComplex:
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
         self.polygons_initialized = False
 
-    # @profile
     def simplify_partition_graph_based_vol_diff(self,n_target_cells=0,merge_tolerance=0.0,delete_tolerance=None,simplify_outside=False):
 
         if not self.construct_graph:
@@ -2259,7 +2268,6 @@ class PolyhedralComplex:
 
 
 
-    # @profile
     def simplify_partition_graph_based_occ_diff(self,mesh_file,n_target_cells=0,merge_tolerance=0,delete_tolerance=None):
 
         if not self.construct_graph:
@@ -2622,7 +2630,6 @@ class PolyhedralComplex:
                 hspaces.append(self._inequalities(self.planes[plane_id]))
             p=Polyhedron(ieqs=hspaces)
 
-    @profile
     def _polyhedron_intersection(self,this,other):
 
         new_ieqs = this.inequalities() + other.inequalities()
@@ -2679,17 +2686,15 @@ class PolyhedralComplex:
                                     # intersection=negative_intersection, vertices=[],
                                     split_id=self.graph[neighbor_id_old_cell][parent_cell_id]["split_id"],
                                     supporting_plane_id=self.graph[neighbor_id_old_cell][parent_cell_id][
-                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
+                                        "supporting_plane_id"], bounding_box_edge=False)
             if p_nonempty:
                 self.graph.add_edge(neighbor_id_old_cell, new_cell_positive_id,
                                     # intersection=positive_intersection, vertices=[],
                                     split_id=self.graph[neighbor_id_old_cell][parent_cell_id]["split_id"],
                                     supporting_plane_id=self.graph[neighbor_id_old_cell][parent_cell_id][
-                                        "supporting_plane_id"], convex_intersection=False, bounding_box_edge=False)
+                                        "supporting_plane_id"], bounding_box_edge=False)
 
-
-
-    @profile
+    # @profile    
     def _insert_new_plane(self,cell_id,split_id,left_planes=[],right_planes=[],cell_negative=None,cell_positive=None):
 
         current_cell = self.cells.get(cell_id)
@@ -2842,7 +2847,7 @@ class PolyhedralComplex:
 
         self.partition_initialized = True
 
-    @profile
+    # @profile    
     def _compute_split(self, cell_id, insertion_order):
 
 
@@ -2897,8 +2902,7 @@ class PolyhedralComplex:
 
         return n_points_processed
 
-
-    @profile
+    # @profile    
     def construct_partition(self, insertion_order="product-earlystop"):
         """
         1. Construct the partition

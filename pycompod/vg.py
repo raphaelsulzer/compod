@@ -239,9 +239,10 @@ class VertexGroup:
             current+=n
         return groups
 
-    def _cluster_planes_centroid(self):
+    def _cluster_planes_with_abc_and_projection_dist(self):
 
-        # TODO: implement a new clustering with a KD tree with custom distance
+        """project points from plane a to plane b and vice versa. Problem is that for large models,
+        such as chicago, very similar planes in angle will still not cluster."""
 
         def acos(x):
             # range is -1 to 1 !!
@@ -296,9 +297,7 @@ class VertexGroup:
         
         self.planes = new_planes
 
-    def _cluster_planes(self):
-
-        # TODO: implement a new clustering with a KD tree with custom distance
+    def _cluster_planes_with_abc_and_origin_dist(self):
 
         def acos(x):
             # range is -1 to 1 !!
@@ -340,48 +339,7 @@ class VertexGroup:
                 processed[ids] = True
 
         self.planes = new_planes
-        
-    def _cluster_planes_DBSCAN(self):
 
-        def acos(x):
-            # range is -1 to 1 !!
-            return (-0.69813170079773212 * x * x - 0.87266462599716477) * x + 1.5707963267948966
-
-        self.logger.info("Cluster coplanar planes with epsilon = {} and alpha = {}".format(self.epsilon,self.alpha))
-
-        ### orient planes to a corner, important to run this before cluster_planes() so that planes with the same normal but d = -d are not clustered
-        self._orient_planes(to_corner=True)
-
-        epsilon_cosine = self.alpha
-        epsilon_euclidean = self.epsilon
-
-        
-        def custom_distance(x, y):
-
-            dist1 = np.abs(np.dot(x[4:],y[:3])+y[3])
-            dist2 = np.abs(np.dot(y[4:],x[:3])+x[3])
-            euclidean_dist = (dist1+dist2)/2
-
-            cosine_dist = np.dot(x[:3],y[:3])
-            # better to keep the degree scaling in here, even if it is more expensive, but it is awful to tune the epsilon alpha parameter otherwise
-            scaled_cosine_dist = acos(cosine_dist)*180/math.pi / epsilon_cosine
-            scaled_euclidean_dist = euclidean_dist / epsilon_euclidean
-            return scaled_cosine_dist+scaled_euclidean_dist
-
-
-        self.plane_centroids = []
-        for gr in self.groups:
-            pts = self.points[gr]
-            self.plane_centroids.append(pts.mean(axis=0))
-        self.plane_centroids = np.array(self.plane_centroids)
-        self.features = np.hstack((self.planes,self.plane_centroids))
-        clusters = DBSCAN(n_jobs=-1, eps=0.99, min_samples=1, metric=custom_distance).fit(self.features)
-
-        # resort so that cluster id = input plane id
-        cluster_dict = {old_label: new_label for new_label, old_label in enumerate(clusters.labels_)}
-        labels_ = np.array([cluster_dict[label] for label in clusters.labels_])
-
-        self.planes = self.planes[labels_]
 
     def _orient_planes(self,to_corner=False):
 
@@ -418,7 +376,7 @@ class VertexGroup:
             "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
 
         if self.epsilon is not None:
-            self._cluster_planes()
+            self._cluster_planes_with_abc_and_origin_dist()
 
         ### orient planes according to the mean normal orientation of it's input points
         ### cannot actually use this before merging, because I want to merge oppositely oriented planes!
