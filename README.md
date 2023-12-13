@@ -1,7 +1,7 @@
 # COMPOD: Compact Polyhedral Decomposition from Polygons
 
-One GIF of rotating bunny. Start with point cloud, detect polygons, insert polygon one by one in complex, extract decomposition, 
-make it explode, put it back together and show compact surface. 
+[//]: # (One GIF of rotating bunny. Start with point cloud, detect polygons, insert polygon one by one in complex, extract decomposition, )
+[//]: # (make it explode, put it back together and show compact surface. )
 
 
 This repository contains the official implementation of COMPOD: Compact Polyhedral Decomposition from Polygons.
@@ -94,12 +94,7 @@ If you use this work please consider citing:
 
 ```bibtex
 @article{1,
-  title={Creating large-scale city models from 3D-point clouds: a robust approach with hybrid representation},
-  author={Lafarge, Florent and Mallet, Cl{\'e}ment},
-  journal={International journal of computer vision},
-  volume={99},
-  pages={69--85},
-  year={2012},
-  publisher={Springer}
+  title={Compact Plane Arrangement for Low-Poly Surface and Volume Modelling},
+  author={Sulzer, Raphael and Lafarge, Florent},
 }
 ```

@@ -1252,12 +1252,13 @@ class PolyhedralComplex:
             binary_weight+=regularization["area"]
         if "beta-skeleton" in regularization:
             edge_weight = []
+            cell_list = list(self.cells.values())
             for e0, e1 in edges:
                 edge = graph.edges[e0,e1]
                 normal = PyPlane(self.vg.input_planes[edge["supporting_plane_id"]]).normal
                 point = np.array(edge["intersection"].vertices_list()[0])
-                ew = 1 - min(self._beta_skeleton(self.cells[e0].center(),point,normal),
-                             self._beta_skeleton(self.cells[e1].center(),point,-normal))
+                ew = 1 - min(self._beta_skeleton(cell_list[e0].center(),point,normal),
+                             self._beta_skeleton(cell_list[e1].center(),point,-normal))
                 edge_weight.append(ew)
             edge_weight = np.array(edge_weight)/sum(edge_weight)
             t_edge_weight+=(edge_weight*regularization["beta-skeleton"])
@@ -1391,7 +1392,10 @@ class PolyhedralComplex:
         """
         Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
         """
-
+        
+        if not self.polygons_constructed:
+            self._construct_polygons()
+        
         def collect_facet_points():
 
             point_ids_dict = dict()
@@ -1508,44 +1512,37 @@ class PolyhedralComplex:
 
 
 
-        def collect_node_votes_with_semantics(footprint=None, z_range=None):
+        def collect_node_votes_with_semantics(exterior_labels, footprint=None,  footprint_weight = 24, z_range=None):
 
             make_point_class_weight()
 
             occs = []
-            # if footprint is not None:
-            #     footprint = Polygon(footprint).buffer(0.25)
-
             all_cell_points = []
             all_cell_normals = []
             type_colors = []
+            mean_cell_weight = 2 * len(self.vg.points) * self.point_class_weights.max() / len(self.cells)
             for node in self.graph.nodes:
+
+
+
+                if "bounding_box" in self.graph.nodes[node].keys():
+                    id = self.graph.nodes[node]["bounding_box"]
+                    occs.append([mean_cell_weight*exterior_labels[id],mean_cell_weight*(1-exterior_labels[id])])
+                    type_colors.append([205, 82, 61])
+                    continue
 
                 cell_verts = np.array(self.cells[node].vertices())
                 centroid = cell_verts.mean(axis=0)
-                # cell_verts = np.vstack((cell_verts,centroid))
-                footprint_weight = 24
-                n = footprint_weight * 2 * len(self.vg.points) * self.point_class_weights.max() / len(self.cells)
-                # there is an error here
-                if "bounding_box" in self.graph.nodes[node].keys():
-                    type_colors.append([205, 82, 61])
-                    continue
-                # if self.graph.nodes[id].get("bounding_box",None) is not None:
-                #     occs.append([0, n])
-                #     type_colors.append([205, 82, 61]) # red
-                # elif footprint is not None and not contains_xy(footprint, x=centroid[0], y=centroid[1]):
+
                 if footprint is not None and (~contains_xy(footprint, cell_verts[:,:2])).all():
-                    occs.append([0, n])
+                    occs.append([0, footprint_weight * mean_cell_weight])
                     type_colors.append([147, 196, 125]) # green
                 elif z_range is not None and z_range[0] <= centroid[2] and (z_range[1] >= cell_verts[:,2]).all() and \
                         contains_xy(footprint, cell_verts[:,:2]).all():
-                # elif z_range is not None and z_range[0] <= centroid[2] and z_range[1] >= centroid[2] and \
-                #      contains_xy(footprint, cell_verts[:, :2]).all():
-                    occs.append([n, 0])
+                    occs.append([footprint_weight * mean_cell_weight, 0])
                     type_colors.append([61, 184, 205])
-                # elif z_range is not None and (cell_verts[:,2] > z_range[2]).all():
                 elif z_range is not None and (cell_verts[:,2] > z_range[2]).all():
-                    occs.append([0, n])
+                    occs.append([0, footprint_weight * mean_cell_weight])
                     type_colors.append([205, 61, 112])
                 else:
                     type_colors.append([241, 194, 50])
@@ -1574,7 +1571,6 @@ class PolyhedralComplex:
                             cell_points.append(pts)
                             cell_normals.append(normal_vectors)
 
-                    # occupancy_dict[node] = (inside_weight,outside_weight)
                     occs.append([inside_weight, outside_weight])
 
             occs = np.array(occs) / (2 * self.point_class_weights[self.vg.classes].sum())
@@ -1588,7 +1584,7 @@ class PolyhedralComplex:
         collect_facet_points()
 
         if footprint is not None:
-            occs = collect_node_votes_with_semantics(footprint=footprint,z_range=z_range)
+            occs = collect_node_votes_with_semantics(exterior_labels,footprint=footprint,z_range=z_range)
         else:
             occs = collect_node_votes(exterior_labels)
 
@@ -2565,8 +2561,9 @@ class PolyhedralComplex:
         for c0,c1 in tqdm(self.graph.edges, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True):
         # for c0,c1 in list(self.graph.edges):
 
-            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
-                continue
+            if "occupancy" in nx.get_node_attributes(self.graph,"occupancy").keys():
+                if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
+                    continue
 
             current_edge = self.graph[c0][c1]
             current_facet = current_edge["intersection"]
