@@ -2555,21 +2555,26 @@ class PolyhedralComplex:
 
         self.logger.info("Construct polygons...")
 
+        # give every edge an index
+        ids = dict(zip(list(self.graph.edges.keys()), list(range(len(self.graph.edges)))))
+        nx.set_edge_attributes(self.graph,ids,"id")
+
         for c0,c1 in tqdm(self.graph.edges, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True):
         # for c0,c1 in list(self.graph.edges):
 
-            if "occupancy" in nx.get_node_attributes(self.graph,"occupancy").keys():
-                if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
-                    continue
+            if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
+                continue
 
             current_edge = self.graph[c0][c1]
             current_facet = current_edge["intersection"]
+            facet_id = self.graph.edges[c0, c1]["id"]
 
             sp_id = current_edge["supporting_plane_id"]
 
             for neighbor in list(self.graph[c0]):
                 if neighbor == c1: continue
                 this_edge = self.graph[c0][neighbor]
+                # if facet_id > this_edge["id"]: continue # not sure why I cannot filter the second intersection, ie each pair here is probably intersected twice, a-b and b-a
                 # if sp_id != this_edge["supporting_plane_id"]: continue
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
@@ -2578,6 +2583,7 @@ class PolyhedralComplex:
             for neighbor in list(self.graph[c1]):
                 if neighbor == c0: continue
                 this_edge = self.graph[c1][neighbor]
+                # if facet_id > this_edge["id"]: continue # not sure why I cannot filter the second intersection, ie each pair here is probably intersected twice, a-b and b-a
                 # if sp_id != this_edge["supporting_plane_id"]: continue
                 facet_intersection = current_facet.intersection(this_edge["intersection"])
                 if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
