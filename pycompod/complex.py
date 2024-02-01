@@ -2513,10 +2513,7 @@ class PolyhedralComplex:
                 dd = {"plane_ids": parent.data["plane_ids"]}
                 self.cells[c0] = Polyhedron(vertices=self.cells[c0].vertices_list()+self.cells[c1].vertices_list())
                 del self.cells[c1]
-                try:
-                    self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=parent_parent.identifier)
-                except:
-                    a=4
+                self.tree.create_node(tag=c0, identifier=c0, data=dd, parent=parent_parent.identifier)
             edges = list(nx.subgraph_view(self.graph, filter_edge=filter_edge).edges)
 
 
@@ -2665,17 +2662,25 @@ class PolyhedralComplex:
             nconvex = self.cells.get(neighbor_id_old_cell)
             nconvex_bb = nconvex.bounding_box()
             # intersect new cells with old neighbors to make the new facets
-            # TODO: instead of computing the intersection explicitly, just do an intersection test
-            # if test is positive, add the edge. Later in _init_polygons, all intersections are recomputed anyway!!
             n_nonempty = False
             p_nonempty = False
+            ## two possible options below: 1st one keeps the graph smaller and reduces runtime of _init_polygons, but increases runtime inside here.
+            ## in total, 2nd option is slightly faster, with the added benefit that _init_polyons is not needed for volume decomposition anyway
             if new_cell_negative.dim() == 3:
+                ## first option is to check for actual intersection here
                 # negative_intersection = self._polyhedron_intersection(nconvex,new_cell_negative)
                 # n_nonempty = negative_intersection.dim() == 2
+
+                ## second option instead of computing the intersection explicitly, just do an intersection test
+                ## if test is positive, add the edge. Later in _init_polygons, all intersections are recomputed anyway!!
                 n_nonempty = self._polyhedron_bb_intersection_test(nconvex_bb, new_cell_negative.bounding_box())
             if new_cell_positive.dim() == 3:
+                ## first option is to check for actual intersection here
                 # positive_intersection = self._polyhedron_intersection(nconvex, new_cell_positive)
                 # p_nonempty = positive_intersection.dim() == 2
+
+                ## second option instead of computing the intersection explicitly, just do an intersection test
+                ## if test is positive, add the edge. Later in _init_polygons, all intersections are recomputed anyway!!
                 p_nonempty = self._polyhedron_bb_intersection_test(nconvex_bb, new_cell_positive.bounding_box())
             # add the new edges (from new cells with intersection of old neighbors) and move over the old additional vertices to the new
             if n_nonempty:

@@ -9,6 +9,7 @@
 #include <cgal_typedefs.h>
 #include <boost_typedefs.h>
 #include <mesh.h>
+// #include <region_growing.h>
 
 using namespace std;
 namespace nb = nanobind;
@@ -263,10 +264,12 @@ int pyPDSE<Kernel>::is_mesh_watertight(const string filename){
 
 
 
+
 NB_MODULE(libPYPDSE, m) {
     nb::class_<pyPDSE<EPICK>>(m, "pdse")
             .def(nb::init<int,bool>(),"verbosity"_a = 0, "debug_export"_a = false)
-            .def("is_mesh_watertight", &pyPDSE<EPICK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
+        .def("is_mesh_watertight", &pyPDSE<EPICK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
+        // .def("compute_planar_regions", &pyPDSE<EPICK>::compute_planar_regions, "filename"_a, "Compute planar regions of a mesh.")
             .def("is_mesh_intersection_free", &pyPDSE<EPICK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
             .def("load_soup", &pyPDSE<EPICK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
             .def("load_triangle_soup", &pyPDSE<EPICK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
@@ -290,27 +293,3 @@ NB_MODULE(libPYPDSE, m) {
                  "Get the Constrained Delaunay Triangulation from 2D points and edges.")
             ;
 }
-
-
-
-
-//struct Cat {};
-//struct Dog {};
-
-//template <typename PetType>
-//class PetHouse {
-//    PetHouse();
-//public:
-//    void getr(){}
-//};
-//NB_MODULE(libPYPDSE, m) {
-//    // ok
-//    nb::class_<PetHouse<Cat>>(m, "pdse")
-//        .def("get", &PetHouse<Cat>::getr);
-
-//    // ok
-//    nb::class_<PetHouse<Dog>>(m, "pdse2")
-//        .def("get", &PetHouse<Dog>::getr);
-
-//}
-

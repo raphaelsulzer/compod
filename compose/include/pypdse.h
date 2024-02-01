@@ -55,6 +55,9 @@ public:
     int is_mesh_intersection_free(const string filename);
     int is_mesh_watertight(const string filename);
 
+    // // compute planar regions of a mesh
+    // int compute_planar_regions(const string filename);
+
 
     // define the CDT
     typedef CGAL::Triangulation_vertex_base_2<Kernel>                       Vb;
