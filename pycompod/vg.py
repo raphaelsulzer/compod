@@ -369,9 +369,10 @@ class VertexGroup:
         self.plane_colors = data["group_colors"]
         self.points = data["points"].astype(type)
         self.normals = data["normals"].astype(type)
-        self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
+        # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
+        self.classes = data.get("classes", None)
         self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
-
+        
         self.logger.info(
             "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
 

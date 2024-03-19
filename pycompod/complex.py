@@ -497,7 +497,6 @@ class PolyhedralComplex:
         :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
 
-        # TODO: write a wrapper around this that automatically first runs in inexact mode and iff fails in exact mode
 
         os.makedirs(os.path.dirname(out_file),exist_ok=True)
 
@@ -1024,6 +1023,7 @@ class PolyhedralComplex:
             # if node[1]["occupancy"] == 1:
 
         nodes = list(view.nodes())
+        self.number_of_inside_cells = len(nodes)
         self.logger.info('Save inside {} cells...'.format(len(nodes)))
         for node in nodes:
             c = np.random.randint(low=100,high=255,size=3)
@@ -1129,6 +1129,7 @@ class PolyhedralComplex:
             colors = np.random.randint(100, 255, size=(len(self.graph.edges), 3))
 
         points = np.concatenate(points)
+        os.makedirs(os.path.dirname(out_file),exist_ok=True)
         self.complexExporter.write_surface(out_file, points=points, facets=facets, fcolors=colors)
 
 
@@ -1295,7 +1296,7 @@ class PolyhedralComplex:
 
         self.logger.info('Label {} cells with {}...'.format(len(self.graph.nodes),mode))
 
-        if mode == "normals":
+        if mode == "normals" or mode == "normal":
             if self.vg.points_type == "samples":
                 self.logger.error("Cannot label partition with normals from sampled points. Please choose mode 'mesh' instead.")
                 raise NotImplementedError
@@ -1393,8 +1394,10 @@ class PolyhedralComplex:
         Compute the occupancy of each cell of the partition according to the normal criterion introduced in Kinetic Shape Reconstruction [Bauchet & Lafarge 2020] (Section 4.2).
         """
         
-        if not self.polygons_constructed:
-            self._construct_polygons()
+        # if not self.polygons_constructed:
+        #     self._construct_polygons()
+        if not self.polygons_initialized:
+            self._init_polygons()
         
         def collect_facet_points():
 
@@ -1407,14 +1410,22 @@ class PolyhedralComplex:
                 if edge["supporting_plane_id"] < 0:  # bounding box planes have no associated points, so skip them
                     point_ids_dict[(e0, e1)] = np.empty(shape=0, dtype=np.int32)
                     continue
-
-                group = self.vg.split_groups[edge["split_id"]]
+                
+                if hasattr(self.vg,"split_groups"): # for compod
+                    group = self.vg.split_groups[edge["split_id"]]
+                else: # for abspy
+                    group = self.vg.input_groups[edge["supporting_plane_id"]]
 
                 ## use shapely contains_xy with projected points.
                 vertices = np.array(edge["intersection"].vertices())
                 assert (len(vertices))
                 vertices = vertices[self._sorted_vertex_indices(edge["intersection"].adjacency_matrix())]
-                plane = PyPlane(self.vg.split_planes[edge["split_id"]])
+                
+                if hasattr(self.vg,"split_planes"): # for compod
+                    plane = PyPlane(self.vg.split_planes[edge["split_id"]])
+                else: # for abspy
+                    plane = PyPlane(self.vg.input_planes[edge["supporting_plane_id"]])
+                
                 poly = Polygon(np.array(plane.to_2d(vertices)))
                 contain = contains_xy(poly, self.vg.projected_points[group])
 
@@ -1482,10 +1493,17 @@ class PolyhedralComplex:
                             continue
                         inside_vectors = centroid - pts
                         normal_vectors = self.vg.normals[edge["point_ids"]]
+
+                        if self.debug_export is not None:
+                            pcd = o3d.geometry.PointCloud()
+                            pcd.points = o3d.utility.Vector3dVector(pts)
+                            pcd.normals = o3d.utility.Vector3dVector(normal_vectors)
+                            o3d.io.write_point_cloud(os.path.join(self.debug_export,"current_normal_labelling_polygon.ply"), pcd)
+
                         dp = (normal_vectors * inside_vectors).sum(axis=1)
                         iweight = (dp < 0).astype(float)
                         oweight = (dp > 0).astype(float)
-                        if len(self.vg.classes):
+                        if self.vg.classes is not None:
                             class_weights = self.vg.classes[edge["point_ids"]]
                             class_weights = self.point_class_weights[class_weights].astype(float)
                             iweight *= class_weights
@@ -2044,7 +2062,10 @@ class PolyhedralComplex:
         self.logger.info("Simplified partition from {} to {} cells".format(before, len(self.graph.nodes)))
         self.polygons_initialized = False
 
-    def simplify_partition_graph_based_vol_diff(self,n_target_cells=0,merge_tolerance=0.0,delete_tolerance=None,simplify_outside=False):
+    def simplify_partition_graph_based_vol_diff(self,n_target_cells=0,merge_tolerance=None,delete_tolerance=None,simplify_outside=False):
+        
+        if merge_tolerance == 0.0:
+            merge_tolerance = None
 
         if not self.construct_graph:
             self.logger.error("Cannot export partition when construct_graph = False")
@@ -2079,8 +2100,8 @@ class PolyhedralComplex:
         import polytope as pc
         def _get_cell_intersection(c0, c1):
 
-            c0 = self.cells[c0]
-            c1 = self.cells[c1]
+            # c0 = self.cells[c0]
+            # c1 = self.cells[c1]
             poly1 = pc.Polytope(c0.equations[:, :3], -c0.equations[:, -1])
             poly2 = pc.Polytope(c1.equations[:, :3], -c1.equations[:, -1])
 
@@ -2145,7 +2166,7 @@ class PolyhedralComplex:
                 self.graph.nodes[c1]["volume"] = _get_cell_volume(self.cells[c1])
 
                 new_union = _make_new_cell(c0,c1)
-                if merge_tolerance == 0.0 and _intersect_neighbors(c0,c1,new_union):
+                if merge_tolerance is None and _intersect_neighbors(c0,c1,new_union):
                     continue
                 self.graph.edges[c0,c1]["union_volume"] = _get_cell_volume(new_union)
                 # new_intersection = _get_cell_intersection(c0,c1)
@@ -2175,7 +2196,7 @@ class PolyhedralComplex:
                     continue
 
                 new_union = _make_new_cell(c0,c1)
-                if merge_tolerance == 0.0 and _intersect_neighbors(c0,c1,new_union):
+                if merge_tolerance is None and _intersect_neighbors(c0,c1,new_union):
                     continue
 
                 self.graph.edges[c0, c1]["union_volume"] = _get_cell_volume(new_union)
@@ -2231,7 +2252,8 @@ class PolyhedralComplex:
                 return 0
 
         #### merging
-        merge_tolerance *= self.bounding_poly.volume()
+        if merge_tolerance is not None:
+            merge_tolerance *= self.bounding_poly.volume()
         vol_diffs, edges = _init_queue(vol_diffs,edges)
 
         while(_condition(vol_diffs)):
@@ -2912,6 +2934,9 @@ class PolyhedralComplex:
 
     # @profile    
     def construct_partition(self, insertion_order="product-earlystop"):
+
+        # TODO: refit plane inside every cell based on inlier subsample!
+
         """
         1. Construct the partition
         :param insertion_order: In which order to process the planes.

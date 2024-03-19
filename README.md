@@ -1,21 +1,21 @@
-# COMPOD: Compact Polyhedral Decomposition from Polygons
+# Concise Plane Arrangements for Low-Poly Surface and Volume Modelling
 
 [//]: # (One GIF of rotating bunny. Start with point cloud, detect polygons, insert polygon one by one in complex, extract decomposition, )
-[//]: # (make it explode, put it back together and show compact surface. )
+[//]: # (make it explode, put it back together and show concise surface. )
 
 
-This repository contains the official implementation of COMPOD: Compact Polyhedral Decomposition from Polygons.
-Given a set of input polygons the resulting polyhedral complex can be used for polygon mesh reconstruction and convex decomposition. 
+This repository contains the official implementation of the arxiv paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling".
+Given a set of input planes and corresponding inlier points the resulting plane arrangement can be used for polygon mesh reconstruction and convex decomposition. 
 
 
 # Features
 
 - Reading of vertex groups ([.vg](https://abspy.readthedocs.io/en/latest/vertexgroup.html), .npz) as input (e.g. from [here](https://github.com/raphaelsulzer/psdr/tree/main))
-- Fast and memory efficient compact polyhedral complex construction (see evaluation)
+- Fast and memory efficient concise polyhedral complex construction (see evaluation)
 - Storing of the complex as a binary space partitioning tree (BSP-tree)
 - Interior / exterior labelling of the complex using point normals or a closed surface mesh
 - Further simplification of the complex based on a careful analysis of the BSP-tree 
-- Extraction of a compact convex decomposition (i.e. interior cells of the complex), or a compact polygon surface mesh (i.e. interface polygons between interior amd exterior cells of the complex). 
+- Extraction of a concise convex decomposition (i.e. interior cells of the complex), or a concise polygon surface mesh (i.e. interface polygons between interior and exterior cells of the complex). 
 
 # Installation
 
@@ -94,7 +94,7 @@ If you use this work please consider citing:
 
 ```bibtex
 @article{1,
-  title={Compact Plane Arrangement for Low-Poly Surface and Volume Modelling},
+  title={Concise Plane Arrangements for Low-Poly Surface and Volume Modelling},
   author={Sulzer, Raphael and Lafarge, Florent},
 }
 ```

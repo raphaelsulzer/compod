@@ -105,6 +105,18 @@ class PyPlane:
 
         self.inliers = inliers
 
+    def init_from_point_and_normal(self, point, normal):
+        # Point on the plane
+        x0, y0, z0 = point
+
+        # Normal vector components
+        a, b, c = normal
+
+        # Calculate d using the point and normal vector
+        d = -(a * x0 + b * y0 + c * z0)
+
+        return np.array([a, b, c, d])
+
 
 
     def project_points_to_plane_coordinate_system(self,points):

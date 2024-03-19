@@ -29,9 +29,8 @@ class PolyhedralComplexExporter:
 
         for i, node in enumerate(graph.nodes):
 
-            if graph.nodes[node].get("bounding_box", 0):
-                continue
-
+            # if graph.nodes[node].get("bounding_box", 0):
+            #     continue
 
             st = "out" if inside_weight[i] <= outside_weight[i] else "in"
             if mode == "occ":

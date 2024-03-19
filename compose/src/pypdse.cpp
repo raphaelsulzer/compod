@@ -200,6 +200,53 @@ int pyPDSE<Kernel>::load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& 
     return 0;
 }
 
+
+template <typename Kernel>
+int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string outfilename){
+
+    _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
+
+
+    CGAL::IO::read_polygon_mesh(filename, _smesh._mesh);
+
+    if(_smesh._mesh.number_of_faces() == 0){
+        cout << "ERROR: " << filename << " has no faces" << endl;
+        cout << "Will try to read a soup and make a mesh out of it" << endl;
+    }
+    else{
+        if(!CGAL::is_triangle_mesh(_smesh._mesh))
+            CGAL::Polygon_mesh_processing::triangulate_faces(_smesh._mesh);
+
+        cout << "Mesh loading worked. Will export the mesh as " << outfilename << endl;
+        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(15));
+        return 0;
+    }
+
+
+
+    _smesh._mesh.clear();
+    _smesh._points.clear();
+    _smesh._polygons.clear();
+
+    CGAL::IO::read_polygon_soup(filename, _smesh._points, _smesh._polygons);
+    CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(_smesh._points,_smesh._polygons,_smesh._mesh);
+
+    if(_smesh._mesh.number_of_faces() == 0){
+        cout << "ERROR: " << filename << " has no faces. Cannot do anything." << endl;
+        return 1;
+    }
+    else{
+        if(!CGAL::is_triangle_mesh(_smesh._mesh))
+            CGAL::Polygon_mesh_processing::triangulate_faces(_smesh._mesh);
+
+        cout << "Soup loading worked. Will export the mesh as " << outfilename << endl;
+        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(15));
+        return 0;
+    }
+}
+
+
+
 template <typename Kernel>
 int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
                       const nb::ndarray<int, nb::shape<nb::any,3>>& triangles
@@ -271,7 +318,8 @@ NB_MODULE(libPYPDSE, m) {
         .def("is_mesh_watertight", &pyPDSE<EPICK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
         // .def("compute_planar_regions", &pyPDSE<EPICK>::compute_planar_regions, "filename"_a, "Compute planar regions of a mesh.")
             .def("is_mesh_intersection_free", &pyPDSE<EPICK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
-            .def("load_soup", &pyPDSE<EPICK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
+        .def("load_soup", &pyPDSE<EPICK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
+        .def("triangulate_polygon_mesh", &pyPDSE<EPICK>::triangulate_polygon_mesh, "filename"_a, "outfilename"_a, "Load polygon mesh or soup, triangulate and save to file.")
             .def("load_triangle_soup", &pyPDSE<EPICK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
             .def("soup_to_mesh", &pyPDSE<EPICK>::soup_to_mesh, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
             .def("save_mesh", &pyPDSE<EPICK>::save_mesh, "filename"_a, "Save a mesh.")
