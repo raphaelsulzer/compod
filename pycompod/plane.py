@@ -85,31 +85,32 @@ class ProjectedConvexHull:
 class PyPlane:
 
 
-    def __init__(self,params,inliers=None):
+    def __init__(self,params=None,inliers=None):
 
         """
         A plane object.
         :param params: The parameters of a plane equation in the form [a,b,c,d] with a*x + b*y + c*z = d
         :param inliers: A set of inliers to the plane.
         """
+        if params is not None:
+            params = np.array(params,dtype=float)
 
-        params = np.array(params,dtype=float)
+            self.params = params
 
-        self.params = params
+            self.a = params[0]; self.b = params[1]; self.c = params[2]; self.d = params[3]
+            self.normal = params[:3]
 
-        self.a = params[0]; self.b = params[1]; self.c = params[2]; self.d = params[3]
-        self.normal = params[:3]
+            ## select max coordinate from plane, ie check towards which coordinate plane is oriented:
+            self.max_coord = np.argmax(np.abs(self.normal))
 
-        ## select max coordinate from plane, ie check towards which coordinate plane is oriented:
-        self.max_coord = np.argmax(np.abs(self.normal))
-
-        self.inliers = inliers
+            self.inliers = inliers
 
     def init_from_point_and_normal(self, point, normal):
         # Point on the plane
         x0, y0, z0 = point
 
         # Normal vector components
+        normal = normal / np.linalg.norm(normal)
         a, b, c = normal
 
         # Calculate d using the point and normal vector

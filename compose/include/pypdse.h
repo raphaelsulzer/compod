@@ -47,7 +47,8 @@ public:
     pair<vector<vector<int>>,bool> get_cdt_of_regions_with_holes(nb::ndarray<double, nb::shape<nb::any, 2>>& points, vector<vector<int>>& cycles);
 
     int load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points, const nb::ndarray<int, nb::shape<nb::any>>& polygons);
-    int triangulate_polygon_mesh(const string filename, const string outfilename);
+    int triangulate_polygon_mesh(const string filename, const string outfilename,
+                                 const bool force_rebuild, const int precision);
     int load_triangle_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points, const nb::ndarray<int, nb::shape<nb::any,3>>& triangles);
     int soup_to_mesh(const bool triangulate, const bool stitch_borders);
     int save_mesh(const string filename);

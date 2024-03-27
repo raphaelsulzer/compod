@@ -202,12 +202,15 @@ int pyPDSE<Kernel>::load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& 
 
 
 template <typename Kernel>
-int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string outfilename){
+int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string outfilename,
+                                             const bool force_rebuild, const int precision){
 
     _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
 
+    _smesh._mesh.clear();
 
-    CGAL::IO::read_polygon_mesh(filename, _smesh._mesh);
+    if(!force_rebuild)
+        CGAL::IO::read_polygon_mesh(filename, _smesh._mesh);
 
     if(_smesh._mesh.number_of_faces() == 0){
         cout << "ERROR: " << filename << " has no faces" << endl;
@@ -218,7 +221,7 @@ int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string
             CGAL::Polygon_mesh_processing::triangulate_faces(_smesh._mesh);
 
         cout << "Mesh loading worked. Will export the mesh as " << outfilename << endl;
-        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(15));
+        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(precision));
         return 0;
     }
 
@@ -240,7 +243,7 @@ int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string
             CGAL::Polygon_mesh_processing::triangulate_faces(_smesh._mesh);
 
         cout << "Soup loading worked. Will export the mesh as " << outfilename << endl;
-        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(15));
+        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(precision));
         return 0;
     }
 }
@@ -319,7 +322,8 @@ NB_MODULE(libPYPDSE, m) {
         // .def("compute_planar_regions", &pyPDSE<EPICK>::compute_planar_regions, "filename"_a, "Compute planar regions of a mesh.")
             .def("is_mesh_intersection_free", &pyPDSE<EPICK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
         .def("load_soup", &pyPDSE<EPICK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
-        .def("triangulate_polygon_mesh", &pyPDSE<EPICK>::triangulate_polygon_mesh, "filename"_a, "outfilename"_a, "Load polygon mesh or soup, triangulate and save to file.")
+        .def("triangulate_polygon_mesh", &pyPDSE<EPICK>::triangulate_polygon_mesh,
+             "filename"_a, "outfilename"_a, "force_rebuild"_a, "precision"_a, "Load polygon mesh or soup, triangulate and save to file.")
             .def("load_triangle_soup", &pyPDSE<EPICK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
             .def("soup_to_mesh", &pyPDSE<EPICK>::soup_to_mesh, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
             .def("save_mesh", &pyPDSE<EPICK>::save_mesh, "filename"_a, "Save a mesh.")
