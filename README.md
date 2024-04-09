@@ -7,6 +7,10 @@
 This repository contains the official implementation of the arxiv paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling".
 Given a set of input planes and corresponding inlier points the resulting plane arrangement can be used for polygon mesh reconstruction and convex decomposition. 
 
+<p float="left">
+  <img style="width:800px;" src="./media/teaser.jpg">
+</p>
+
 
 # Features
 
