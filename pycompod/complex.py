@@ -566,7 +566,6 @@ class PolyhedralComplex:
             self._construct_polygons()
 
         region_to_polygons = defaultdict(list)
-        region_normals = dict()
         polygons = []
         polygon_to_region = []
         npolygons = 0
@@ -619,14 +618,11 @@ class PolyhedralComplex:
                 vertex_is_corner[vertex].add(polygon_to_region[i])
 
         ## init a surface extractor
-        if exact:
-            se = pdse_exact(0)
-        else:
-            se=pdse(0)
+        se = pdse_exact(verbosity=0) if exact else pdse(verbosity=0)
         region_facets = []
-        # point_normals = np.ones(shape=points.shape)
         face_colors = []
-        ### get all the polygons
+
+        ## get all the polygons
         facet_to_plane_id = []
         for region in region_to_polygons.items():
             this_region_facets = []
@@ -876,7 +872,6 @@ class PolyhedralComplex:
 
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
-        ## TODO: replace the CGAL backend with PDSE and add PDSE to COMPOD.
         if backend == "cgal":
             try:
                 from pycompose import pdse
