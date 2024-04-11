@@ -4,7 +4,7 @@
 [//]: # (make it explode, put it back together and show concise surface. )
 
 
-This repository contains the official implementation of the arxiv paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling".
+This repository contains the official implementation of the [arxiv paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling"](https://arxiv.org/abs/2404.06154).
 Given a set of input planes and corresponding inlier points the resulting plane arrangement can be used for polygon mesh reconstruction and convex decomposition. 
 
 <p float="left">
@@ -15,11 +15,11 @@ Given a set of input planes and corresponding inlier points the resulting plane 
 # Features
 
 - Reading of vertex groups ([.vg](https://abspy.readthedocs.io/en/latest/vertexgroup.html), .npz) as input (e.g. from [here](https://github.com/raphaelsulzer/psdr/tree/main))
-- Fast and memory efficient concise polyhedral complex construction (see evaluation)
-- Storing of the complex as a binary space partitioning tree (BSP-tree)
-- Interior / exterior labelling of the complex using point normals or a closed surface mesh
-- Further simplification of the complex based on a careful analysis of the BSP-tree 
-- Extraction of a concise convex decomposition (i.e. interior cells of the complex), or a concise polygon surface mesh (i.e. interface polygons between interior and exterior cells of the complex). 
+- Fast and memory efficient concise plane arrangement construction
+- Storing of the arrangement as a binary space partitioning tree (BSP-tree)
+- Interior / exterior labelling of the arrangement cells using point normals or a reference surface mesh
+- Further simplification of the arrangement based on a careful analysis of the BSP-tree 
+- Extraction of a concise convex decomposition (i.e. interior cells of the arrangement), or a concise polygon surface mesh (i.e. interface polygons between interior and exterior cells). 
 
 # Installation
 
@@ -39,7 +39,7 @@ You are now ready to use COMPOD.
 ### COMPOSE
 
 COMPOSE is an extension for COMPOD that implements some routines for Surface Extraction in C++. Those are:
-- a fast inside/outside labelling of the cells of the polyhedral complex based on sampling points in a reference mesh. 
+- a fast inside/outside labelling of the cells of the arrangement cells based on sampling points in a reference mesh. 
 - a simplification of the surface extracted from COMPOD based on a Constrained Delaunay Triangulation of the corner vertices of each planar region of the surface mesh.
 
 To install COMPOSE you need to follow the steps below:
@@ -97,8 +97,12 @@ Please see the `example/` folder.
 If you use this work please consider citing:
 
 ```bibtex
-@article{1,
-  title={Concise Plane Arrangements for Low-Poly Surface and Volume Modelling},
-  author={Sulzer, Raphael and Lafarge, Florent},
+@misc{sulzer2024concise,
+      title={Concise Plane Arrangements for Low-Poly Surface and Volume Modelling}, 
+      author={Raphael Sulzer and Florent Lafarge},
+      year={2024},
+      eprint={2404.06154},
+      archivePrefix={arXiv},
+      primaryClass={cs.CG}
 }
 ```
