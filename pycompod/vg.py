@@ -371,6 +371,8 @@ class VertexGroup:
         self.normals = data["normals"].astype(type)
         # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
         self.classes = data.get("classes", None)
+        if not len(self.classes):
+            self.classes = None
         self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
         
         self.logger.info(

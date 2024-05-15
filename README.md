@@ -7,10 +7,9 @@
 This repository contains the official implementation of the [arxiv paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling"](https://arxiv.org/abs/2404.06154).
 Given a set of input planes and corresponding inlier points the resulting plane arrangement can be used for polygon mesh reconstruction and convex decomposition. 
 
-<p float="left">
+<p float="center">
   <img style="width:800px;" src="./media/teaser.jpg">
 </p>
-
 
 # Features
 
@@ -86,7 +85,7 @@ cc.save_surface(out_file="data/{}/polygon_mesh_detected/file.ply".format(model),
 
 Please see the `example/` folder.
 
-<p float="left">
+<p float="center">
   <img style="width:800px;" src="./media/city.gif">
 </p>
 
