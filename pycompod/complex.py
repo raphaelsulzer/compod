@@ -1129,6 +1129,9 @@ class PolyhedralComplex:
             self.logger.error("Cannot export partition when construct_graph = False")
             return 1
 
+        self.logger.info('Save partition...')
+        self.logger.debug("to {}".format(out_file))
+
         def _sorted_vertex_indices(adjacency_matrix):
 
             pointer = 0
@@ -1142,11 +1145,6 @@ class PolyhedralComplex:
                     pointer = connected[1]
                     sorted_.append(connected[1])
             return sorted_
-
-
-        self.logger.info('Save partition...')
-        self.logger.debug("to {}".format(out_file))
-
 
         # have to initialize polygons, ie graph edges to export the partition
         if not self.polygons_initialized:
@@ -1219,7 +1217,6 @@ class PolyhedralComplex:
                      [c[0], c[1], 1]])
             magnitude = (x ** 2 + y ** 2 + z ** 2) ** .5
             return (x / magnitude, y / magnitude, z / magnitude)
-
 
         if len(poly) < 3:  # not a plane - no area
             return 0
@@ -2611,6 +2608,35 @@ class PolyhedralComplex:
         self.tree_simplified = True
 
 
+    def _init_polygons_one(self, edge):
+
+        e0, e1 = edge
+        edge = self.graph.edges[e0, e1]
+        c0 = self.cells.get(e0)
+        c1 = self.cells.get(e1)
+        intersection = c0.intersection(c1)
+        if intersection.dim() == 2:
+            edge["intersection"] = intersection
+            edge["vertices"] = intersection.vertices_list()
+        else:
+            self.graph.remove_edge(e0, e1)
+
+        return 0
+
+    # def _init_polygons(self):
+    #
+    #     """
+    #     Initialize the polygons
+    #     - intersects all pairs of polyhedra that share an edge in the graph (ie have a positive bounding box intersection test) and store the intersections on the edge
+    #     """
+    #
+    #     self.logger.info("Initialise polygons...")
+    #     edges = list(self.graph.edges)
+    #     with Pool(self.n_threads) as pool:
+    #         processed = pool.imap_unordered(self._init_polygons_one, edges)
+    #
+    #     self.polygons_initialized = True
+
     def _init_polygons(self):
 
         """
@@ -2633,7 +2659,9 @@ class PolyhedralComplex:
 
         self.polygons_initialized = True
 
-    def _construct_multi(self,edge):
+    def _construct_polygons_one(self,edge):
+        """This function has to be on top level, otherwise multiprocessing does not work."""
+
         c0,c1 = edge
 
         current_edge = self.graph[c0][c1]
@@ -2662,47 +2690,19 @@ class PolyhedralComplex:
 
         return 0
 
-    def _construct_polygons(self):
-        """
-        Add missing vertices to the polyhedron facets by intersecting all facets of neighboring cells of the partition.
-        """
-
-        if not self.polygons_initialized:
-            self._init_polygons()
-
-        def filter_edge(c0,c1):
-            return self.graph.nodes[c0]["occupancy"] != self.graph.nodes[c1]["occupancy"]
-
-        self.logger.info("Construct polygons...")
-
-        # give every edge an index
-        ids = dict(zip(list(self.graph.edges.keys()), list(range(len(self.graph.edges)))))
-        nx.set_edge_attributes(self.graph,ids,"id")
-
-
-        # for c0,c1 in tqdm(self.graph.edges, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True):
-        # for c0,c1 in list(self.graph.edges):
-        edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
-        with Pool(self.n_threads) as pool:
-            processed = pool.imap_unordered(self._construct_multi, edges)
-
-        # with Pool(processes=self.n_threads) as pool:
-        #     max_ = len(edges)
-        #     with tqdm(total=max_, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True) as pbar:
-        #         for _ in pool.imap_unordered(self._construct_multi, edges):
-        #             pbar.update(1)
-
-
-        self.polygons_constructed = True
-
-
     # def _construct_polygons(self):
     #     """
     #     Add missing vertices to the polyhedron facets by intersecting all facets of neighboring cells of the partition.
     #     """
     #
+    #     # TODO: for some reason multiprocessing messes up the simplified surface, but NOT THE UNSIMPLIFIED ONE???
+    #
+    #
     #     if not self.polygons_initialized:
     #         self._init_polygons()
+    #
+    #     def filter_edge(c0,c1):
+    #         return self.graph.nodes[c0]["occupancy"] != self.graph.nodes[c1]["occupancy"]
     #
     #     self.logger.info("Construct polygons...")
     #
@@ -2710,37 +2710,65 @@ class PolyhedralComplex:
     #     ids = dict(zip(list(self.graph.edges.keys()), list(range(len(self.graph.edges)))))
     #     nx.set_edge_attributes(self.graph,ids,"id")
     #
-    #     for c0,c1 in tqdm(self.graph.edges, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True):
-    #     # for c0,c1 in list(self.graph.edges):
+    #     edges = list(nx.subgraph_view(self.graph,filter_edge=filter_edge).edges)
+    #     with Pool(self.n_threads) as pool:
+    #         # processed = pool.imap_unordered(self._construct_polygons_one, edges)
+    #         processed = pool.map_async(self._construct_polygons_one, edges)
     #
-    #         if self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]:
-    #             continue
-    #
-    #         current_edge = self.graph[c0][c1]
-    #         current_facet = current_edge["intersection"]
-    #         facet_id = self.graph.edges[c0, c1]["id"]
-    #
-    #         sp_id = current_edge["supporting_plane_id"]
-    #
-    #         for neighbor in list(self.graph[c0]):
-    #             if neighbor == c1: continue
-    #             this_edge = self.graph[c0][neighbor]
-    #             # if facet_id > this_edge["id"]: continue # not sure why I cannot filter the second intersection, ie each pair here is probably intersected twice, a-b and b-a
-    #             # if sp_id != this_edge["supporting_plane_id"]: continue
-    #             facet_intersection = current_facet.intersection(this_edge["intersection"])
-    #             if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
-    #                 current_edge["vertices"]+=facet_intersection.vertices_list()
-    #
-    #         for neighbor in list(self.graph[c1]):
-    #             if neighbor == c0: continue
-    #             this_edge = self.graph[c1][neighbor]
-    #             # if facet_id > this_edge["id"]: continue # not sure why I cannot filter the second intersection, ie each pair here is probably intersected twice, a-b and b-a
-    #             # if sp_id != this_edge["supporting_plane_id"]: continue
-    #             facet_intersection = current_facet.intersection(this_edge["intersection"])
-    #             if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
-    #                 current_edge["vertices"] += facet_intersection.vertices_list()
+    #     # with Pool(processes=self.n_threads) as pool:
+    #     #     max_ = len(edges)
+    #     #     with tqdm(total=max_, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True) as pbar:
+    #     #         for _ in pool.imap_unordered(self._construct_multi, edges):
+    #     #             pbar.update(1)
     #
     #     self.polygons_constructed = True
+
+
+    def _construct_polygons(self,init_all=False):
+        """
+        Add missing vertices to the polyhedron facets by intersecting all facets of neighboring cells of the partition.
+        """
+
+        if not self.polygons_initialized:
+            self._init_polygons()
+
+        self.logger.info("Construct polygons...")
+
+        # give every edge an index
+        ids = dict(zip(list(self.graph.edges.keys()), list(range(len(self.graph.edges)))))
+        nx.set_edge_attributes(self.graph,ids,"id")
+
+        for c0,c1 in tqdm(self.graph.edges, file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True):
+        # for c0,c1 in list(self.graph.edges):
+
+            if (self.graph.nodes[c0]["occupancy"] == self.graph.nodes[c1]["occupancy"]) and not init_all:
+                continue
+
+            current_edge = self.graph[c0][c1]
+            current_facet = current_edge["intersection"]
+            facet_id = self.graph.edges[c0, c1]["id"]
+
+            sp_id = current_edge["supporting_plane_id"]
+
+            for neighbor in list(self.graph[c0]):
+                if neighbor == c1: continue
+                this_edge = self.graph[c0][neighbor]
+                # if facet_id > this_edge["id"]: continue # not sure why I cannot filter the second intersection, ie each pair here is probably intersected twice, a-b and b-a
+                # if sp_id != this_edge["supporting_plane_id"]: continue
+                facet_intersection = current_facet.intersection(this_edge["intersection"])
+                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
+                    current_edge["vertices"]+=facet_intersection.vertices_list()
+
+            for neighbor in list(self.graph[c1]):
+                if neighbor == c0: continue
+                this_edge = self.graph[c1][neighbor]
+                # if facet_id > this_edge["id"]: continue # not sure why I cannot filter the second intersection, ie each pair here is probably intersected twice, a-b and b-a
+                # if sp_id != this_edge["supporting_plane_id"]: continue
+                facet_intersection = current_facet.intersection(this_edge["intersection"])
+                if facet_intersection.dim() == 0 or facet_intersection.dim() == 1:
+                    current_edge["vertices"] += facet_intersection.vertices_list()
+
+        self.polygons_constructed = True
 
 
     def partition_from_tree(self, model):
@@ -3089,10 +3117,18 @@ class PolyhedralComplex:
 
         # self.logger.info("{} auxiliary points inserted!".format(self.n_auxiliary_points))
 
-    def save_partition_to_pickle(self,outpath):
+    def save_partition_to_pickle(self,outpath,init_all=False):
 
         self.logger.info("Save partition to pickle...")
         self.logger.debug("to {}".format(outpath))
+
+        if init_all:
+            if not self.polygons_initialized:
+                self._init_polygons()
+            self._construct_polygons(init_all=init_all)
+            self.graph.init_all = True
+        else:
+            self.graph.init_all = False
 
         os.makedirs(outpath,exist_ok=True)
 
@@ -3119,7 +3155,13 @@ class PolyhedralComplex:
 
         assert(len(self.cells) == len(self.graph.nodes)) ## this makes sure that every graph node has a convex attached
 
-        self.polygons_initialized = False # false because I do not initialize the sibling facets
+        if self.graph.init_all:
+            self.polygons_initialized = True
+            self.polygons_constructed = True
+        else:
+            self.polygons_initialized = False # false because I do not initialize the sibling facets
+            self.polygons_constructed = False
+
         self.partition_labelled = True
         self.bounding_poly = self._init_bounding_box(self.padding)
         # self.bounding_poly = self._init_oriented_ounding_box(self.padding)

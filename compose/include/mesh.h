@@ -152,11 +152,11 @@ int SMesh<Kernel>::soup_to_mesh(const bool triangulate, const bool stitch_border
         PMP::stitch_borders(_mesh);
     }
 
-    vector<typename Mesh::Halfedge_index> boundaries;
-    PMP::extract_boundary_cycles(_mesh,back_inserter(boundaries));
-    for(auto boundary : boundaries){
-        PMP::triangulate_hole(_mesh,boundary,PMP::parameters::use_2d_constrained_delaunay_triangulation(false));
-    }
+    // vector<typename Mesh::Halfedge_index> boundaries;
+    // PMP::extract_boundary_cycles(_mesh,back_inserter(boundaries));
+    // for(auto boundary : boundaries){
+    //     PMP::triangulate_hole(_mesh,boundary,PMP::parameters::use_2d_constrained_delaunay_triangulation(false));
+    // }
 
 
     if(triangulate){

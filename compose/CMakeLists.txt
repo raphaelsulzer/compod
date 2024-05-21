@@ -22,6 +22,7 @@ if(NOT SKBUILD)
     # manually set the conda env when generating with cmake
     set(CONDA_ENV "ksr3")
     set(Python_ROOT_DIR "/opt/miniconda3/envs/${CONDA_ENV}/bin")
+    set(Python_FIND_STRATEGY "LOCATION")
 endif()
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 include_directories(${Python_INCLUDE_DIRS} ${Python_NumPy_INCLUDE_DIRS})
