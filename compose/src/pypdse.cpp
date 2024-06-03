@@ -173,8 +173,9 @@ pair<vector<vector<int>>,bool> pyPDSE<Kernel>::get_cdt_of_regions_with_holes
 /////////////////////////////////// SOUP TO UNSIMPLIFIED MESH ////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 template <typename Kernel>
-int pyPDSE<Kernel>::load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
-                      const nb::ndarray<int, nb::shape<nb::any>>& polygons
+int pyPDSE<Kernel>::load_polygon_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
+                      const nb::ndarray<int, nb::shape<nb::any>>& polygons,
+                                      const nb::ndarray<int, nb::shape<nb::any>>& polygon_lens
                       ){
 
     _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
@@ -187,16 +188,19 @@ int pyPDSE<Kernel>::load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& 
         _smesh._points.push_back(Point(points(i,0),points(i,1),points(i,2)));
     }
 
-
     int n = 0;
-    for (size_t i = 0; i < polygons.shape(0); i++){
-        Polygon poly;
-        for(size_t j = 0; j < polygons(i); j++){
-            poly.push_back(j+n);
+    int this_len;
+    Polygon poly;
+    for (size_t i = 0; i < polygon_lens.shape(0); i++){
+        this_len = polygon_lens(i);
+        poly.clear();
+        for(size_t j = n; j < n+this_len; j++){
+            poly.push_back(polygons(j));
         }
-        n+=poly.size();
+        n+=this_len;
         _smesh._polygons.push_back(poly);
     }
+
     return 0;
 }
 
@@ -295,7 +299,7 @@ int pyPDSE<Kernel>::is_mesh_intersection_free(const string filename){
       std::cerr << "Invalid input." << std::endl;
       return 0;
     }
-    return PMP::does_self_intersect<CGAL::Parallel_if_available_tag>(mesh, CGAL::parameters::vertex_point_map(get(CGAL::vertex_point, mesh)));
+    return !PMP::does_self_intersect<CGAL::Parallel_if_available_tag>(mesh, CGAL::parameters::vertex_point_map(get(CGAL::vertex_point, mesh)));
 
 }
 
@@ -321,7 +325,7 @@ NB_MODULE(libPYPDSE, m) {
         .def("is_mesh_watertight", &pyPDSE<EPICK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
         // .def("compute_planar_regions", &pyPDSE<EPICK>::compute_planar_regions, "filename"_a, "Compute planar regions of a mesh.")
             .def("is_mesh_intersection_free", &pyPDSE<EPICK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
-        .def("load_soup", &pyPDSE<EPICK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
+        .def("load_polygon_soup", &pyPDSE<EPICK>::load_polygon_soup, "points"_a, "polygons"_a, "polygon_lens"_a, "Load a polygon soup.")
         .def("triangulate_polygon_mesh", &pyPDSE<EPICK>::triangulate_polygon_mesh,
              "filename"_a, "outfilename"_a, "force_rebuild"_a, "precision"_a, "Load polygon mesh or soup, triangulate and save to file.")
             .def("load_triangle_soup", &pyPDSE<EPICK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
@@ -336,7 +340,7 @@ NB_MODULE(libPYPDSE, m) {
             .def(nb::init<int,bool>(),"verbosity"_a = 0, "debug_export"_a = false)
             .def("is_mesh_watertight", &pyPDSE<EPECK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
             .def("is_mesh_intersection_free", &pyPDSE<EPECK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
-            .def("load_soup", &pyPDSE<EPECK>::load_soup, "points"_a, "polygons"_a, "Load a polygon soup.")
+            .def("load_soup", &pyPDSE<EPECK>::load_polygon_soup, "points"_a, "polygons"_a, "polygon_lens"_a, "Load a polygon soup.")
             .def("load_triangle_soup", &pyPDSE<EPECK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
             .def("soup_to_mesh", &pyPDSE<EPECK>::soup_to_mesh, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
             .def("save_mesh", &pyPDSE<EPECK>::save_mesh, "filename"_a, "Save a mesh.")
