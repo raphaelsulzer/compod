@@ -57,7 +57,7 @@ void GraphCycles::cycle(const Path& p, const Graph& g)
 }
 
 template <typename Kernel>
-vector<vector<int>> pyPDSE<Kernel>::get_cycles(const nb::ndarray<int, nb::shape<nb::any, 2>>& edges){
+vector<vector<int>> pyPDSE<Kernel>::get_cycles(const nb::ndarray<int, nb::shape<-1, 2>>& edges){
 
     Graph graph;
     for(size_t i = 0; i < edges.shape(0); i++){
@@ -127,7 +127,7 @@ void mark_domains(typename pyPDSE<Kernel>::CDT& cdt)
 
 template <typename Kernel>
 pair<vector<vector<int>>,bool> pyPDSE<Kernel>::get_cdt_of_regions_with_holes
-(nb::ndarray<double, nb::shape<nb::any, 2>>& points, vector<vector<int>>& cycles){
+(nb::ndarray<double, nb::shape<-1, 2>>& points, vector<vector<int>>& cycles){
 
     // make a 2D constrained delaunay triangulation of the region
     typename pyPDSE<Kernel>::CDT cdt;
@@ -173,9 +173,9 @@ pair<vector<vector<int>>,bool> pyPDSE<Kernel>::get_cdt_of_regions_with_holes
 /////////////////////////////////// SOUP TO UNSIMPLIFIED MESH ////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 template <typename Kernel>
-int pyPDSE<Kernel>::load_polygon_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
-                      const nb::ndarray<int, nb::shape<nb::any>>& polygons,
-                                      const nb::ndarray<int, nb::shape<nb::any>>& polygon_lens
+int pyPDSE<Kernel>::load_polygon_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points,
+                      const nb::ndarray<int, nb::shape<-1>>& polygons,
+                                      const nb::ndarray<int, nb::shape<-1>>& polygon_lens
                       ){
 
     _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
@@ -255,8 +255,8 @@ int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string
 
 
 template <typename Kernel>
-int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
-                      const nb::ndarray<int, nb::shape<nb::any,3>>& triangles
+int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points,
+                      const nb::ndarray<int, nb::shape<-1,3>>& triangles
                       ){
 
     _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);

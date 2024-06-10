@@ -42,16 +42,16 @@ public:
     int _verbosity;
     bool _debug_export;
 
-    vector<vector<int>> get_cycles(const nb::ndarray<int, nb::shape<nb::any, 2>>& edges);
+    vector<vector<int>> get_cycles(const nb::ndarray<int, nb::shape<-1, 2>>& edges);
 
-    pair<vector<vector<int>>,bool> get_cdt_of_regions_with_holes(nb::ndarray<double, nb::shape<nb::any, 2>>& points, vector<vector<int>>& cycles);
+    pair<vector<vector<int>>,bool> get_cdt_of_regions_with_holes(nb::ndarray<double, nb::shape<-1, 2>>& points, vector<vector<int>>& cycles);
 
-    int load_polygon_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points,
-                          const nb::ndarray<int, nb::shape<nb::any>>& polygons,
-                          const nb::ndarray<int, nb::shape<nb::any>>& polygon_lens);
+    int load_polygon_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points,
+                          const nb::ndarray<int, nb::shape<-1>>& polygons,
+                          const nb::ndarray<int, nb::shape<-1>>& polygon_lens);
     int triangulate_polygon_mesh(const string filename, const string outfilename,
                                  const bool force_rebuild, const int precision);
-    int load_triangle_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points, const nb::ndarray<int, nb::shape<nb::any,3>>& triangles);
+    int load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points, const nb::ndarray<int, nb::shape<-1,3>>& triangles);
     int soup_to_mesh(const bool triangulate, const bool stitch_borders);
     int save_mesh(const string filename);
 
