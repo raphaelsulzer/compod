@@ -255,6 +255,52 @@ int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string
 
 
 template <typename Kernel>
+vector<bool>
+pyPDSE<Kernel>::check_mesh_contains(const nb::ndarray<double, nb::shape<-1, 3>>& points){
+
+
+    Tree tree(faces(_smesh._mesh).first, faces(_smesh._mesh).second, _smesh);
+    tree.accelerate_distance_queries();
+    const Point_inside inside_tester(tree);
+
+    typename Kernel::Point_3 tpoint;
+    vector<bool> occupancy;
+    for(size_t i = 0; i < points.shape(0); i++){
+        tpoint = Point(points(i,0),points(i,1),points(i,2));
+        occupancy.push_back(inside_tester(tpoint) == CGAL::ON_BOUNDED_SIDE);
+    }
+    return occupancy;
+
+}
+
+
+template <typename Kernel>
+int pyPDSE<Kernel>::load_triangle_mesh(const nb::ndarray<double, nb::shape<-1, 3>>& points,
+                                       const nb::ndarray<int, nb::shape<-1, 2>>& edges,
+                                       const nb::ndarray<int, nb::shape<-1,3>>& triangles
+                                       ){
+
+    _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
+    _smesh._mesh.clear();
+
+    _smesh._mesh.reserve(points.shape(0),edges.shape(0),triangles.shape(0));
+
+    for (size_t i = 0; i < points.shape(0); i++){
+        _smesh._mesh.add_vertex(Point(points(i,0),points(i,1),points(i,2)));
+    }
+
+    for (size_t i = 0; i < triangles.shape(0); i++){
+        _smesh._mesh.add_face(CGAL::SM_Vertex_index(triangles(i,0)),
+                              CGAL::SM_Vertex_index(triangles(i,1)),
+                              CGAL::SM_Vertex_index(triangles(i,2)));
+    }
+
+    return 0;
+}
+
+
+
+template <typename Kernel>
 int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points,
                       const nb::ndarray<int, nb::shape<-1,3>>& triangles
                       ){
@@ -328,12 +374,14 @@ NB_MODULE(libPYPDSE, m) {
         .def("load_polygon_soup", &pyPDSE<EPICK>::load_polygon_soup, "points"_a, "polygons"_a, "polygon_lens"_a, "Load a polygon soup.")
         .def("triangulate_polygon_mesh", &pyPDSE<EPICK>::triangulate_polygon_mesh,
              "filename"_a, "outfilename"_a, "force_rebuild"_a, "precision"_a, "Load polygon mesh or soup, triangulate and save to file.")
-            .def("load_triangle_soup", &pyPDSE<EPICK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
+        .def("load_triangle_soup", &pyPDSE<EPICK>::load_triangle_soup, "points"_a, "triangles"_a, "Load a triangle soup.")
+        .def("load_triangle_mesh", &pyPDSE<EPICK>::load_triangle_mesh, "points"_a, "edges"_a, "triangles"_a, "Load a triangle mesh.")
             .def("soup_to_mesh", &pyPDSE<EPICK>::soup_to_mesh, "triangulate"_a, "stitch_borders"_a, "Generate a polygon mesh from the polygon soup.")
             .def("save_mesh", &pyPDSE<EPICK>::save_mesh, "filename"_a, "Save a mesh.")
             .def("get_cycles", &pyPDSE<EPICK>::get_cycles, "boundary_edges"_a ,"Get closed cycles from a set of boundary edges.")
             .def("get_cdt_of_regions_with_holes", &pyPDSE<EPICK>::get_cdt_of_regions_with_holes, "points2d"_a, "constrained_edges"_a,
                  "Get the Constrained Delaunay Triangulation from 2D points and edges.")
+
             ;
 
     nb::class_<pyPDSE<EPECK>>(m, "pdse_exact")
