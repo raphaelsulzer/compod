@@ -252,6 +252,16 @@ class PyPlane:
         else:
             raise NotImplementedError
 
+    def eval_points(self,points,return_sign=False):
+
+
+        side = np.dot(points,self.normal) + self.d
+
+        if return_sign:
+            return np.sign(side)
+
+        return side
+
 
 
 
