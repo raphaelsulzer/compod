@@ -6,17 +6,14 @@ from sklearn.svm import LinearSVC
 from sklearn.datasets import make_classification
 from sklearn.linear_model import Ridge
 from scipy.optimize import minimize
-# Create a sample 3D dataset
-# X, y = make_classification(n_samples=100000, n_features=3, n_informative=3, n_redundant=0, n_clusters_per_class=1, class_sep=0.5, random_state=42)
-
-
 from dsrb import Berger
 from pycompod import PyPlane
 import os
-
-
 import matplotlib
 matplotlib.use('TkAgg')
+
+# Create a sample 3D dataset
+# X, y = make_classification(n_samples=100000, n_features=3, n_informative=3, n_redundant=0, n_clusters_per_class=1, class_sep=0.5, random_state=42)
 
 ds = Berger()
 model = ds.get_models(names="anchor",scan_configuration="1")[0]
@@ -33,7 +30,7 @@ def objective(params):
     w = params[:3]
     b = params[3]
     distances = np.abs(np.dot(X_scaled, w) + b) / np.linalg.norm(w)
-    return np.sum(distances[y == 0])  # Only minimize distance for occupied points
+    return np.sum(distances[y == 0])  # Only minimize distance for empty points
 # Define the constraints for occupied points
 def constraint(params, X_scaled, y):
     w = params[:3]
