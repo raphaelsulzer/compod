@@ -4,7 +4,7 @@
 [//]: # (make it explode, put it back together and show concise surface. )
 
 
-This repository contains the official implementation of the [arxiv paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling"](https://arxiv.org/abs/2404.06154).
+This repository contains the official implementation of the [ECCV 2024 paper "Concise Plane Arrangements for Low-Poly Surface and Volume Modelling"](https://arxiv.org/abs/2404.06154).
 Given a set of input planes and corresponding inlier points the resulting plane arrangement can be used for polygon surface mesh reconstruction and convex decomposition of volumes. 
 
 <p float="center">
