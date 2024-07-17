@@ -40,7 +40,7 @@ class PolyhedralComplex:
     Class of cell complex from planar primitive arrangement.
     """
     def __init__(self, vertex_group, padding=0.02, insertion_threshold=0, device='cpu',
-                 debug_export=False, verbosity=logging.WARN, construct_graph=True,
+                 debug_export=None, verbosity=logging.WARN, construct_graph=True,
                  n_threads=14):
         """
         Init PolyhedralComplex.
@@ -568,6 +568,7 @@ class PolyhedralComplex:
         :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
         """
 
+        self.logger.info('Save simplified surface mesh...')
 
         os.makedirs(os.path.dirname(out_file),exist_ok=True)
 
@@ -576,7 +577,7 @@ class PolyhedralComplex:
         except:
             self.logger.error(
                 "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
-            raise ModuleNotFoundError
+            return 1
 
         def _get_region_borders(all_polygons,this_region_polygons):
             """
@@ -630,8 +631,6 @@ class PolyhedralComplex:
                 return np.flip(facet),cross,np.array([1,0,0])
             else:
                 return facet,cross,np.array([0,1,0])
-
-        self.logger.info('Save simplified surface mesh...')
 
         if not self.polygons_constructed:
             self._construct_polygons()
@@ -871,6 +870,9 @@ class PolyhedralComplex:
                 "{} is not a valid surface extraction backend. Choose either 'trimesh' or 'python'.".format(
                     backend))
             raise NotImplementedError
+            return 1
+
+        return 0
 
 
     def save_surface(self, out_file, backend="python", triangulate=False, stitch_borders=True):
@@ -949,7 +951,8 @@ class PolyhedralComplex:
             except:
                 self.logger.error("Could not import pdse. Either install COMPOSE from https://github.com/raphaelsulzer/compod#compose"
                                   " or use 'python' or 'trimesh' as backend.")
-                raise ModuleNotFoundError
+                return 1
+
             se = pdse(verbosity=0,debug_export=False)
             se.load_soup(np.array(points_exact,dtype=np.float64), np.array(face_lens,dtype=int))
             se.soup_to_mesh(triangulate=triangulate,stitch_borders=True)
@@ -1000,8 +1003,9 @@ class PolyhedralComplex:
             mesh.export(out_file)
         else:
             self.logger.error("{} is not a valid surface extraction backend. Valid backends are 'python', 'python_exact', 'trimesh' and 'cgal'.".format(backend))
-            raise NotImplementedError
+            return 1
 
+        return 0
 
     def save_in_cells_explode(self,out_file,shrink_percentage=0.01):
 

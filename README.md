@@ -27,13 +27,16 @@ Simply clone the repository and install in a new conda environment using pip:
 ```
 git clone https://github.com/raphaelsulzer/compod.git
 cd compod
-conda create --name compod
-conda activate compod
 bash install.sh    # this step may take some time
-pip install . 
 ```
 
-You are now ready to use COMPOD.
+You are now ready to use COMPOD. You can test your installation with:
+
+```
+conda activate compod
+cd example
+python example.py
+```
 
 ### COMPOSE
 
@@ -50,35 +53,31 @@ pip install .
 ```
 
 
-
-
 # Usage
 
 ```
-import os
 from pycompod import VertexGroup, PolyhedralComplex
 
 model = "anchor"
 
-file = "../../../cpp/psdr/example/data/{}/convexes_detected/file.npz".format(model)
+file = "data/{}/convexes_refined/file.npz".format(model)
 vg = VertexGroup(file,prioritise="area",verbosity=20)
+cc = PolyhedralComplex(vg,device='gpu',verbosity=20)
 
-cc = PolyhedralComplex(vg,device='gpu',logging_level=20)
 cc.construct_partition()
 cc.add_bounding_box_planes()
-cc.label_partition(mesh_file="data/{}/dense_mesh/file.off".format(model),graph_cut=False,type="mesh")
-
-os.makedirs("data/{}/partition".format(model),exist_ok=True)
-
-cc.save_partition("data/{}/partition/file.ply".format(model), rand_colors=False,
-                  export_boundary=True, with_primitive_id=False)
+cc.label_partition(mode="normals")
+# ## needs compose extension
+# cc.label_partition(mode="mesh",mesh_file="data/{}/surface/dense_mesh.off".format(model))
 
 cc.simplify_partition_tree_based()
-cc.simplify_partition_graph_based()
-
+cc.save_partition("data/{}/partition/tree_simplified_partition.ply".format(model), export_boundary=True)
 cc.save_partition_to_pickle("data/{}/partition".format(model))
 
-cc.save_surface(out_file="data/{}/polygon_mesh_detected/file.ply".format(model), backend="cgal", triangulate=False)                          
+cc.save_surface(out_file="data/{}/surface/complex_mesh.obj".format(model), triangulate=False)
+## needs compose extension
+cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False)
+cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.obj".format(model), triangulate=True)           
 ```
 
 # Examples
