@@ -135,7 +135,7 @@ const float pyPDL::_label(vector<EPICK::Point_3>& inexact_polyhedron_points){
 }
 
 double
-pyPDL::label_one_cell(const nb::ndarray<double, nb::shape<nb::any, 3>>& points){
+pyPDL::label_one_cell(const nb::ndarray<double, nb::shape<-1, 3>>& points){
 
     vector<EPICK::Point_3> cgpoints;
     for(int j = 0; j < points.shape(0); j++)
@@ -145,7 +145,7 @@ pyPDL::label_one_cell(const nb::ndarray<double, nb::shape<nb::any, 3>>& points){
 
 
 vector<double>
-pyPDL::label_cells(const nb::ndarray<int, nb::shape<nb::any>>& points_len, const nb::ndarray<double, nb::shape<nb::any, 3>>& points){
+pyPDL::label_cells(const nb::ndarray<int, nb::shape<-1>>& points_len, const nb::ndarray<double, nb::shape<-1, 3>>& points){
 
     _all_sampled_points.clear();
 

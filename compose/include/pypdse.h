@@ -10,6 +10,7 @@
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/Polygon_mesh_processing/IO/polygon_mesh_io.h>
+#include <CGAL/Side_of_triangle_mesh.h>
 
 using namespace std;
 namespace nb = nanobind;
@@ -42,20 +43,28 @@ public:
     int _verbosity;
     bool _debug_export;
 
-    vector<vector<int>> get_cycles(const nb::ndarray<int, nb::shape<nb::any, 2>>& edges);
+    vector<vector<int>> get_cycles(const nb::ndarray<int, nb::shape<-1, 2>>& edges);
 
-    pair<vector<vector<int>>,bool> get_cdt_of_regions_with_holes(nb::ndarray<double, nb::shape<nb::any, 2>>& points, vector<vector<int>>& cycles);
+    pair<vector<vector<int>>,bool> get_cdt_of_regions_with_holes(nb::ndarray<double, nb::shape<-1, 2>>& points, vector<vector<int>>& cycles);
 
-    int load_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points, const nb::ndarray<int, nb::shape<nb::any>>& polygons);
+    int load_polygon_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points,
+                          const nb::ndarray<int, nb::shape<-1>>& polygons,
+                          const nb::ndarray<int, nb::shape<-1>>& polygon_lens);
     int triangulate_polygon_mesh(const string filename, const string outfilename,
                                  const bool force_rebuild, const int precision);
-    int load_triangle_soup(const nb::ndarray<double, nb::shape<nb::any, 3>>& points, const nb::ndarray<int, nb::shape<nb::any,3>>& triangles);
+    int load_triangle_mesh(const nb::ndarray<double, nb::shape<-1, 3>>& points,
+                                           const nb::ndarray<int, nb::shape<-1, 2>>& edges,
+                           const nb::ndarray<int, nb::shape<-1,3>>& triangles);
+    int load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3>>& points, const nb::ndarray<int, nb::shape<-1,3>>& triangles);
     int soup_to_mesh(const bool triangulate, const bool stitch_borders);
     int save_mesh(const string filename);
 
     // validity testing
     int is_mesh_intersection_free(const string filename);
     int is_mesh_watertight(const string filename);
+
+    vector<bool>
+    check_mesh_contains(const nb::ndarray<double, nb::shape<-1, 3>>& points);
 
     // // compute planar regions of a mesh
     // int compute_planar_regions(const string filename);
@@ -74,6 +83,13 @@ public:
     using Tag = typename std::conditional<std::is_same<Kernel, EPECK>::value, Etag, Itag>::type;
     typedef CGAL::Constrained_Delaunay_triangulation_2<Kernel, TDS, Tag>    CDT;
 
+    // define check_mesh_contains stuff
+    typedef CGAL::Side_of_triangle_mesh<Mesh, Kernel> Point_inside;
+    typedef CGAL::AABB_face_graph_triangle_primitive<Mesh> Primitive;
+    typedef CGAL::AABB_traits<EPICK, Primitive> AABB_Traits;
+    typedef CGAL::AABB_tree<AABB_Traits> Tree;
+    typedef typename Tree::Point_and_primitive_id Point_and_primitive_id;
+    // typedef boost::optional<Tree::Intersection_and_primitive_id<Kernel::Ray_3>::Type> Ray_intersection;
 
 
 };
