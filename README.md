@@ -27,6 +27,7 @@ Simply clone the repository and install in a new conda environment using pip:
 ```
 git clone https://github.com/raphaelsulzer/compod.git
 cd compod
+sudo apt-get update && sudo apt-get install libgomp1 ffmpeg libsm6 libxext6 -y
 bash install.sh    # this step may take some time
 ```
 
@@ -48,7 +49,7 @@ To install COMPOSE you need to follow the steps below:
 
 ```
 cd compose
-conda install -y -c conda-forge spdlog cgal anaconda::mpfr
+conda install -y conda-forge::spdlog conda-forge::cgal anaconda::mpfr 
 pip install . 
 ```
 

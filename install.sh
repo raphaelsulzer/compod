@@ -46,6 +46,9 @@ echo
 echo "________________ Installation _______________"
 echo
 
+## install ubuntu dependencies
+#sudo apt-get update && sudo apt-get install libgomp1 ffmpeg libsm6 libxext6 -y
+
 # Create a conda environment from yml
 conda create -y --name $PROJECT_NAME python=$PYTHON
 
@@ -54,7 +57,7 @@ source ${CONDA_DIR}/etc/profile.d/conda.sh
 conda activate ${PROJECT_NAME}
 
 # Dependencies
-conda install -y anaconda::scipy conda-forge::shapely conda-forge::sage conda-forge::tqdm conda-forge::trimesh conda-forge::treelib conda-forge::colorlog pytorch pytorch-cuda=11.8 -c pytorch -c nvidia
+conda install -y conda-forge::gsl anaconda::libgomp anaconda::scipy conda-forge::shapely conda-forge::sage conda-forge::tqdm conda-forge::trimesh conda-forge::treelib conda-forge::colorlog pytorch pytorch-cuda=11.8 -c pytorch -c nvidia
 
 pip install open3d
 pip install gco-wrapper

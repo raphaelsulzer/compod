@@ -43,10 +43,10 @@ find_package(Eigen3 REQUIRED PATHS $CONDA_PREFIX/include/eigen3)
 find_package(yaml-cpp REQUIRED)
 ### for spdlog, found no better solution than to change its code with this: https://github.com/gabime/spdlog/issues/2767#issuecomment-1604460152
 find_package(spdlog REQUIRED)
-find_package(xtl REQUIRED) # for xtensor
-find_package(ZLIB REQUIRED) # for xtensor
-find_package(xtensor REQUIRED)
-find_package(xtensor-io REQUIRED)
+# find_package(xtl REQUIRED) # for xtensor
+# find_package(ZLIB REQUIRED) # for xtensor
+# find_package(xtensor REQUIRED)
+# find_package(xtensor-io REQUIRED)
 
 ######################################################
 ###################### INTERNAL ######################
