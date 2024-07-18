@@ -7,7 +7,8 @@ __pycache__/
 *.so
 
 example/data/city
-
+example/data/anchor/partition
+example/data/bunny/partition
 
 compose/CMakeLists.txt.user
 
