@@ -8,6 +8,10 @@ __pycache__/
 
 example/data/city
 
+
+compose/CMakeLists.txt.user
+
+
 # Distribution / packaging
 .Python
 build/
