@@ -20,3 +20,4 @@ cc.save_surface(out_file="data/{}/surface/complex_mesh.obj".format(model), trian
 ## needs compose extension
 cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False)
 cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.obj".format(model), triangulate=True)
+cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))
