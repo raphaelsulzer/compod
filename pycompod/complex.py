@@ -915,7 +915,6 @@ class PolyhedralComplex:
 
         graph = nx.DiGraph()
         for poly in region_polygons:
-
             for i in range(len(poly)-1):
                 graph.add_node(poly[i],position=points[poly[i]])
                 graph.add_node(poly[i+1],position=points[poly[i+1]])
@@ -941,6 +940,8 @@ class PolyhedralComplex:
         for v0,v1 in edges:
             f.write("l {} {}\n".format(v0+1,v1+1))
         f.close()
+
+        return 0
 
 
 

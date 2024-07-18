@@ -11,16 +11,17 @@ Given a set of input planes and corresponding inlier points the resulting plane 
   <img style="width:800px;" src="./media/teaser.jpg">
 </p>
 
-# Features
+# :clipboard: Features
 
 - Reading of vertex groups ([.vg](https://abspy.readthedocs.io/en/latest/vertexgroup.html), .npz) as input (e.g. from [here](https://github.com/raphaelsulzer/psdr/tree/main))
 - Fast and memory efficient concise plane arrangement construction
 - Storing of the arrangement as a binary space partitioning tree (BSP-tree)
-- Interior / exterior labelling of the arrangement cells using point normals or a reference surface mesh
+- Interior / exterior labelling of the arrangement cells using point normals or a reference mesh
 - Further simplification of the arrangement based on a careful analysis of the BSP-tree 
-- Extraction of a concise convex decomposition (i.e. interior cells of the arrangement), or a concise polygon surface mesh (i.e. interface polygons between interior and exterior cells). 
+- Extraction of a concise convex decomposition (i.e. interior cells of the arrangement)
+- Extraction of a concise polygon surface mesh (i.e. interface polygons between interior and exterior cells). 
 
-# Installation
+# :bricks: Installation
 
 Simply clone the repository and install in a new conda environment using pip:
 
@@ -42,8 +43,8 @@ python example.py
 ### COMPOSE
 
 COMPOSE is an extension for COMPOD that implements some routines for Surface Extraction in C++. Those are:
-- a fast inside/outside labelling of the cells of the arrangement cells based on sampling points in a reference mesh. 
-- a simplification of the surface extracted from COMPOD based on a Constrained Delaunay Triangulation of the corner vertices of each planar region of the surface mesh.
+- a fast interior / exterior labelling of the arrangement cells based on interior point tests using a reference mesh. 
+- a simplification of the extracted surface mesh based on a Constrained Delaunay Triangulation of the corner vertices of each planar region.
 
 To install COMPOSE you need to follow the steps below:
 
@@ -54,7 +55,7 @@ pip install .
 ```
 
 
-# Usage
+# :computer: Usage
 
 ```
 from pycompod import VertexGroup, PolyhedralComplex
@@ -78,10 +79,11 @@ cc.save_partition_to_pickle("data/{}/partition".format(model))
 cc.save_surface(out_file="data/{}/surface/complex_mesh.obj".format(model), triangulate=False)
 ## needs compose extension
 cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False)
-cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.obj".format(model), triangulate=True)           
+cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.obj".format(model), triangulate=True)  
+cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))         
 ```
 
-# Examples
+# :camera_flash: Examples
 
 Please see the `example/` folder.
 
@@ -91,7 +93,7 @@ Please see the `example/` folder.
 
 
 
-# References
+# :book: Citation
 
 If you use this work please consider citing:
 
