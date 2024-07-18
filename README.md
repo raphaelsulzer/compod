@@ -62,7 +62,7 @@ from pycompod import VertexGroup, PolyhedralComplex
 model = "anchor"
 
 file = "data/{}/convexes_refined/file.npz".format(model)
-vg = VertexGroup(file,prioritise="area",verbosity=20)
+vg = VertexGroup(file,verbosity=20)
 cc = PolyhedralComplex(vg,device='gpu',verbosity=20)
 
 cc.construct_partition()

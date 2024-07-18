@@ -1,11 +1,9 @@
-import logging, os, sys, copy, trimesh
+import logging, os, sys, trimesh
 import math
 
 import numpy as np
 from collections import defaultdict
 from sage.all import polytopes, QQ, Polyhedron
-from sklearn.cluster import DBSCAN, HDBSCAN, AgglomerativeClustering
-from sklearn.metrics.pairwise import cosine_similarity, cosine_distances, euclidean_distances
 from sklearn.neighbors import NearestNeighbors
 
 from .logger import make_logger
@@ -17,7 +15,7 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, input_file, prioritise=None, merge_duplicate_planes=True, epsilon=None, alpha=0.05,
+    def __init__(self, input_file, prioritise="area", merge_duplicate_planes=True, epsilon=None, alpha=0.05,
                  points_type="inliers", total_sample_count=100000, export=True,
                  recolor=False, verbosity=logging.WARN):
         """
