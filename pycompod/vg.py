@@ -24,8 +24,16 @@ class VertexGroup:
 
         Parameters
         ----------
-        filepath: str or Path
-            Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
+        input_file: str to .npz file
+        prioritise: Sort planes by this value.
+        merge_duplicate_planes: Merge vertex groups with same plane parameters
+        epsilon: Angle for clustering planes
+        alpha: Distance for clustering planes
+        points_type: Whether to use the provided inliers, or sample new points on the 2D projected convex hull of inliers.
+        total_sample_count: how many points to sample. Only applicable if points_type="sampling".
+        debug_export: Whether to export debug files.
+        recolor: Recolor planes and save back new coloring to .npz files.
+        verbosity: Verbosity as python logging_level.
         """
 
         # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
@@ -79,7 +87,6 @@ class VertexGroup:
         self.logger.info(
             "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
 
-
         ## recolor planes and support points and save new coloring to .npz
         if self.recolor:
             self._recolor_planes()
@@ -115,7 +122,7 @@ class VertexGroup:
 
     def _prioritise_planes(self, mode):
         """
-        Prioritise certain planes. Mainly from abspy.
+        Prioritise certain planes. Mainly taken from abspy.
 
         First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
         to avoid incomplete partitioning due to missing data about building facades.
@@ -207,8 +214,8 @@ class VertexGroup:
                 ord = np.argsort(polys)[::-1]
                 order.append(group_ids[ord])
 
-            # TODO: this doesn't actually work, because my algo resorts the planes. what I need to do is first insert the floor and walls. and then insert
-            # the roof
+            # TODO: this doesn't actually work, because my algo resorts the planes. what I need to do is first insert
+            #  the floor and walls. and then insert the roof
 
             return np.concatenate(order)
 
@@ -274,8 +281,7 @@ class VertexGroup:
 
 
     def _cluster_planes_with_abc_and_projection_dist(self):
-
-        """project points from plane a to plane b and vice versa. Problem is that for large models,
+        """Project points from plane a to plane b and vice versa. Problem is that for large models,
         such as chicago, very similar planes in angle will still not cluster."""
 
         def acos(x):
