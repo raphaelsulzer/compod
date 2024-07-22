@@ -16,7 +16,7 @@ class VertexGroup:
     """
 
     def __init__(self, input_file, prioritise="area", merge_duplicate_planes=True, epsilon=None, alpha=0.05,
-                 points_type="inliers", total_sample_count=100000, export=True,
+                 points_type="inliers", total_sample_count=100000, debug_export=False,
                  recolor=False, verbosity=logging.WARN):
         """
         Init VertexGroup.
@@ -41,16 +41,52 @@ class VertexGroup:
         self.total_sample_count = total_sample_count
         self.points_type = points_type
         self.recolor = recolor
-        self.export = export
+        self.debug_export = debug_export
 
         self.plane_exporter = PlaneExporter(verbosity=verbosity)
 
         ending = os.path.splitext(self.input_file)[1]
         if ending == ".npz":
-            self._process_npz()
+            self._read_npz()
         else:
             self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
-            sys.exit(1)
+            return 1
+
+        if self.epsilon is not None:
+            self._cluster_planes_with_abc_and_origin_dist()
+
+        self._process_npz()
+
+    def _read_npz(self):
+        """
+        Load vertex groups and planes from npz file.
+        :return:
+        """
+        data = np.load(self.input_file)
+
+        type = np.float64
+        # read the data and make the point groups
+        self.planes = data["group_parameters"].astype(type)
+        self.plane_colors = data["group_colors"]
+        self.points = data["points"].astype(type)
+        self.normals = data["normals"].astype(type)
+        # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
+        self.classes = data.get("classes", None)
+        if not len(self.classes):
+            self.classes = None
+        self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
+
+        self.logger.info(
+            "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
+
+
+        ## recolor planes and support points and save new coloring to .npz
+        if self.recolor:
+            self._recolor_planes()
+            # save with new colors
+            data = dict(data)
+            data["group_colors"] = self.plane_colors
+            np.savez(self.input_file,**data)
 
 
     def _recolor_planes(self):
@@ -355,29 +391,10 @@ class VertexGroup:
                     self.planes[i] = -pl
 
     def _process_npz(self):
-        """
-        Load vertex groups and planes from npz file.
-        :return: 
-        """
-        data = np.load(self.input_file)
+        """Create halfspaces, and polygons from planes, necessary for the PolyhedralComplex() class.
+        Optionally, resamples planar primitives, instead of using provided inliers.
+        Optionally, merge dublicate planes."""
 
-        type = np.float64
-        # read the data and make the point groups
-        self.planes = data["group_parameters"].astype(type)
-        self.plane_colors = data["group_colors"]
-        self.points = data["points"].astype(type)
-        self.normals = data["normals"].astype(type)
-        # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
-        self.classes = data.get("classes", None)
-        if not len(self.classes):
-            self.classes = None
-        self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
-        
-        self.logger.info(
-            "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
-
-        if self.epsilon is not None:
-            self._cluster_planes_with_abc_and_origin_dist()
 
         ### orient planes according to the mean normal orientation of it's input points
         ### cannot actually use this before merging, because I want to merge oppositely oriented planes!
@@ -450,15 +467,7 @@ class VertexGroup:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             raise NotImplementedError
 
-        ## recolor planes and support points
-        if self.recolor:
-            self._recolor_planes()
-            # save with new colors
-            data = dict(data)
-            data["group_colors"] = self.plane_colors
-            np.savez(self.input_file,**data)
-
-        if self.export:
+        if self.debug_export:
             ## export planes and samples
             pt_file = os.path.splitext(self.input_file)[0]+"_samples.ply"
             plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
@@ -498,7 +507,7 @@ class VertexGroup:
         # self._orient_planes()
 
         ## export planes and samples
-        if self.export:
+        if self.debug_export:
             pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
             plane_file =  os.path.splitext(self.input_file)[0]+'_merged.ply'
             self.plane_exporter.save_points_and_planes(plane_filename=plane_file,point_filename=pt_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
