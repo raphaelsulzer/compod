@@ -55,7 +55,7 @@ class VertexGroup:
         if self.epsilon is not None:
             self._cluster_planes_with_abc_and_origin_dist()
 
-        self._process_npz()
+        self._prepare_for_polyhedral_complex_construction()
 
     def _read_npz(self):
         """
@@ -88,6 +88,15 @@ class VertexGroup:
             data["group_colors"] = self.plane_colors
             np.savez(self.input_file,**data)
 
+    def _load_point_groups(self,point_ids,sizes):
+        current = 0
+        groups = []
+        for n in sizes:
+            pids = point_ids[current:(n+current)]
+            assert pids.dtype == np.int32
+            groups.append(pids)
+            current+=n
+        return groups
 
     def _recolor_planes(self):
 
@@ -106,7 +115,7 @@ class VertexGroup:
 
     def _prioritise_planes(self, mode):
         """
-        Prioritise certain planes to favour building reconstruction.
+        Prioritise certain planes. Mainly from abspy.
 
         First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
         to avoid incomplete partitioning due to missing data about building facades.
@@ -226,7 +235,8 @@ class VertexGroup:
 
         n_input = len(self.planes)
 
-        # TODO: there is a cleaner way to do this, by using: import partial; defaultdict(partial(numpy.ndarray, 0)) and then I don't need the if statement anymore, and can just
+        # TODO: there is a cleaner way to do this, by using: import partial; defaultdict(partial(numpy.ndarray, 0)) and
+        #  then I don't need the if statement anymore, and can just
         # use np.append(groups[inverse[i]],self.groups[i])
 
         groups = defaultdict(int)
@@ -261,17 +271,7 @@ class VertexGroup:
         
         # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
         return list(primitive_ids.values())
-        
-        
-    def _load_point_groups(self,point_ids,sizes):
-        current = 0
-        groups = []
-        for n in sizes:
-            pids = point_ids[current:(n+current)]
-            assert pids.dtype == np.int32
-            groups.append(pids)
-            current+=n
-        return groups
+
 
     def _cluster_planes_with_abc_and_projection_dist(self):
 
@@ -390,7 +390,7 @@ class VertexGroup:
                 if np.dot(pl[:3],plane_normal) < 0:
                     self.planes[i] = -pl
 
-    def _process_npz(self):
+    def _prepare_for_polyhedral_complex_construction(self):
         """Create halfspaces, and polygons from planes, necessary for the PolyhedralComplex() class.
         Optionally, resamples planar primitives, instead of using provided inliers.
         Optionally, merge dublicate planes."""
