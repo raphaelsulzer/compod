@@ -167,7 +167,7 @@ class VertexGroup:
         self.points = np.array(self.points,dtype=type)
         self.normals = np.array(self.normals,dtype=type)
         self.planes = np.array(self.planes,dtype=type)
-        self.plane_colors = np.array(self.plane_colors,dtype=np.int)
+        self.plane_colors = np.array(self.plane_colors,dtype=np.int32)
 
     def _recolor_planes(self):
 
