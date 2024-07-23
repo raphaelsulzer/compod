@@ -56,8 +56,10 @@ class VertexGroup:
         ending = os.path.splitext(self.input_file)[1]
         if ending == ".npz":
             self._read_npz()
+        elif ending == ".vg":
+            self._read_vg()
         else:
-            self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
+            self.logger.error("{} is not a valid file type for planes. Only .npz or .vg files are allowed.".format(ending))
             return 1
 
         if self.epsilon is not None:
@@ -74,10 +76,10 @@ class VertexGroup:
 
         type = np.float64
         # read the data and make the point groups
-        self.planes = data["group_parameters"].astype(type)
-        self.plane_colors = data["group_colors"]
         self.points = data["points"].astype(type)
         self.normals = data["normals"].astype(type)
+        self.planes = data["group_parameters"].astype(type)
+        self.plane_colors = data["group_colors"]
         # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
         self.classes = data.get("classes", None)
         if not len(self.classes):
@@ -104,6 +106,68 @@ class VertexGroup:
             groups.append(pids)
             current+=n
         return groups
+
+    def _read_vg(self):
+        self.points = []
+        self.normals = []
+        self.groups = []
+        self.planes = []
+        self.plane_colors = []
+        self.classes = None
+
+        with open(self.input_file, 'r') as file:
+            # Extract numbers from the current line
+            number_line = file.readline()
+            line_numbers = self.extract_numbers_from_line(number_line)
+            n_poins = line_numbers[0]
+            # read the n_points
+            for i in range(n_poins):
+                line = file.readline()
+                [x, y, z] = line.split()
+                self.points.append([float(x), float(y), float(z)])
+
+            number_line = file.readline()
+
+            for i in range(n_poins):
+                line = file.readline()
+
+            number_line = file.readline()
+
+            for i in range(n_poins):
+                line = file.readline()
+                [x, y, z] = line.split()
+                self.normals.append([float(x), float(y), float(z)])
+
+            number_line = file.readline()
+            line_numbers = self.extract_numbers_from_line(number_line)
+            n_groups = line_numbers[0]
+
+            for i in range(n_groups):
+                number_line = file.readline() # group_type
+                number_line = file.readline() # num_group_parameters: 4
+                number_line = file.readline() # group_parameters: a b c d
+                [t, a, b, c, d] = number_line.split()
+                h_list = [float(a), float(b), float(c), float(d)]
+                self.planes.append(h_list)
+                number_line = file.readline() # group_label: unknown
+                number_line = file.readline() # group_color: r g b
+                [t, r, g, b] = number_line.split()
+                color_list = [float(r), float(g), float(b)]
+                self.plane_colors.append(color_list)
+
+                number_line = file.readline() # roup_num_point
+                line_numbers = self.extract_numbers_from_line(number_line)
+                line = file.readline()
+                str_numbers = line.split()
+                int_list = [int(num) for num in str_numbers]
+                self.groups.append(np.array(int_list,dtype=np.int32))
+                number_line = file.readline()
+
+        type = np.float64
+        self.points = np.array(self.points,dtype=type)
+        self.normals = np.array(self.normals,dtype=type)
+        self.planes = np.array(self.planes,dtype=type)
+        self.plane_colors = np.array(self.plane_colors,dtype=np.int)
 
     def _recolor_planes(self):
 
@@ -395,6 +459,21 @@ class VertexGroup:
                 plane_normal = np.mean(point_normals,axis=0)
                 if np.dot(pl[:3],plane_normal) < 0:
                     self.planes[i] = -pl
+
+
+    def extract_numbers_from_line(self, line):
+        import re
+        # Define a regular expression pattern to find all numbers in the line
+        pattern = r'\d+\.?\d*'  # This will match integers and decimal numbers
+
+        # Find all matches of the pattern in the line
+        matches = re.findall(pattern, line)
+
+        # Convert matches to float or int
+        numbers = [float(match) if '.' in match else int(match) for match in matches]
+
+        return numbers
+
 
     def _prepare_for_polyhedral_complex_construction(self):
         """Create halfspaces, and polygons from planes, necessary for the PolyhedralComplex() class.
