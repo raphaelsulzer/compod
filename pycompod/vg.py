@@ -164,8 +164,8 @@ class VertexGroup:
                 ord = np.argsort(polys)[::-1]
                 order.append(group_ids[ord])
 
-            # TODO: this doesn't actually work, because my algo resorts the planes. what I need to do is first insert the floor and walls. and then insert
-            # the roof
+            # TODO: this doesn't actually work, because my algo resorts the planes. what I need to do is first insert
+            #  the floor and walls. and then insert the roof
 
             return np.concatenate(order)
 
