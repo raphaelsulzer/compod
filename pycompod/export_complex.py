@@ -253,7 +253,7 @@ class PolyhedralComplexExporter:
             self.logger.error("{} is not a valid file type for surface export.".format(file_type))
             return 1
 
-    def write_surface_to_off(self,filename,points,facets,pcolors=[]):
+    def write_surface_to_off(self,filename,points,facets,pcolors=[],fcolors=None):
 
         f = open(filename,'w')
 
@@ -277,7 +277,7 @@ class PolyhedralComplexExporter:
             f.write('\n')
         f.close()
 
-    def write_surface_to_obj(self,filename,points,facets,pcolors=[]):
+    def write_surface_to_obj(self,filename,points,facets,pcolors=[],fcolors=None):
 
         f = open(filename,'w')
 

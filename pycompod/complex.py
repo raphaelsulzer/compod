@@ -555,6 +555,11 @@ class PolyhedralComplex:
 
 
     def _get_simplified_facets(self, triangulate, simplify_edges, exact):
+        """From the polyhedral complex, get all convex interface polygons. Then,  merge these polygons into possible
+        non-convex polygons per planar region. After, find the corner vertices of these large polygons, i.e. vertices
+        which are an intersection of at least 3 input planes. Then, create polygons, only using these corner vertices,
+        and finally build a surface mesh with the polygons. If a polygon has a hole, it is triangulated with using
+        a 2D Constraint Delaunay Triangulation."""
 
         def _get_region_borders(all_polygons,this_region_polygons):
             """
@@ -616,6 +621,7 @@ class PolyhedralComplex:
         polygons = []
         polygon_to_region = []
         npolygons = 0
+        ## get all interface polygons
         for e0, e1 in self.graph.edges:
 
             c0 = self.graph.nodes[e0]
@@ -749,7 +755,7 @@ class PolyhedralComplex:
         return points, region_facets, facet_to_plane_id, region_polygons
 
     # @profile
-    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python", exact=False, translation=None):
+    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python", exact=False):
 
         """
         Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
@@ -776,7 +782,7 @@ class PolyhedralComplex:
 
         points, region_facets, facet_to_plane_id, region_polygons = \
             self._get_simplified_facets(triangulate = triangulate, simplify_edges = simplify_edges, exact = exact)
-
+        fcolors = self.vg.plane_colors[facet_to_plane_id]
 
         if(os.path.splitext(out_file)[1] == ".ply"):
             self.logger.warning(
@@ -787,9 +793,8 @@ class PolyhedralComplex:
                 "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need the faces to be consistently oriented.")
 
         if backend == "python":
-            self.complexExporter.write_surface(out_file, points=points, facets=region_facets)
+            self.complexExporter.write_surface(out_file, points=points, facets=region_facets, fcolors=fcolors)
         elif backend == "wavefront":
-
             obj_filename = out_file
             mtl_filename = out_file.replace("obj","mtl")
 
@@ -808,72 +813,16 @@ class PolyhedralComplex:
 
             with open(mtl_filename, 'w') as mtl_file:
                 # Write material information
-                for i, color in enumerate(self.vg.plane_colors[facet_to_plane_id], start=1):
+                for i, color in enumerate(fcolors, start=1):
                     color = color/256
                     mtl_file.write(f"newmtl material_{i}\n")
                     mtl_file.write(f"Kd {' '.join(map(str, color))}\n")
-        elif backend == "json":
-
-            import json, jsbeautifier
-            joptions = jsbeautifier.default_options()
-            joptions.indent_size = 2
-
-            types = {66:"ground",67:"wall"}
-
-            building_json = []
-            for id,polygon in enumerate(region_facets):
-
-                verts = points[polygon]+translation
-
-                data = {}
-                data["geometry"] = verts.tolist()
-                data["geometry"].append(data["geometry"][0])    # close polygon by putting first vert again
-                data["properties"] = {}
-                plane_id = facet_to_plane_id[id]
-                if plane_id < 0:
-                    max_class = 0
-                else:
-                    input_point_ids = self.vg.input_groups[plane_id]
-                    unique, count = np.unique(self.vg.classes[input_point_ids], return_counts=True)
-                    max_class = unique[np.argmax(count)]
-                data["properties"]["part_type"] = types.get(max_class,"roof")
-                data["properties"]["part_id"] = id+1
-                data["properties"]["building_id"] = os.path.splitext(os.path.basename(out_file))[0]
-                ## no pretty print
-                # building_json.append(data)
-                building_json.append(jsbeautifier.beautify(json.dumps(data), joptions))
-
-            ## no pretty print
-            # with open(out_file, "w") as f:
-            #     json.dump(building_json,f,indent=2)
-            with open(out_file,"w") as f:
-                f.write('[\n')
-                for bjson in building_json[:-1]:
-                    f.write(bjson)
-                    f.write(",")
-                    f.write("\n")
-                f.write(building_json[-1])
-                f.write('\n]')
-        elif backend == "vedo":
-            import vedo
-            mesh = vedo.Mesh([points, region_facets])
-            # # see here for face color: https://github.com/marcomusy/vedo/issues/575, but it doesn't actually export it
-            # mesh.celldata["face_colors"] = face_colors
-            # mesh.celldata.select("face_colors")
-            # # trying to fix orientation, but doesn't work
-            # vals=mesh.check_validity()
-            # faces = mesh.faces()
-            # for i,v in enumerate(vals):
-            #     if v == 16:
-            #         faces[i].reverse()
-            # mesh = vedo.Mesh([points,faces])
-            vedo.io.write(mesh,out_file)
         elif backend == "trimesh":
             if not triangulate:
                 self.logger.error("backend 'trimesh' only works with triangulate = True. Choose backend 'python' for exporting a polygon mesh.")
                 raise NotImplementedError
 
-            mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=face_colors)
+            mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=fcolors)
             mesh.fix_normals()
             mesh.export(out_file)
         else:

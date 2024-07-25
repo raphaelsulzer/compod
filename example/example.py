@@ -6,7 +6,7 @@ from pycompod import VertexGroup, PolyhedralComplex
 model = "anchor"
 file = "data/{}/convexes_refined/file.npz".format(model)
 
-vg = VertexGroup(file,verbosity=20)
+vg = VertexGroup(file,verbosity=20,debug_export=True)
 cc = PolyhedralComplex(vg,device='gpu',verbosity=20)
 
 cc.construct_partition()
@@ -21,6 +21,6 @@ cc.save_partition_to_pickle("data/{}/partition".format(model))
 
 cc.save_surface(out_file="data/{}/surface/complex_mesh.ply".format(model), triangulate=False)
 ## needs compose extension
-cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False)
+cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False, backend="wavefront")
 cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.ply".format(model), triangulate=True)
 cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))
