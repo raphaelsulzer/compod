@@ -1,12 +1,9 @@
 import logging
 import os
 import numpy as np
-from scipy.spatial import ConvexHull
 from copy import deepcopy
 from .plane import ProjectedConvexHull, PyPlane
 from .logger import make_logger
-
-
 
 class PlaneExporter:
 
@@ -73,6 +70,10 @@ class PlaneExporter:
 
         if colors is None:
             colors = np.random.randint(0,255,size=(group_parameters.shape[0],3))
+        else:
+            if colors.dtype != np.int32:
+                self.logger.warning("Converted color array from {} to np.int32".format(colors.dtype))
+                colors = colors.astype(np.int32)
 
         all_count=0
         hull_count=0
@@ -153,6 +154,10 @@ class PlaneExporter:
 
         if colors is None:
             colors = np.random.randint(100,255,size=(planes.shape[0],3))
+        else:
+            if colors.dtype != np.int32:
+                self.logger.warning("Converted color array from {} to np.int32".format(colors.dtype))
+                colors = colors.astype(np.int32)
 
         hull_count=0
         all_hull_points = []

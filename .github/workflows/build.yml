@@ -1,0 +1,55 @@
+name: Build (Linux / macOS / Windows) and Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-psdr:
+    name: Install minicondaconda, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "macos-latest", "windows-latest"]
+#        os: ["ubuntu-latest"]
+#        python-version: ["3.7", "2.7"]
+    steps:
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          activate-environment: psdr
+          auto-update-conda: true
+#          python-version: ${{ matrix.python-version }}
+      - uses: actions/checkout@v3
+      - name: install dependencies
+        shell: bash -el {0}
+        run: conda install -y -c conda-forge -c omnia xtensor xtensor-io spdlog cgal mpfr yaml-cpp omnia::eigen3
+      - name: install eigen
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash -el {0}
+        run: sudo apt -y install libmpfr-dev
+      - name: list conda env include windows
+        if: matrix.os == 'windows-latest'
+        shell: bash -el {0}
+        run: dir $CONDA/envs/psdr/Library/include/
+      - name: list conda env include other
+        if: matrix.os != 'windows-latest'
+        shell: bash -el {0}
+        run: ls $CONDA/envs/psdr/include/
+      - name: fix eigen
+        if: matrix.os != 'windows-latest'
+        shell: bash -el {0}
+        run: ln -s $CONDA/envs/psdr/include/eigen3/Eigen $CONDA/envs/psdr/include/Eigen
+      - name: fix eigen windows
+        if: matrix.os == 'windows-latest'
+        shell: bash -el {0}
+        run: ln -s $CONDA/envs/psdr/Library/include/eigen3/Eigen $CONDA/envs/psdr/Library/include/Eigen
+      - name: pip install
+        shell: bash -el {0}
+        run: pip install psdr/.
+      - name: run tests
+        shell: bash -el {0}
+        run: python -m unittest psdr/test.py
+

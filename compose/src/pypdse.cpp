@@ -19,10 +19,16 @@ namespace fs = boost::filesystem;
 
 template <typename Kernel>
 pyPDSE<Kernel>::pyPDSE(int verbosity, bool debug_export){
-    // init a PDS
+    // init a PDSE
     _verbosity = verbosity;
     _debug_export = debug_export;
 
+}
+
+template <typename Kernel>
+pyPDSE<Kernel>::~pyPDSE(){
+    // delete a PDSE
+    delete _smesh;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -178,14 +184,14 @@ int pyPDSE<Kernel>::load_polygon_soup(const nb::ndarray<double, nb::shape<-1, 3>
                                       const nb::ndarray<int, nb::shape<-1>>& polygon_lens
                       ){
 
-    _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
+    if(_smesh == nullptr)
+        _smesh = new pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
 
-
-    _smesh._points.clear();
-    _smesh._polygons.clear();
+    _smesh->_points.clear();
+    _smesh->_polygons.clear();
 
     for (size_t i = 0; i < points.shape(0); i++){
-        _smesh._points.push_back(Point(points(i,0),points(i,1),points(i,2)));
+        _smesh->_points.push_back(Point(points(i,0),points(i,1),points(i,2)));
     }
 
     int n = 0;
@@ -198,7 +204,7 @@ int pyPDSE<Kernel>::load_polygon_soup(const nb::ndarray<double, nb::shape<-1, 3>
             poly.push_back(polygons(j));
         }
         n+=this_len;
-        _smesh._polygons.push_back(poly);
+        _smesh->_polygons.push_back(poly);
     }
 
     return 0;
@@ -209,45 +215,46 @@ template <typename Kernel>
 int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string outfilename,
                                              const bool force_rebuild, const int precision){
 
-    _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
+    if(_smesh == nullptr)
+        _smesh = new pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
 
-    _smesh._mesh.clear();
+    _smesh->_mesh.clear();
 
     if(!force_rebuild)
-        CGAL::IO::read_polygon_mesh(filename, _smesh._mesh);
+        CGAL::IO::read_polygon_mesh(filename, _smesh->_mesh);
 
-    if(_smesh._mesh.number_of_faces() == 0){
+    if(_smesh->_mesh.number_of_faces() == 0){
         cout << "ERROR: " << filename << " has no faces" << endl;
         cout << "Will try to read a soup and make a mesh out of it" << endl;
     }
     else{
-        if(!CGAL::is_triangle_mesh(_smesh._mesh))
-            CGAL::Polygon_mesh_processing::triangulate_faces(_smesh._mesh);
+        if(!CGAL::is_triangle_mesh(_smesh->_mesh))
+            CGAL::Polygon_mesh_processing::triangulate_faces(_smesh->_mesh);
 
         cout << "Mesh loading worked. Will export the mesh as " << outfilename << endl;
-        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(precision));
+        CGAL::IO::write_polygon_mesh(outfilename,_smesh->_mesh,CGAL::parameters::stream_precision(precision));
         return 0;
     }
 
 
 
-    _smesh._mesh.clear();
-    _smesh._points.clear();
-    _smesh._polygons.clear();
+    _smesh->_mesh.clear();
+    _smesh->_points.clear();
+    _smesh->_polygons.clear();
 
-    CGAL::IO::read_polygon_soup(filename, _smesh._points, _smesh._polygons);
-    CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(_smesh._points,_smesh._polygons,_smesh._mesh);
+    CGAL::IO::read_polygon_soup(filename, _smesh->_points, _smesh->_polygons);
+    CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(_smesh->_points,_smesh->_polygons,_smesh->_mesh);
 
-    if(_smesh._mesh.number_of_faces() == 0){
+    if(_smesh->_mesh.number_of_faces() == 0){
         cout << "ERROR: " << filename << " has no faces. Cannot do anything." << endl;
         return 1;
     }
     else{
-        if(!CGAL::is_triangle_mesh(_smesh._mesh))
-            CGAL::Polygon_mesh_processing::triangulate_faces(_smesh._mesh);
+        if(!CGAL::is_triangle_mesh(_smesh->_mesh))
+            CGAL::Polygon_mesh_processing::triangulate_faces(_smesh->_mesh);
 
         cout << "Soup loading worked. Will export the mesh as " << outfilename << endl;
-        CGAL::IO::write_polygon_mesh(outfilename,_smesh._mesh,CGAL::parameters::stream_precision(precision));
+        CGAL::IO::write_polygon_mesh(outfilename,_smesh->_mesh,CGAL::parameters::stream_precision(precision));
         return 0;
     }
 }
@@ -259,7 +266,7 @@ vector<bool>
 pyPDSE<Kernel>::check_mesh_contains(const nb::ndarray<double, nb::shape<-1, 3>>& points){
 
 
-    Tree tree(faces(_smesh._mesh).first, faces(_smesh._mesh).second, _smesh);
+    Tree tree(faces(_smesh->_mesh).first, faces(_smesh->_mesh).second, _smesh);
     tree.accelerate_distance_queries();
     const Point_inside inside_tester(tree);
 
@@ -280,17 +287,19 @@ int pyPDSE<Kernel>::load_triangle_mesh(const nb::ndarray<double, nb::shape<-1, 3
                                        const nb::ndarray<int, nb::shape<-1,3>>& triangles
                                        ){
 
-    _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
-    _smesh._mesh.clear();
+    if(_smesh == nullptr)
+        _smesh = new pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
 
-    _smesh._mesh.reserve(points.shape(0),edges.shape(0),triangles.shape(0));
+    _smesh->_mesh.clear();
+
+    _smesh->_mesh.reserve(points.shape(0),edges.shape(0),triangles.shape(0));
 
     for (size_t i = 0; i < points.shape(0); i++){
-        _smesh._mesh.add_vertex(Point(points(i,0),points(i,1),points(i,2)));
+        _smesh->_mesh.add_vertex(Point(points(i,0),points(i,1),points(i,2)));
     }
 
     for (size_t i = 0; i < triangles.shape(0); i++){
-        _smesh._mesh.add_face(CGAL::SM_Vertex_index(triangles(i,0)),
+        _smesh->_mesh.add_face(CGAL::SM_Vertex_index(triangles(i,0)),
                               CGAL::SM_Vertex_index(triangles(i,1)),
                               CGAL::SM_Vertex_index(triangles(i,2)));
     }
@@ -305,13 +314,14 @@ int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3
                       const nb::ndarray<int, nb::shape<-1,3>>& triangles
                       ){
 
-    _smesh = pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
+    if(_smesh == nullptr)
+        _smesh = new pyPDSE<Kernel>::pySMesh(_verbosity,_debug_export);
 
-    _smesh._points.clear();
-    _smesh._polygons.clear();
+    _smesh->_points.clear();
+    _smesh->_polygons.clear();
 
     for (size_t i = 0; i < points.shape(0); i++){
-        _smesh._points.push_back(Point(points(i,0),points(i,1),points(i,2)));
+        _smesh->_points.push_back(Point(points(i,0),points(i,1),points(i,2)));
     }
 
     for (size_t i = 0; i < triangles.shape(0); i++){
@@ -319,7 +329,7 @@ int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3
         poly.push_back(triangles(i,0));
         poly.push_back(triangles(i,1));
         poly.push_back(triangles(i,2));
-        _smesh._polygons.push_back(poly);
+        _smesh->_polygons.push_back(poly);
     }
     return 0;
 }
@@ -327,13 +337,13 @@ int pyPDSE<Kernel>::load_triangle_soup(const nb::ndarray<double, nb::shape<-1, 3
 template <typename Kernel>
 int pyPDSE<Kernel>::soup_to_mesh(const bool triangulate, const bool stitch_borders){
 
-    return _smesh.soup_to_mesh(triangulate, stitch_borders);
+    return _smesh->soup_to_mesh(triangulate, stitch_borders);
 }
 
 template <typename Kernel>
 int pyPDSE<Kernel>::save_mesh(const string filename){
 
-    return _smesh.save_mesh(filename);
+    return _smesh->save_mesh(filename);
 }
 
 template <typename Kernel>
@@ -367,7 +377,7 @@ int pyPDSE<Kernel>::is_mesh_watertight(const string filename){
 
 NB_MODULE(libPYPDSE, m) {
     nb::class_<pyPDSE<EPICK>>(m, "pdse")
-            .def(nb::init<int,bool>(),"verbosity"_a = 0, "debug_export"_a = false)
+            .def(nb::init<int,bool>(), nb::rv_policy::reference, "verbosity"_a = 0, "debug_export"_a = false)
         .def("is_mesh_watertight", &pyPDSE<EPICK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
         // .def("compute_planar_regions", &pyPDSE<EPICK>::compute_planar_regions, "filename"_a, "Compute planar regions of a mesh.")
             .def("is_mesh_intersection_free", &pyPDSE<EPICK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
@@ -385,7 +395,7 @@ NB_MODULE(libPYPDSE, m) {
             ;
 
     nb::class_<pyPDSE<EPECK>>(m, "pdse_exact")
-            .def(nb::init<int,bool>(),"verbosity"_a = 0, "debug_export"_a = false)
+            .def(nb::init<int,bool>(), nb::rv_policy::reference, "verbosity"_a = 0, "debug_export"_a = false)
             .def("is_mesh_watertight", &pyPDSE<EPECK>::is_mesh_watertight, "filename"_a, "Check if a mesh is watertight.")
             .def("is_mesh_intersection_free", &pyPDSE<EPECK>::is_mesh_intersection_free, "filename"_a, "Check if a mesh is free of self-intersections.")
             .def("load_soup", &pyPDSE<EPECK>::load_polygon_soup, "points"_a, "polygons"_a, "polygon_lens"_a, "Load a polygon soup.")

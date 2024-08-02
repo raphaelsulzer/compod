@@ -40,7 +40,7 @@ class PolyhedralComplex:
     Class of cell complex from planar primitive arrangement.
     """
     def __init__(self, vertex_group, padding=0.02, insertion_threshold=0, device='cpu',
-                 debug_export=False, verbosity=logging.WARN, construct_graph=True,
+                 debug_export=None, verbosity=logging.WARN, construct_graph=True,
                  n_threads=14):
         """
         Init PolyhedralComplex.
@@ -553,30 +553,13 @@ class PolyhedralComplex:
 
         self.complexExporter.write_colored_soup_to_ply(out_file, points=all_points, facets=faces, pcolors=pcolors, fcolors=fcolors)
 
-    # @profile
-    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python", exact=False, translation=None):
 
-        """
-        Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
-        mesh is either triangulated (if it contains holes) or represented as one (region with one connected component)
-        or several (region with multiple connected components) polygons.
-
-        :param out_file: File to store the mesh.
-
-        :param triangulate: Flag that controls if all regions should be triangulated or not. Necessary for correct orientation.
-
-        :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
-        """
-
-
-        os.makedirs(os.path.dirname(out_file),exist_ok=True)
-
-        try:
-            from pycompose import pdse, pdse_exact
-        except:
-            self.logger.error(
-                "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
-            raise ModuleNotFoundError
+    def _get_simplified_facets(self, triangulate, simplify_edges, exact):
+        """From the polyhedral complex, get all convex interface polygons. Then,  merge these polygons into possible
+        non-convex polygons per planar region. After, find the corner vertices of these large polygons, i.e. vertices
+        which are an intersection of at least 3 input planes. Then, create polygons, only using these corner vertices,
+        and finally build a surface mesh with the polygons. If a polygon has a hole, it is triangulated with using
+        a 2D Constraint Delaunay Triangulation."""
 
         def _get_region_borders(all_polygons,this_region_polygons):
             """
@@ -631,8 +614,6 @@ class PolyhedralComplex:
             else:
                 return facet,cross,np.array([0,1,0])
 
-        self.logger.info('Save simplified surface mesh...')
-
         if not self.polygons_constructed:
             self._construct_polygons()
 
@@ -640,6 +621,7 @@ class PolyhedralComplex:
         polygons = []
         polygon_to_region = []
         npolygons = 0
+        ## get all interface polygons
         for e0, e1 in self.graph.edges:
 
             c0 = self.graph.nodes[e0]
@@ -689,11 +671,12 @@ class PolyhedralComplex:
                 vertex_is_corner[vertex].add(polygon_to_region[i])
 
         ## init a surface extractor
+        from pycompose import pdse, pdse_exact
         se = pdse_exact(verbosity=0) if exact else pdse(verbosity=0)
-        region_facets = []
-        face_colors = []
 
-        ## get all the polygons
+        ## get all the facets (and polygons for wireframe export)
+        region_facets = []
+        region_polygons = []
         facet_to_plane_id = []
         for region in region_to_polygons.items():
             this_region_facets = []
@@ -719,6 +702,8 @@ class PolyhedralComplex:
             if not len(this_region_facets):
                 continue
 
+            region_polygons += this_region_facets
+
             if triangulate: # triangulate all faces
                 plane = PyPlane(self.vg.input_planes[region[0]])
                 points2d = plane.to_2d(points)
@@ -737,25 +722,25 @@ class PolyhedralComplex:
             else: # keep the polygons that do not have a hole untriangulated
                 this_region_facets = [this_region_facets[0][:-1]]
 
-            ## change orientation of the region if necessary
-            # this_region_facets = _orient_facets(this_region_facets, region[0])
             for f in this_region_facets:
                 facet_to_plane_id.append(region[0])
             region_facets += this_region_facets
-            # face_colors.append(np.repeat(self.vg.plane_colors[region[0],np.newaxis],len(this_region_facets),axis=0))
 
-        # region_facets = np.array(region_facets)
-        # face_colors = np.concatenate(face_colors)
 
         if simplify_edges:
-            ## remove unreferenced vertices and reindex
+            ## remove unreferenced points and reindex facets and polygons
             points = points[vertex_is_corner_array>0]
-            # point_normals = point_normals[vertex_is_corner_array>0]
             vertex_is_corner_array[vertex_is_corner_array>0] = np.arange(vertex_is_corner_array.sum())
+            # facets
             t = []
             for facet in region_facets:
                 t.append(vertex_is_corner_array[np.array(facet)])
             region_facets = t
+            # polygons
+            t = []
+            for poly in region_polygons:
+                t.append(vertex_is_corner_array[np.array(poly)])
+            region_polygons = t
 
         ## reorient facets with plane normal, do it here because with simplified points it is probably more robust, and certainly faster
         if self.vg.points_type != "samples":
@@ -767,6 +752,38 @@ class PolyhedralComplex:
         else:
             self.logger.warning("Cannot orient simplified surface with vg.points_type = 'samples'")
 
+        return points, region_facets, facet_to_plane_id, region_polygons
+
+    # @profile
+    def save_simplified_surface(self, out_file, triangulate = False, simplify_edges = True, backend = "python", exact=False):
+
+        """
+        Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
+        mesh is either triangulated (if it contains holes) or represented as one (region with one connected component)
+        or several (region with multiple connected components) polygons.
+
+        :param out_file: File to store the mesh.
+
+        :param triangulate: Flag that controls if all regions should be triangulated or not. Necessary for correct orientation.
+
+        :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
+        """
+
+        self.logger.info('Save simplified surface mesh (with {})...'.format(backend))
+
+        os.makedirs(os.path.dirname(out_file),exist_ok=True)
+
+        try:
+            from pycompose import pdse, pdse_exact
+        except:
+            self.logger.error(
+                "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
+            return 1
+
+        points, region_facets, facet_to_plane_id, region_polygons = \
+            self._get_simplified_facets(triangulate = triangulate, simplify_edges = simplify_edges, exact = exact)
+        fcolors = self.vg.plane_colors[facet_to_plane_id]
+
         if(os.path.splitext(out_file)[1] == ".ply"):
             self.logger.warning(
                 ".ply files do not display the simplified mesh correctly in Meshlab! It is displayed correctly in Blender and "
@@ -776,9 +793,8 @@ class PolyhedralComplex:
                 "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need the faces to be consistently oriented.")
 
         if backend == "python":
-            self.complexExporter.write_surface(out_file, points=points, facets=region_facets)
+            self.complexExporter.write_surface(out_file, points=points, facets=region_facets, fcolors=fcolors)
         elif backend == "wavefront":
-
             obj_filename = out_file
             mtl_filename = out_file.replace("obj","mtl")
 
@@ -797,73 +813,16 @@ class PolyhedralComplex:
 
             with open(mtl_filename, 'w') as mtl_file:
                 # Write material information
-                for i, color in enumerate(self.vg.plane_colors[facet_to_plane_id], start=1):
+                for i, color in enumerate(fcolors, start=1):
                     color = color/256
                     mtl_file.write(f"newmtl material_{i}\n")
                     mtl_file.write(f"Kd {' '.join(map(str, color))}\n")
-        elif backend == "json":
-
-            import json, jsbeautifier
-            joptions = jsbeautifier.default_options()
-            joptions.indent_size = 2
-
-            types = {66:"ground",67:"wall"}
-
-            building_json = []
-            for id,polygon in enumerate(region_facets):
-
-                verts = points[polygon]+translation
-
-                data = {}
-                data["geometry"] = verts.tolist()
-                data["geometry"].append(data["geometry"][0])    # close polygon by putting first vert again
-                data["properties"] = {}
-                plane_id = facet_to_plane_id[id]
-                if plane_id < 0:
-                    max_class = 0
-                else:
-                    input_point_ids = self.vg.input_groups[plane_id]
-                    unique, count = np.unique(self.vg.classes[input_point_ids], return_counts=True)
-                    max_class = unique[np.argmax(count)]
-                data["properties"]["part_type"] = types.get(max_class,"roof")
-                data["properties"]["part_id"] = id+1
-                data["properties"]["building_id"] = os.path.splitext(os.path.basename(out_file))[0]
-                ## no pretty print
-                # building_json.append(data)
-                building_json.append(jsbeautifier.beautify(json.dumps(data), joptions))
-
-            ## no pretty print
-            # with open(out_file, "w") as f:
-            #     json.dump(building_json,f,indent=2)
-            with open(out_file,"w") as f:
-                f.write('[\n')
-                for bjson in building_json[:-1]:
-                    f.write(bjson)
-                    f.write(",")
-                    f.write("\n")
-                f.write(building_json[-1])
-                f.write('\n]')
-
-        elif backend == "vedo":
-            import vedo
-            mesh = vedo.Mesh([points, region_facets])
-            # # see here for face color: https://github.com/marcomusy/vedo/issues/575, but it doesn't actually export it
-            # mesh.celldata["face_colors"] = face_colors
-            # mesh.celldata.select("face_colors")
-            # # trying to fix orientation, but doesn't work
-            # vals=mesh.check_validity()
-            # faces = mesh.faces()
-            # for i,v in enumerate(vals):
-            #     if v == 16:
-            #         faces[i].reverse()
-            # mesh = vedo.Mesh([points,faces])
-            vedo.io.write(mesh,out_file)
         elif backend == "trimesh":
             if not triangulate:
                 self.logger.error("backend 'trimesh' only works with triangulate = True. Choose backend 'python' for exporting a polygon mesh.")
                 raise NotImplementedError
 
-            mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=face_colors)
+            mesh = trimesh.Trimesh(vertices=points, faces=region_facets, face_colors=fcolors)
             mesh.fix_normals()
             mesh.export(out_file)
         else:
@@ -871,6 +830,69 @@ class PolyhedralComplex:
                 "{} is not a valid surface extraction backend. Choose either 'trimesh' or 'python'.".format(
                     backend))
             raise NotImplementedError
+            return 1
+
+        return 0
+
+    def save_wireframe(self, out_file, simplify_edges=True, exact=False):
+
+        """
+        Extracts a watertight simplified surface mesh from the labelled polyhedral complex. Each planar region of the
+        mesh is either triangulated (if it contains holes) or represented as one (region with one connected component)
+        or several (region with multiple connected components) polygons.
+
+        :param out_file: File to store the mesh.
+
+        :param triangulate: Flag that controls if all regions should be triangulated or not. Necessary for correct orientation.
+
+        :param simplify_edges: Flag that controls if region boundaries should only contain corner vertices or all vertices of the decomposition.
+        """
+
+        self.logger.info('Save wireframe...')
+
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+
+        try:
+            from pycompose import pdse, pdse_exact
+        except:
+            self.logger.error(
+                "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
+            return 1
+
+        points, region_facets, facet_to_plane_id, region_polygons = \
+            self._get_simplified_facets(triangulate=False, simplify_edges=simplify_edges, exact=exact)
+
+        graph = nx.DiGraph()
+        for poly in region_polygons:
+            for i in range(len(poly)-1):
+                graph.add_node(poly[i],position=points[poly[i]])
+                graph.add_node(poly[i+1],position=points[poly[i+1]])
+                graph.add_edge(poly[i],poly[i+1])
+
+        graph = graph.to_undirected()
+
+        pt_ids = list(nx.get_node_attributes(graph,"position").keys())
+        node_reindex = dict(zip(pt_ids,range(len(pt_ids))))
+        graph = nx.relabel_nodes(graph,node_reindex,copy=True)
+
+        points = list(nx.get_node_attributes(graph,"position").values())
+        edges = list(graph.edges)
+
+        os.makedirs(os.path.dirname(out_file),exist_ok=True)
+
+        f = open(out_file,'w')
+
+        for i,p in enumerate(points):
+            f.write("v {:6f} {:6f} {:6f}".format(p[0], p[1], p[2]))
+            f.write("\n")
+
+        for v0,v1 in edges:
+            f.write("l {} {}\n".format(v0+1,v1+1))
+        f.close()
+
+        return 0
+
+
 
 
     def save_surface(self, out_file, backend="python", triangulate=False, stitch_borders=True):
@@ -895,7 +917,7 @@ class PolyhedralComplex:
         if not self.polygons_constructed:
             self._construct_polygons()
 
-        self.logger.info('Save surface mesh ({})...'.format(backend))
+        self.logger.info('Save surface mesh (with {})...'.format(backend))
 
 
         polygons_exact = []
@@ -949,7 +971,8 @@ class PolyhedralComplex:
             except:
                 self.logger.error("Could not import pdse. Either install COMPOSE from https://github.com/raphaelsulzer/compod#compose"
                                   " or use 'python' or 'trimesh' as backend.")
-                raise ModuleNotFoundError
+                return 1
+
             se = pdse(verbosity=0,debug_export=False)
             se.load_soup(np.array(points_exact,dtype=np.float64), np.array(face_lens,dtype=int))
             se.soup_to_mesh(triangulate=triangulate,stitch_borders=True)
@@ -1000,8 +1023,9 @@ class PolyhedralComplex:
             mesh.export(out_file)
         else:
             self.logger.error("{} is not a valid surface extraction backend. Valid backends are 'python', 'python_exact', 'trimesh' and 'cgal'.".format(backend))
-            raise NotImplementedError
+            return 1
 
+        return 0
 
     def save_in_cells_explode(self,out_file,shrink_percentage=0.01):
 

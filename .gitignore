@@ -6,7 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
-example/data
+example/data/city
+example/data/anchor/partition
+example/data/bunny/partition
+
+compose/CMakeLists.txt.user
+
 
 # Distribution / packaging
 .Python

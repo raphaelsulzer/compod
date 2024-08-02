@@ -1,11 +1,9 @@
-import logging, os, sys, copy, trimesh
+import logging, os, sys, trimesh
 import math
 
 import numpy as np
 from collections import defaultdict
 from sage.all import polytopes, QQ, Polyhedron
-from sklearn.cluster import DBSCAN, HDBSCAN, AgglomerativeClustering
-from sklearn.metrics.pairwise import cosine_similarity, cosine_distances, euclidean_distances
 from sklearn.neighbors import NearestNeighbors
 
 from .logger import make_logger
@@ -17,8 +15,8 @@ class VertexGroup:
     Class for manipulating planar primitives.
     """
 
-    def __init__(self, input_file, prioritise=None, merge_duplicate_planes=True, epsilon=None, alpha=0.05,
-                 points_type="inliers", total_sample_count=100000, export=True,
+    def __init__(self, input_file, prioritise="area", merge_duplicate_planes=True, epsilon=None, alpha=0.05,
+                 points_type="inliers", total_sample_count=100000, debug_export=False,
                  recolor=False, verbosity=logging.WARN):
         """
         Init VertexGroup.
@@ -26,8 +24,16 @@ class VertexGroup:
 
         Parameters
         ----------
-        filepath: str or Path
-            Filepath to vertex group file (.vg) or binary vertex group file (.bvg)
+        input_file: str to .npz file
+        prioritise: Sort planes by this value.
+        merge_duplicate_planes: Merge vertex groups with same plane parameters
+        epsilon: Angle for clustering planes
+        alpha: Distance for clustering planes
+        points_type: Whether to use the provided inliers, or sample new points on the 2D projected convex hull of inliers.
+        total_sample_count: how many points to sample. Only applicable if points_type="sampling".
+        debug_export: Whether to export debug files.
+        recolor: Recolor planes and save back new coloring to .npz files.
+        verbosity: Verbosity as python logging_level.
         """
 
         # set random seed to have deterministic results for point sampling and filling of convex hull point arrays.
@@ -43,17 +49,125 @@ class VertexGroup:
         self.total_sample_count = total_sample_count
         self.points_type = points_type
         self.recolor = recolor
-        self.export = export
+        self.debug_export = debug_export
 
         self.plane_exporter = PlaneExporter(verbosity=verbosity)
 
         ending = os.path.splitext(self.input_file)[1]
         if ending == ".npz":
-            self._process_npz()
+            self._read_npz()
+        elif ending == ".vg":
+            self._read_vg()
         else:
-            self.logger.error("{} is not a valid file type for planes. Only .npz files are allowed.".format(ending))
-            sys.exit(1)
+            self.logger.error("{} is not a valid file type for planes. Only .npz or .vg files are allowed.".format(ending))
+            return 1
 
+        if self.epsilon is not None:
+            self._cluster_planes_with_abc_and_origin_dist()
+
+        self._prepare_for_polyhedral_complex_construction()
+
+    def _read_npz(self):
+        """
+        Load vertex groups and planes from npz file.
+        :return:
+        """
+        data = np.load(self.input_file)
+
+        type = np.float64
+        # read the data and make the point groups
+        self.points = data["points"].astype(type)
+        self.normals = data["normals"].astype(type)
+        self.planes = data["group_parameters"].astype(type)
+        self.plane_colors = data["group_colors"]
+        # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
+        self.classes = data.get("classes", None)
+        if not len(self.classes):
+            self.classes = None
+        self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
+
+        self.logger.info(
+            "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
+
+        ## recolor planes and support points and save new coloring to .npz
+        if self.recolor:
+            self._recolor_planes()
+            # save with new colors
+            data = dict(data)
+            data["group_colors"] = self.plane_colors
+            np.savez(self.input_file,**data)
+
+    def _load_point_groups(self,point_ids,sizes):
+        current = 0
+        groups = []
+        for n in sizes:
+            pids = point_ids[current:(n+current)]
+            assert pids.dtype == np.int32
+            groups.append(pids)
+            current+=n
+        return groups
+
+    def _read_vg(self):
+        self.points = []
+        self.normals = []
+        self.groups = []
+        self.planes = []
+        self.plane_colors = []
+        self.classes = None
+
+        with open(self.input_file, 'r') as file:
+            # Extract numbers from the current line
+            number_line = file.readline()
+            line_numbers = self.extract_numbers_from_line(number_line)
+            n_poins = line_numbers[0]
+            # read the n_points
+            for i in range(n_poins):
+                line = file.readline()
+                [x, y, z] = line.split()
+                self.points.append([float(x), float(y), float(z)])
+
+            number_line = file.readline()
+
+            for i in range(n_poins):
+                line = file.readline()
+
+            number_line = file.readline()
+
+            for i in range(n_poins):
+                line = file.readline()
+                [x, y, z] = line.split()
+                self.normals.append([float(x), float(y), float(z)])
+
+            number_line = file.readline()
+            line_numbers = self.extract_numbers_from_line(number_line)
+            n_groups = line_numbers[0]
+
+            for i in range(n_groups):
+                number_line = file.readline() # group_type
+                number_line = file.readline() # num_group_parameters: 4
+                number_line = file.readline() # group_parameters: a b c d
+                [t, a, b, c, d] = number_line.split()
+                h_list = [float(a), float(b), float(c), float(d)]
+                self.planes.append(h_list)
+                number_line = file.readline() # group_label: unknown
+                number_line = file.readline() # group_color: r g b
+                [t, r, g, b] = number_line.split()
+                color_list = [float(r), float(g), float(b)]
+                self.plane_colors.append(color_list)
+
+                number_line = file.readline() # roup_num_point
+                line_numbers = self.extract_numbers_from_line(number_line)
+                line = file.readline()
+                str_numbers = line.split()
+                int_list = [int(num) for num in str_numbers]
+                self.groups.append(np.array(int_list,dtype=np.int32))
+                number_line = file.readline()
+
+        type = np.float64
+        self.points = np.array(self.points,dtype=type)
+        self.normals = np.array(self.normals,dtype=type)
+        self.planes = np.array(self.planes,dtype=type)
+        self.plane_colors = np.array(self.plane_colors,dtype=np.int32)
 
     def _recolor_planes(self):
 
@@ -72,7 +186,7 @@ class VertexGroup:
 
     def _prioritise_planes(self, mode):
         """
-        Prioritise certain planes to favour building reconstruction.
+        Prioritise certain planes. Mainly taken from abspy.
 
         First, vertical planar primitives are accorded higher priority than horizontal or oblique ones
         to avoid incomplete partitioning due to missing data about building facades.
@@ -192,7 +306,8 @@ class VertexGroup:
 
         n_input = len(self.planes)
 
-        # TODO: there is a cleaner way to do this, by using: import partial; defaultdict(partial(numpy.ndarray, 0)) and then I don't need the if statement anymore, and can just
+        # TODO: there is a cleaner way to do this, by using: import partial; defaultdict(partial(numpy.ndarray, 0)) and
+        #  then I don't need the if statement anymore, and can just
         # use np.append(groups[inverse[i]],self.groups[i])
 
         groups = defaultdict(int)
@@ -227,21 +342,10 @@ class VertexGroup:
         
         # put in the id of the merged primitive, ie also the plane, and get out the 1 to n input primitives that were merged for it
         return list(primitive_ids.values())
-        
-        
-    def _load_point_groups(self,point_ids,sizes):
-        current = 0
-        groups = []
-        for n in sizes:
-            pids = point_ids[current:(n+current)]
-            assert pids.dtype == np.int32
-            groups.append(pids)
-            current+=n
-        return groups
+
 
     def _cluster_planes_with_abc_and_projection_dist(self):
-
-        """project points from plane a to plane b and vice versa. Problem is that for large models,
+        """Project points from plane a to plane b and vice versa. Problem is that for large models,
         such as chicago, very similar planes in angle will still not cluster."""
 
         def acos(x):
@@ -356,30 +460,26 @@ class VertexGroup:
                 if np.dot(pl[:3],plane_normal) < 0:
                     self.planes[i] = -pl
 
-    def _process_npz(self):
-        """
-        Load vertex groups and planes from npz file.
-        :return: 
-        """
-        data = np.load(self.input_file)
 
-        type = np.float64
-        # read the data and make the point groups
-        self.planes = data["group_parameters"].astype(type)
-        self.plane_colors = data["group_colors"]
-        self.points = data["points"].astype(type)
-        self.normals = data["normals"].astype(type)
-        # self.classes = data.get("classes", np.ones(len(self.points),dtype=np.int32))
-        self.classes = data.get("classes", None)
-        if not len(self.classes):
-            self.classes = None
-        self.groups = self._load_point_groups(data["group_points"].flatten(), data["group_num_points"].flatten())
-        
-        self.logger.info(
-            "Loaded {} inlier points of {} planes".format(np.concatenate(self.groups).shape[0], len(self.planes)))
+    def extract_numbers_from_line(self, line):
+        import re
+        # Define a regular expression pattern to find all numbers in the line
+        pattern = r'\d+\.?\d*'  # This will match integers and decimal numbers
 
-        if self.epsilon is not None:
-            self._cluster_planes_with_abc_and_origin_dist()
+        # Find all matches of the pattern in the line
+        matches = re.findall(pattern, line)
+
+        # Convert matches to float or int
+        numbers = [float(match) if '.' in match else int(match) for match in matches]
+
+        return numbers
+
+
+    def _prepare_for_polyhedral_complex_construction(self):
+        """Create halfspaces, and polygons from planes, necessary for the PolyhedralComplex() class.
+        Optionally, resamples planar primitives, instead of using provided inliers.
+        Optionally, merge dublicate planes."""
+
 
         ### orient planes according to the mean normal orientation of it's input points
         ### cannot actually use this before merging, because I want to merge oppositely oriented planes!
@@ -452,15 +552,7 @@ class VertexGroup:
             print("{} is not a valid point_type. Only 'inliers' or 'samples' are allowed.".format(self.points_type))
             raise NotImplementedError
 
-        ## recolor planes and support points
-        if self.recolor:
-            self._recolor_planes()
-            # save with new colors
-            data = dict(data)
-            data["group_colors"] = self.plane_colors
-            np.savez(self.input_file,**data)
-
-        if self.export:
+        if self.debug_export:
             ## export planes and samples
             pt_file = os.path.splitext(self.input_file)[0]+"_samples.ply"
             plane_file =  os.path.splitext(self.input_file)[0]+'.ply'
@@ -500,7 +592,7 @@ class VertexGroup:
         # self._orient_planes()
 
         ## export planes and samples
-        if self.export:
+        if self.debug_export:
             pt_file = os.path.splitext(self.input_file)[0]+"_samples_merged.ply"
             plane_file =  os.path.splitext(self.input_file)[0]+'_merged.ply'
             self.plane_exporter.save_points_and_planes(plane_filename=plane_file,point_filename=pt_file,points=self.points, normals=self.normals, groups=self.groups, planes=self.planes, colors=self.plane_colors)
