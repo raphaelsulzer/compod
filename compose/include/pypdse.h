@@ -31,7 +31,7 @@ public:
 
     typedef SMesh<Kernel> pySMesh;
 
-    pySMesh _smesh;
+    pySMesh* _smesh = nullptr;
 
 
     typedef typename Kernel::Point_3 Point;
@@ -39,6 +39,7 @@ public:
     typedef typename CGAL::Surface_mesh<Point> Mesh;
 
     pyPDSE(int verbosity = 1, bool debug_export = false);
+    ~pyPDSE();
 
     int _verbosity;
     bool _debug_export;
