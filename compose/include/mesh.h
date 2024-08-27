@@ -12,8 +12,8 @@ using namespace std;
 #include <boost/filesystem.hpp>
 namespace fs = boost::filesystem;
 
-#include "spdlog/spdlog.h"
-#include "spdlog/sinks/stdout_color_sinks.h"
+//#include "spdlog/spdlog.h"
+//#include "spdlog/sinks/stdout_color_sinks.h"
 
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
@@ -37,7 +37,6 @@ namespace fs = boost::filesystem;
 
 namespace PMP = CGAL::Polygon_mesh_processing;
 
-
 //typedef boost::graph_traits<Mesh>::Mesh::Face_index Mesh::Face_index;
 //typedef boost::graph_traits<Mesh>::vertex_descriptor vertex_descriptor;
 //typedef boost::graph_traits<Mesh>::edge_descriptor edge_descriptor;
@@ -52,14 +51,15 @@ public:
     typedef typename CGAL::Surface_mesh<Point> Mesh;
 
     SMesh(int verbosity = 1, bool debug_export = false);
-    ~SMesh(){spdlog::drop("SMesh");}
+//    ~SMesh(){spdlog::drop("SMesh");}
 
     int save_mesh(const string filename);
     int save_mesh(const string filename, Mesh& mesh);
     int soup_to_mesh(const bool triangulate=false, const bool stitch_borders=true);
 
     bool _debug_export;
-    shared_ptr<spdlog::logger> _logger;
+
+//    shared_ptr<spdlog::logger> _logger;
 
     Mesh _mesh;
     vector<Point> _points;
@@ -78,24 +78,22 @@ SMesh<Kernel>::SMesh(int verbosity, bool debug_export){
 
     _debug_export = debug_export;
 
-
-    if(spdlog::get("SMesh")){
-        _logger = spdlog::get("SMesh");
-    }
-    else{
-        _logger = spdlog::stdout_color_mt("SMesh");
-    }
-
-    if(verbosity == 0)
-        _logger->set_level(spdlog::level::warn);
-    else if(verbosity == 1)
-        _logger->set_level(spdlog::level::info);
-    else if(verbosity == 2)
-        _logger->set_level(spdlog::level::debug);
-    else
-        _logger->set_level(spdlog::level::off);
-
-    spdlog::set_pattern("[%H:%M:%S] [%n] [%l] %v");
+//    if(spdlog::get("SMesh")){
+//        _logger = spdlog::get("SMesh");
+//    }
+//    else{
+//        _logger = spdlog::stdout_color_mt("SMesh");
+//    }
+//    if(verbosity == 0)
+//        _logger->set_level(spdlog::level::warn);
+//    else if(verbosity == 1)
+//        _logger->set_level(spdlog::level::info);
+//    else if(verbosity == 2)
+//        _logger->set_level(spdlog::level::debug);
+//    else
+//        _logger->set_level(spdlog::level::off);
+//
+//    spdlog::set_pattern("[%H:%M:%S] [%n] [%l] %v");
 
 }
 
@@ -108,14 +106,14 @@ int SMesh<Kernel>::save_mesh(const string filename, Mesh& outmesh){
         fs::create_directories(path.parent_path());
 
     if(outmesh.number_of_faces()>0){
-        _logger->debug("Save surface mesh to {}",filename);
+//        _logger->debug("Save surface mesh to {}",filename);
     }
     else if(_mesh.number_of_faces()>0){
         outmesh = _mesh;
-        _logger->debug("Save surface mesh to {}",filename);
+//        _logger->debug("Save surface mesh to {}",filename);
     }
     else{
-        _logger->error("No mesh available to save. First run soup_to_mesh().");
+//        _logger->error("No mesh available to save. First run soup_to_mesh().");
         return 1;
     }
     CGAL::IO::write_polygon_mesh(filename,outmesh);
@@ -148,7 +146,7 @@ int SMesh<Kernel>::soup_to_mesh(const bool triangulate, const bool stitch_border
 
 
     if(stitch_borders){
-        _logger->debug("Stitch borders...");
+//        _logger->debug("Stitch borders...");
         PMP::stitch_borders(_mesh);
     }
 
@@ -160,7 +158,7 @@ int SMesh<Kernel>::soup_to_mesh(const bool triangulate, const bool stitch_border
 
 
     if(triangulate){
-        _logger->debug("Triangulate...");
+//        _logger->debug("Triangulate...");
 
         // this function calls triangulate_hole_polyline(), which is why sometimes
         // mesh with holes is closed after triangulation
@@ -170,7 +168,7 @@ int SMesh<Kernel>::soup_to_mesh(const bool triangulate, const bool stitch_border
                 PMP::orient_to_bound_a_volume(_mesh);
         }
         else{
-            _logger->warn("Mesh is not closed!");
+//            _logger->warn("Mesh is not closed!");
         }
         if (!PMP::is_outward_oriented(_mesh)) {
             PMP::reverse_face_orientations(_mesh);

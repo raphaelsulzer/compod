@@ -22,7 +22,6 @@ pyPDSE<Kernel>::pyPDSE(int verbosity, bool debug_export){
     // init a PDSE
     _verbosity = verbosity;
     _debug_export = debug_export;
-
 }
 
 template <typename Kernel>
@@ -235,8 +234,6 @@ int pyPDSE<Kernel>::triangulate_polygon_mesh(const string filename, const string
         CGAL::IO::write_polygon_mesh(outfilename,_smesh->_mesh,CGAL::parameters::stream_precision(precision));
         return 0;
     }
-
-
 
     _smesh->_mesh.clear();
     _smesh->_points.clear();

@@ -50,7 +50,7 @@ To install COMPOSE you need to follow the steps below:
 
 ```
 cd compose
-conda install -y conda-forge::spdlog conda-forge::cgal anaconda::mpfr   # on macOS use conda-forge::mpfr
+conda install -y -c conda-forge spdlog cgal boost mpfr
 pip install . 
 ```
 

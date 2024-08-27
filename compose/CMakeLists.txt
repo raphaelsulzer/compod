@@ -9,21 +9,18 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-# set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
 ######################################################
 ###################### EXTERNAL ######################
 ######################################################
-#include(${CGAL_USE_FILE})
-## issues with eigen? Do this: https://stackoverflow.com/a/25537967
 
-# if(NOT SKBUILD)
+## TODO: try to pass the conda prefix as a CMAKE variable for non SKBUILD
+if(NOT SKBUILD)
     # manually set the conda env when generating with cmake
-    set(CONDA_ENV "compocity2")
+#    set(CONDA_ENV "compod")
     set(Python_ROOT_DIR "/opt/miniconda3/envs/${CONDA_ENV}/bin")
     set(Python_FIND_STRATEGY "LOCATION")
     set(CONDA_PREFIX "/opt/miniconda3/envs/${CONDA_ENV}")
-# endif()
+endif()
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 include_directories(${Python_INCLUDE_DIRS} ${Python_NumPy_INCLUDE_DIRS})
 
@@ -39,14 +36,13 @@ find_package(nanobind CONFIG REQUIRED)
 find_package(CGAL REQUIRED HINTS $CONDA_PREFIX/include/CGAL)
 include(${CGAL_USE_FILE})
 find_package(Boost REQUIRED COMPONENTS system filesystem thread serialization program_options)
+## issues with eigen? Do this: https://stackoverflow.com/a/25537967
 find_package(Eigen3 REQUIRED PATHS $CONDA_PREFIX/include/eigen3)
-# find_package(yaml-cpp REQUIRED)
 ### for spdlog, found no better solution than to change its code with this: https://github.com/gabime/spdlog/issues/2767#issuecomment-1604460152
-find_package(spdlog REQUIRED)
-# find_package(xtl REQUIRED) # for xtensor
-# find_package(ZLIB REQUIRED) # for xtensor
-# find_package(xtensor REQUIRED)
-# find_package(xtensor-io REQUIRED)
+### finally removed spdlog because it constantly breaks the package because of version mismatch with FMT or whatever
+### maybe a solution could be to simply include the header only version files directly in COMPOSE
+# find_package(spdlog REQUIRED)
+
 
 ######################################################
 ###################### INTERNAL ######################
@@ -63,11 +59,7 @@ target_include_directories(libPYPDSE PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(libPYPDSE PUBLIC "${CONDA_PREFIX}/include")
 target_link_libraries(libPYPDSE PUBLIC ${Boost_LIBRARIES})
 target_link_libraries(libPYPDSE PUBLIC CGAL::CGAL)
-target_link_libraries(libPYPDSE PUBLIC spdlog::spdlog)
-### including this breaks the whole package, because it adds /usr/local/includes to the compiler includes, which in turn
-### leads to CGAL being included from /usr/local/include/CGAL instead of the miniconda CGAL
-# target_link_libraries(libPYPDSE PUBLIC ZLIB::ZLIB)
-# target_link_libraries(libPYPDSE PUBLIC xtensor xtensor-io)
+# target_link_libraries(libPYPDSE PUBLIC spdlog::spdlog)
 install(TARGETS libPYPDSE LIBRARY DESTINATION pycompose)
 
 nanobind_add_module(libPYPDL "${CMAKE_CURRENT_SOURCE_DIR}/src/pypdl.cpp")
@@ -75,5 +67,5 @@ target_include_directories(libPYPDL PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(libPYPDL PUBLIC "${CONDA_PREFIX}/include")
 target_link_libraries(libPYPDSE PUBLIC ${Boost_LIBRARIES})
 target_link_libraries(libPYPDL PUBLIC CGAL::CGAL)
-target_link_libraries(libPYPDL PUBLIC spdlog::spdlog)
+# target_link_libraries(libPYPDL PUBLIC spdlog::spdlog)
 install(TARGETS libPYPDL LIBRARY DESTINATION pycompose)
