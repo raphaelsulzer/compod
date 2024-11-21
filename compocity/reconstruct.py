@@ -8,6 +8,33 @@ from pycompod import VertexGroup, PolyhedralComplex, make_logger
 class BuildingReconstructor(PolyhedralComplex):
 
 
+    def _compute_split(self, cell_id, insertion_order):
+
+
+        current_ids = self.tree[cell_id].data["plane_ids"]
+        current_cell = self.cells.get(cell_id)
+
+
+        best_plane_id = self._get_best_plane(current_ids, insertion_order)
+        ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
+        left_planes, right_planes = self._split_support_points(best_plane_id, current_ids)
+
+        left_occ_points, right_occ_points = self._split_occupancy_points(best_plane_id, current_ids)
+
+        ## insert the best plane into the complex
+        self._insert_new_plane(cell_id=cell_id, split_id=current_ids[best_plane_id],
+                               left_planes=left_planes, right_planes=right_planes)
+
+
+        ## progress bar update
+        n_points_processed = len(self.vg.split_groups[current_ids[best_plane_id]])
+
+        return n_points_processed
+
+
+    def _split_occupancy_points(self, best_plane_id, current_ids):
+
+        pass
 
 
 

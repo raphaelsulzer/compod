@@ -1881,21 +1881,6 @@ class PolyhedralComplex:
         :return: IDs of primitives falling left and right of the best plane.
         '''
 
-        # convex hull - line intersection (from here: https://stackoverflow.com/a/30654855)
-        def intersect_plane_and_line(plane, point1, point2):
-            a, b, c, d = plane
-            p1 = np.array(point1)
-            p2 = np.array(point2)
-
-            line_vector = p2 - p1
-
-            if np.dot([a, b, c], line_vector) == 0:
-                return None
-
-            t = -(np.dot([a, b, c], p1) + d) / np.dot([a, b, c], line_vector)
-            intersection_point = p1 + t * line_vector
-            return intersection_point
-
         assert self.insertion_threshold >= 0,"Threshold must be >= 0"
 
         best_plane = self.vg.split_planes[current_ids[best_plane_id]]
@@ -1921,19 +1906,6 @@ class PolyhedralComplex:
             elif(this_group.shape[0] - right_point_ids.shape[0]) <= self.insertion_threshold:
                 right_plane_ids.append(id)
             else:
-                
-                # if np.linalg.norm((left_farthest_point-right_farthest_point)) > self.vg.epsilon:
-                #     hullline_plane_intersection = intersect_plane_and_line(best_plane,left_farthest_point,right_farthest_point)
-                #     if hullline_plane_intersection is not None:
-                #         self.n_auxiliary_points+=1
-                #         left_point_ids = np.hstack((left_point_ids,self.vg.points.shape[0]))
-                #         right_point_ids = np.hstack((right_point_ids,self.vg.points.shape[0]))
-                # 
-                #         self.vg.points = np.vstack((self.vg.points,hullline_plane_intersection))
-                #         self.vg.normals = np.vstack((self.vg.normals,[0,0,0]))
-                #         self.vg.classes = np.hstack((self.vg.classes,1))
-                # else:
-                #     print("skip because of epsilon")
 
                 if (left_point_ids.shape[0] > self.insertion_threshold):
                     left_plane_ids.append(self.vg.split_planes.shape[0])
@@ -2007,6 +1979,7 @@ class PolyhedralComplex:
 
 
         return left_plane_ids,right_plane_ids
+
 
     def delete_small_cells(self,tol=0.0001):
 
@@ -3084,7 +3057,7 @@ class PolyhedralComplex:
             best_plane = self.vg.split_planes[current_ids[best_plane_id]]
             left_planes = [];
             right_planes = []
-        else:
+        else: # this is the standard case
             best_plane_id = self._get_best_plane(current_ids, insertion_order)
             best_plane = self.vg.split_planes[current_ids[best_plane_id]]
             ### split the point sets with the best_plane, and append the split sets to the self.vg arrays
