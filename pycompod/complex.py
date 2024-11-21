@@ -103,7 +103,7 @@ class PolyhedralComplex:
             # self.bounding_poly = self._init_oriented_bounding_box(padding=self.padding)
 
         self.insertion_threshold = insertion_threshold
-        self.tree_mode = Tree.DEPTH # this is what it always was
+        self.tree_expansion_mode = Tree.DEPTH # this is what it always was
         # self.tree_mode = Tree.WIDTH
 
         self.planeExporter = PlaneExporter(verbosity=verbosity)
@@ -960,7 +960,7 @@ class PolyhedralComplex:
                 n_points+=len(intersection_points)
 
         if not face_lens:
-            self.logger.error("0 interface facets found. There must be something wrong")
+            self.logger.error("0 interface facets found. Something is probably wrong.")
             return 1
 
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
@@ -1628,8 +1628,6 @@ class PolyhedralComplex:
             type_colors = []
             mean_cell_weight = 2 * len(self.vg.points) * self.point_class_weights.max() / len(self.cells)
             for node in self.graph.nodes:
-
-
 
                 if "bounding_box" in self.graph.nodes[node].keys():
                     id = self.graph.nodes[node]["bounding_box"]
@@ -3021,7 +3019,7 @@ class PolyhedralComplex:
 
         self.subdivision_planes = planes
 
-        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_expansion_mode)
         for child in children:
             self._compute_split(cell_id=child,insertion_order="subdivision_planes")
 
@@ -3115,13 +3113,14 @@ class PolyhedralComplex:
 
     # @profile    
     def construct_partition(self, insertion_order="product-earlystop"):
-
-        # TODO: refit plane inside every cell based on inlier subsample!
-
         """
         1. Construct the partition
         :param insertion_order: In which order to process the planes.
         """
+
+        # TODO: refit plane inside every cell based on inlier subsample!
+
+
         self.logger.info('Construct partition with mode {} on {}'.format(insertion_order, self.device))
 
         self.n_auxiliary_points = 0
@@ -3130,7 +3129,7 @@ class PolyhedralComplex:
             self._init_partition()
 
         pbar = tqdm(total=self.n_points,file=sys.stdout, disable=np.invert(self.progress_bar), position=0, leave=True)
-        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_mode)
+        children = self.tree.expand_tree(0, filter=lambda x: x.data["plane_ids"].shape[0], mode=self.tree_expansion_mode)
         for child in children:
             pbar.update(self._compute_split(cell_id=child, insertion_order=insertion_order))
         pbar.close()
