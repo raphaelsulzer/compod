@@ -3,7 +3,7 @@ from pycompod import VertexGroup, PolyhedralComplex
 # model = "sphere"
 # file = "data/{}/convexes_refined/sphere-100K_planar_primitives_detection.vg".format(model)
 
-model = "anchor"
+model = "bunny"
 file = "data/{}/convexes_refined/file.npz".format(model)
 
 vg = VertexGroup(file,verbosity=20,debug_export=True)

@@ -19,7 +19,7 @@ endif()
 
 # if(NOT SKBUILD)
     # manually set the conda env when generating with cmake
-    set(CONDA_ENV "compocity2")
+    set(CONDA_ENV "compocity")
     set(Python_ROOT_DIR "/opt/miniconda3/envs/${CONDA_ENV}/bin")
     set(Python_FIND_STRATEGY "LOCATION")
     set(CONDA_PREFIX "/opt/miniconda3/envs/${CONDA_ENV}")
