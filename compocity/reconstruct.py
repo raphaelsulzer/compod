@@ -40,7 +40,9 @@ class BuildingReconstructor(PolyhedralComplex):
 
 
 if __name__ == "__main__":
-    # inherit from COMPOD, and during splitting assign the occupancy points to the corresponding child nodes
+
+    # TODO: implement a new class BuildingReconstructor that inherits from PolyhedralComplex
+    # during splitting assign the occupancy points to the corresponding child nodes
 
     verbosity = 20
 

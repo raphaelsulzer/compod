@@ -8,7 +8,7 @@ This repository contains the official implementation of the [ECCV 2024 paper "Co
 Given a set of input planes and corresponding inlier points the resulting plane arrangement can be used for polygon surface mesh reconstruction and convex decomposition of volumes. 
 
 <p float="center">
-  <img style="width:800px;" src="./media/teaser.jpg">
+  <img style="width:800px;" src="./media/poster_180924.png">
 </p>
 
 # :clipboard: Features
@@ -83,13 +83,17 @@ cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.obj".format(m
 cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))         
 ```
 
-# :camera_flash: Examples
+[//]: # (# :camera_flash: Examples)
 
-Please see the `example/` folder.
+[//]: # ()
+[//]: # (Please see the `example/` folder.)
 
-<p float="center">
-  <img style="width:800px;" src="./media/city.gif">
-</p>
+[//]: # ()
+[//]: # (<p float="center">)
+
+[//]: # (  <img style="width:800px;" src="./media/city.gif">)
+
+[//]: # (</p>)
 
 
 
@@ -98,12 +102,12 @@ Please see the `example/` folder.
 If you use this work please consider citing:
 
 ```bibtex
-@misc{sulzer2024concise,
-      title={Concise Plane Arrangements for Low-Poly Surface and Volume Modelling}, 
-      author={Raphael Sulzer and Florent Lafarge},
-      year={2024},
-      eprint={2404.06154},
-      archivePrefix={arXiv},
-      primaryClass={cs.CG}
+@inproceedings{sulzer2024concise,
+  title={Concise Plane Arrangements for Low-Poly Surface and Volume Modelling},
+  author={Sulzer, Raphael and Lafarge, Florent},
+  booktitle={European Conference on Computer Vision},
+  pages={357--373},
+  year={2024},
+  organization={Springer}
 }
 ```
