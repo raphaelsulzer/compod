@@ -23,7 +23,7 @@ Given a set of input planes and corresponding inlier points the resulting plane 
 
 # :bricks: Installation
 
-Simply clone the repository and install in a new conda environment using pip:
+Clone the repository and install COMPOD as a python package in a new conda environment following the steps below:
 
 ```
 git clone https://github.com/raphaelsulzer/compod.git
@@ -43,17 +43,23 @@ python example.py
 ### COMPOSE
 
 COMPOSE is an extension for COMPOD that implements some routines for Surface Extraction in C++. Those are:
-- a fast interior / exterior labelling of the arrangement cells based on interior point tests using a reference mesh. 
-- a simplification of the extracted surface mesh based on a Constrained Delaunay Triangulation of the corner vertices of each planar region.
+- Fast interior / exterior labelling of the arrangement cells based on interior point tests using a reference mesh. 
+- Simplification of the extracted surface mesh based on a Constrained Delaunay Triangulation of the corner vertices of each planar region.
 
 To install COMPOSE you need to follow the steps below:
 
 ```
+conda activate compod # if not already active
 cd compose
-conda install -y conda-forge::spdlog conda-forge::cgal anaconda::mpfr 
+conda install -y conda-forge::spdlog conda-forge::cgal anaconda::mpfr
 pip install . 
 ```
 
+To test if the COMPOSE installation was successful run:
+
+```
+python -c "from pycompose import pdse, pdse_exact"
+```
 
 # :computer: Usage
 

@@ -775,19 +775,25 @@ class PolyhedralComplex:
 
         try:
             from pycompose import pdse, pdse_exact
-        except:
-            self.logger.error(
-                "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
+        except ModuleNotFoundError:
+            self.logger.error("Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
             return 1
+        except ImportError as e:
+            self.logger.error(e)
+            self.logger.error("Could not import pdse.")
+            return 1
+        except Exception as e:
+            raise e
 
         points, region_facets, facet_to_plane_id, region_polygons = \
             self._get_simplified_facets(triangulate = triangulate, simplify_edges = simplify_edges, exact = exact)
         fcolors = self.vg.plane_colors[facet_to_plane_id]
 
-        if(os.path.splitext(out_file)[1] == ".ply"):
+        if(os.path.splitext(out_file)[1] == ".ply") and not triangulate:
             self.logger.warning(
-                ".ply files do not display the simplified mesh correctly in Meshlab! It is displayed correctly in Blender and "
-                                ".obj and .off files of the same mesh are also displayed correctly in Meshlab.")
+                "The simplified polygon mesh is not correctly visualised in Meshlab when loaded from a .ply file. "
+                "The .ply mesh is visualised correctly in Blender and .obj and .off files of the same mesh are visualised correctly in Meshlab."
+            )
         if not triangulate:
             self.logger.warning(
                 "Not all faces of the polygon mesh may be oriented correctly. Export a triangle mesh if you need the faces to be consistently oriented.")
@@ -854,10 +860,16 @@ class PolyhedralComplex:
 
         try:
             from pycompose import pdse, pdse_exact
-        except:
+        except ModuleNotFoundError:
             self.logger.error(
                 "Could not import pdse. Please install COMPOSE from https://github.com/raphaelsulzer/compod#compose.")
             return 1
+        except ImportError as e:
+            self.logger.error(e)
+            self.logger.error("Could not import pdse.")
+            return 1
+        except Exception as e:
+            raise e
 
         points, region_facets, facet_to_plane_id, region_polygons = \
             self._get_simplified_facets(triangulate=False, simplify_edges=simplify_edges, exact=exact)
