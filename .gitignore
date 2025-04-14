@@ -8,9 +8,9 @@ __pycache__/
 
 data/city
 data/*/partition
-data/*/surface
-data/*/convexes_refined
-data/*/convexes_detected
+data/*/surface/*
+# data/*/convexes_refined
+# data/*/convexes_detected
 data/*/volumes
 !data/*/surface/dense_mesh.off
 
