@@ -6,10 +6,13 @@ __pycache__/
 # C extensions
 *.so
 
-example/data/city
-example/data/*/partition
-example/data/*/surface
-!example/data/*/surface/dense_mesh.off
+data/city
+data/*/partition
+data/*/surface
+data/*/convexes_refined
+data/*/convexes_detected
+data/*/volumes
+!data/*/surface/dense_mesh.off
 
 compose/CMakeLists.txt.user
 
@@ -137,6 +140,8 @@ dmypy.json
 
 # Pycharm
 .idea/
+
+.vscode/
 
 # data and output
 tests/test_data/

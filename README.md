@@ -36,8 +36,7 @@ You are now ready to use COMPOD. You can test your installation with:
 
 ```
 conda activate compod
-cd example
-python example.py
+python demo.py
 ```
 
 ### COMPOSE
@@ -75,15 +74,16 @@ cc = PolyhedralComplex(vg,device='gpu',verbosity=20)
 cc.construct_partition()
 cc.add_bounding_box_planes()
 cc.label_partition(mode="normals")
-# ## needs compose extension
+# ## the following command needs the compose extension
 # cc.label_partition(mode="mesh",mesh_file="data/{}/surface/dense_mesh.off".format(model))
 
 cc.simplify_partition_tree_based()
 cc.save_partition("data/{}/partition/tree_simplified_partition.ply".format(model), export_boundary=True)
 cc.save_partition_to_pickle("data/{}/partition".format(model))
 
+cc.save_in_cells(out_file="data/{}/volumes/volume_mesh.ply".format(model))
 cc.save_surface(out_file="data/{}/surface/complex_mesh.obj".format(model), triangulate=False)
-## needs compose extension
+## the following commands need the compose extension
 cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False)
 cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.obj".format(model), triangulate=True)  
 cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))         
@@ -92,7 +92,7 @@ cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))
 [//]: # (# :camera_flash: Examples)
 
 [//]: # ()
-[//]: # (Please see the `example/` folder.)
+[//]: # (Please see the `data/` folder.)
 
 [//]: # ()
 [//]: # (<p float="center">)

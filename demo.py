@@ -4,7 +4,7 @@ from pycompod import VertexGroup, PolyhedralComplex
 # file = "data/{}/convexes_refined/sphere-100K_planar_primitives_detection.vg".format(model)
 
 model = "bunny"
-file = "data/{}/convexes_refined/file.npz".format(model)
+file = "./data/{}/convexes_refined/file.npz".format(model)
 
 vg = VertexGroup(file,verbosity=20,debug_export=True)
 cc = PolyhedralComplex(vg,device='gpu',verbosity=20)
@@ -19,6 +19,7 @@ cc.simplify_partition_tree_based()
 cc.save_partition("data/{}/partition/tree_simplified_partition.ply".format(model), export_boundary=True)
 cc.save_partition_to_pickle("data/{}/partition".format(model))
 
+cc.save_in_cells(out_file="data/{}/volumes/volume_mesh.ply".format(model))
 cc.save_surface(out_file="data/{}/surface/complex_mesh.ply".format(model), triangulate=False)
 ## needs compose extension
 cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False, backend="wavefront")

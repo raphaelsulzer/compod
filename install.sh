@@ -5,14 +5,19 @@ set -e
 ENV_NAME=compod
 PYTHON=3.10.10
 
-# Installation script for Anaconda3 environments
-echo "____________ Pick conda install _____________"
+# Installation script for Miniconda3 environments
+echo "____________ Pick Miniconda Install _____________"
 echo
 # Recover the path to conda on your machine
-CONDA_DIR=`realpath /opt/miniconda3`
+CONDA_DIR=`realpath ~/miniconda3`
 if (test -z $CONDA_DIR) || [ ! -d $CONDA_DIR ]
 then
-  CONDA_DIR=`realpath ~/anaconda3`
+  CONDA_DIR=`realpath /opt/miniconda3`
+fi
+
+if (test -z $CONDA_DIR) || [ ! -d $CONDA_DIR ]
+then
+    CONDA_DIR=$(conda info | grep 'base environment' | awk '{print $4}')
 fi
 
 while (test -z $CONDA_DIR) || [ ! -d $CONDA_DIR ]
@@ -27,7 +32,7 @@ source ${CONDA_DIR}/etc/profile.d/conda.sh
 echo
 echo
 
-echo "________________ Installation _______________"
+echo "________________ Install Conda Environment _______________"
 echo
 
 # Check if the environment exists
@@ -68,7 +73,7 @@ source ${CONDA_DIR}/etc/profile.d/conda.sh
 conda activate ${ENV_NAME}
 
 
-echo "________________ Installation _______________"
+echo "________________ Install Required Packages _______________"
 echo
 
 ## install ubuntu dependencies
