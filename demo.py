@@ -18,10 +18,15 @@ cc.label_partition(mode="normals", regularization={"area": 0.8})
 cc.simplify_partition_tree_based()
 cc.save_partition("data/{}/partition/tree_simplified_partition.ply".format(model), export_boundary=True)
 cc.save_partition_to_pickle("data/{}/partition".format(model))
-
 cc.save_in_cells(out_file="data/{}/volumes/volume_mesh.ply".format(model))
+
 cc.save_surface(out_file="data/{}/surface/complex_mesh.ply".format(model), triangulate=False)
-## needs compose extension
-cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False, backend="wavefront")
-cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.ply".format(model), triangulate=True)
-cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))
+# ## needs compose extension
+# cc.save_simplified_surface(out_file="data/{}/surface/polygon_mesh.obj".format(model), triangulate=False, backend="wavefront")
+# cc.save_simplified_surface(out_file="data/{}/surface/triangle_mesh.ply".format(model), triangulate=True)
+# cc.save_wireframe(out_file="data/{}/surface/wireframe.obj".format(model))
+
+# simplify with cell intersections allowed
+cc.simplify_partition_graph_based(exact=False, only_inside=True, rtol=0.01, atol=0.001, dtol=0.00001)
+cc.save_in_cells(out_file="data/{}/volumes/volume_mesh_simplified.ply".format(model))
+

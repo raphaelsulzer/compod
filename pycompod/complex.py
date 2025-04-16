@@ -2018,12 +2018,12 @@ class PolyhedralComplex:
         self.logger.info('Simplify partition (graph-based) with iterative neighbor collapse...')
 
         if not exact:
-            self.logger.info("You are about to apply a simplification process based on inexact coordinates. "
+            self.logger.warning("You are about to apply a simplification process based on inexact coordinates. "
                              "This will most likely lead to a degenerate complex.")
         if atol != 0.0 or rtol != 0.0:
             atol *= self.bounding_poly.volume()
             dtol *= self.bounding_poly.volume()
-            self.logger.info("You are about to apply a simplification process with atol={}, rtol={} and dtol={} "
+            self.logger.warning("You are about to apply a simplification process with atol={}, rtol={} and dtol={} "
                              "that will most likely lead to intersecting cells.".format(atol, rtol, dtol))
         if not self.partition_labelled:
             self.logger.error("Partition has to be labelled with an occupancy per cell to be simplified.")
