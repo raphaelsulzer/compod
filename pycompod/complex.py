@@ -10,18 +10,16 @@ only the local cells that are intersecting it will be updated,
 so will be the corresponding adjacency graph of the complex.
 """
 import time, multiprocessing, pickle, logging, trimesh, copy, warnings, sys, os
-from pathlib import Path
 
 import numpy as np
 import scipy.spatial
-from tqdm import trange, tqdm
+from tqdm import tqdm
 import networkx as nx
-from sage.all import QQ, RDF, ZZ, Polyhedron, vector, arctan2
+from sage.all import QQ, Polyhedron, vector, arctan2
 from treelib import Tree
 from collections import defaultdict
 from shapely.geometry import Polygon
 from shapely import contains_xy
-from multiprocessing import Process, Pool
 
 import open3d as o3d
 
@@ -558,7 +556,7 @@ class PolyhedralComplex:
         """From the polyhedral complex, get all convex interface polygons. Then,  merge these polygons into possible
         non-convex polygons per planar region. After, find the corner vertices of these large polygons, i.e. vertices
         which are an intersection of at least 3 input planes. Then, create polygons, only using these corner vertices,
-        and finally build a surface mesh with the polygons. If a polygon has a hole, it is triangulated with using
+        and finally build a surface mesh with the polygons. If a polygon has a hole, it is triangulated by using
         a 2D Constraint Delaunay Triangulation."""
 
         def _get_region_borders(all_polygons,this_region_polygons):
